@@ -15,12 +15,15 @@ from lazaro_contracts import (
     MAX_MANUAL_NAME_LENGTH,
     MAX_TEXT_LENGTH,
     MAX_TOP_K,
+    CaseAssignRequest,
+    CaseAssignResponse,
     CaseCloseRequest,
     CaseCloseResponse,
     CaseReplyRequest,
     CaseReplyResponse,
     CheckTimeoutsRequest,
     CheckTimeoutsResponse,
+    ContractModel,
     ErrorResponse,
     HandoverRequest,
     HandoverResponse,
@@ -57,6 +60,8 @@ BASE_EXAMPLES: dict[type[BaseModel], tuple[str, str | None]] = {
     ManualUploadResponse: ("manual_upload_response.json", None),
     CaseCloseRequest: ("case_close_request.json", None),
     CaseCloseResponse: ("case_close_response.json", None),
+    CaseAssignRequest: ("case_assign_request.json", None),
+    CaseAssignResponse: ("case_assign_response.json", None),
     CheckTimeoutsRequest: ("check_timeouts_request.json", None),
     CheckTimeoutsResponse: ("check_timeouts_response.json", None),
     ErrorResponse: ("error_response.json", None),
@@ -179,6 +184,8 @@ IDENTIFIER_FIELDS = [
     (CaseCloseRequest, "advisor_id"),
     (SearchResult, "chunk_id"),
     (ManualUploadResponse, "manual_id"),
+    (CaseAssignRequest, "advisor_id"),
+    (CaseAssignResponse, "case_id"),
 ]
 
 
@@ -434,6 +441,33 @@ def test_case_close_response_rejects_invalid_status(status: str) -> None:
     """R40: un status distinto de closed lanza ValidationError."""
     with pytest.raises(ValidationError):
         _validate(CaseCloseResponse, _with(CaseCloseResponse, status=status))
+
+
+def test_case_assign_request_requires_advisor_id() -> None:
+    """contrato_asignar_caso R15, R16: CaseAssignRequest exige solo advisor_id."""
+    assert issubclass(CaseAssignRequest, ContractModel)
+    assert {
+        name for name, f in CaseAssignRequest.model_fields.items() if f.is_required()
+    } == {"advisor_id"}
+    with pytest.raises(ValidationError):
+        _validate(CaseAssignRequest, {})
+
+
+def test_case_assign_response_requires_status_and_case_id() -> None:
+    """contrato_asignar_caso R18: CaseAssignResponse exige status (assigned) y case_id."""
+    assert issubclass(CaseAssignResponse, ContractModel)
+    assert {
+        name for name, f in CaseAssignResponse.model_fields.items() if f.is_required()
+    } == {"status", "case_id"}
+    response = _validate(CaseAssignResponse, _example(CaseAssignResponse))
+    assert response.status == "assigned"
+
+
+@pytest.mark.parametrize("status", ["open", "timed_out", "closed", "ASSIGNED", ""])
+def test_case_assign_response_rejects_invalid_status(status: str) -> None:
+    """contrato_asignar_caso R19: un status distinto de assigned lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(CaseAssignResponse, _with(CaseAssignResponse, status=status))
 
 
 def test_check_timeouts_request_accepts_empty_object() -> None:

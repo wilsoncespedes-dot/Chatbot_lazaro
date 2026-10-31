@@ -110,3 +110,19 @@
   `EVAL_SINK_PORT` en `.env.example`. Informe: `progress/impl_evaluacion.md`.
 - **Resultado:** `./init.sh` verde, 565 tests pasan.
 - **Pendiente humano:** revisar el spec auto-aprobado.
+
+## 2026-10-30 — Feature #9 contrato_asignar_caso (done)
+- **Agente:** leader (modo supervisado) + spec_author, reviewer, implementer.
+- **Modo:** supervisado (spec aprobado por el humano)
+- **Flujo:** spec (`specs/contrato_asignar_caso/`) revisado
+  (`progress/specreview_contrato_asignar_caso.md`) → aprobación humana **sin R13**
+  (el humano retiró R13: no se toca la fila 404 existente de Reglas comunes) →
+  `in_progress` → implementer → review APPROVED
+  (`progress/review_contrato_asignar_caso.md`).
+- **Cambios:** ruta aditiva `POST /cases/{id}/assign` en `contracts/CONTRATOS.md`
+  (con supuesto S11), modelos `CaseAssignRequest` y `CaseAssignResponse` en
+  `lazaro_contracts/cases.py` exportados en `__init__.py`, ejemplos
+  `case_assign_request.json` y `case_assign_response.json`, y tests de contrato.
+  Informe: `progress/impl_contrato_asignar_caso.md`.
+- **Resultado:** `./init.sh` verde, 598 tests pasan.
+- **Siguiente:** desbloquea la #7 `traspaso_asesor`.

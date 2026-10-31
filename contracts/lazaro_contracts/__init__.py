@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from .cases import (
+    CaseAssignRequest,
+    CaseAssignResponse,
     CaseCloseRequest,
     CaseCloseResponse,
     CaseReplyRequest,
@@ -47,6 +49,8 @@ __all__ = [
     "ManualUploadResponse",
     "CaseCloseRequest",
     "CaseCloseResponse",
+    "CaseAssignRequest",
+    "CaseAssignResponse",
     "CheckTimeoutsRequest",
     "CheckTimeoutsResponse",
     "ErrorResponse",

@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 import lazaro_contracts
 from lazaro_contracts import (
+    CaseAssignRequest,
+    CaseAssignResponse,
     CaseCloseRequest,
     CaseCloseResponse,
     CaseReplyRequest,
@@ -48,6 +50,8 @@ EXAMPLES: dict[str, type[BaseModel]] = {
     "manual_upload_response.json": ManualUploadResponse,
     "case_close_request.json": CaseCloseRequest,
     "case_close_response.json": CaseCloseResponse,
+    "case_assign_request.json": CaseAssignRequest,
+    "case_assign_response.json": CaseAssignResponse,
     "check_timeouts_request.json": CheckTimeoutsRequest,
     "check_timeouts_response.json": CheckTimeoutsResponse,
     "error_response.json": ErrorResponse,
@@ -71,6 +75,8 @@ MODEL_NAMES = [
     "ManualUploadResponse",
     "CaseCloseRequest",
     "CaseCloseResponse",
+    "CaseAssignRequest",
+    "CaseAssignResponse",
     "CheckTimeoutsRequest",
     "CheckTimeoutsResponse",
     "ErrorResponse",

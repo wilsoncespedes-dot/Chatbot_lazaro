@@ -40,6 +40,7 @@ Todo error tiene la forma `{"error": "<codigo>", "message": "<texto>"}` (modelo
 | 401  | `unauthorized`       | todas las rutas del contrato | falta `X-Service-Token` o no coincide con `SERVICE_TOKEN` |
 | 422  | `validation_error`   | todas | el cuerpo no valida contra el modelo (el servicio sustituye la respuesta 422 por defecto de FastAPI por `{error, message}`) |
 | 404  | `not_found`          | `/cases/{id}/reply`, `/cases/{id}/close` | el caso no existe |
+| 409  | `case_closed`        | `/cases/{id}/assign` | el caso está cerrado (S11) |
 | 415  | `unsupported_format` | `/manuals` | el archivo no es PDF ni DOCX |
 | 422  | `empty_document`     | `/manuals` | archivo vacío o sin texto extraíble |
 | 502  | `telegram_error`     | `/send` | la API de Telegram falla |
@@ -334,6 +335,42 @@ El cuerpo es el objeto vacío `{}`.
 | 422 | validation_error | el cuerpo no es `{}` |
 | 500 | internal_error | error inesperado |
 
+### POST /cases/{id}/assign
+
+- **Expone:** handover
+- **Llama:** orchestrator (al reenviar la respuesta de un asesor con `POST /cases/{id}/reply`)
+- **Modelos:** `CaseAssignRequest` → `CaseAssignResponse`
+
+`{id}` es el `case_id` (identificador, 1–64 caracteres). Asignar un caso ya
+`assigned` responde igual, `200` con `status` = `assigned`, sin cambiar el asesor
+asignado; asignar un caso `closed` responde `409` con `error` = `case_closed`
+(S11).
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `advisor_id` | identificador | sí | asesor al que se asigna el caso (S6) |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `assigned` | sí | siempre `assigned` |
+| `case_id` | identificador | sí | caso asignado |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `CaseAssignRequest` |
+| 404 | not_found | el caso no existe |
+| 409 | case_closed | el caso está cerrado (S11) |
+| 500 | internal_error | error inesperado |
+
 ## Supuestos a confirmar
 
 Decisiones tomadas sin confirmación humana. Cambiar cualquiera es un cambio de
@@ -351,3 +388,4 @@ contrato.
 | S8 | Cerrar un caso ya cerrado es idempotente: `200` con `status` = `closed` | — |
 | S9 | Límites: texto ≤ 4096 (límite de `sendMessage` de Telegram), `top_k` ≤ 20, identificadores ≤ 64, nombre de manual ≤ 200 | `MAX_TEXT_LENGTH`, `MAX_TOP_K`, `MAX_IDENTIFIER_LENGTH`, `MAX_MANUAL_NAME_LENGTH` |
 | S10 | La respuesta de `POST /search` es un arreglo JSON de nivel superior | — |
+| S11 | Asignar con `POST /cases/{id}/assign` un caso ya `assigned` responde `200` con `status` = `assigned` sin cambiar el asesor asignado; asignar un caso `closed` responde `409` con `error` = `case_closed` | — |

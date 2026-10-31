@@ -20,6 +20,7 @@ ROUTES: dict[str, str] = {
     "POST /manuals": "rag",
     "POST /cases/{id}/close": "handover",
     "POST /cases/check-timeouts": "handover",
+    "POST /cases/{id}/assign": "handover",
 }
 
 OWN_ERRORS: dict[str, list[tuple[str, str]]] = {
@@ -27,6 +28,7 @@ OWN_ERRORS: dict[str, list[tuple[str, str]]] = {
     "POST /manuals": [("415", "unsupported_format"), ("422", "empty_document")],
     "POST /cases/{id}/reply": [("404", "not_found"), ("502", "upstream_error")],
     "POST /cases/{id}/close": [("404", "not_found")],
+    "POST /cases/{id}/assign": [("404", "not_found"), ("409", "case_closed")],
 }
 
 SUCCESS_CODES: dict[str, str] = {
@@ -38,6 +40,7 @@ SUCCESS_CODES: dict[str, str] = {
     "POST /manuals": "201",
     "POST /cases/{id}/close": "200",
     "POST /cases/check-timeouts": "200",
+    "POST /cases/{id}/assign": "200",
 }
 
 TABLE_HEADER = "| Campo | Tipo | Obligatorio | Descripción |"
@@ -192,6 +195,7 @@ def test_common_rules_document_error_shape_and_codes() -> None:
         ("502", "telegram_error"),
         ("502", "upstream_error"),
         ("500", "internal_error"),
+        ("409", "case_closed"),
     }
     rows = set(re.findall(r"^\| (\d{3})\s+\| `([a-z_]+)`", rules, re.MULTILINE))
     assert expected <= rows
@@ -249,3 +253,61 @@ def test_assumptions_mention_s1_to_s10() -> None:
     """R15: la sección de supuestos menciona S1 a S10."""
     for number in range(1, 11):
         _assumption_row(f"S{number}")
+
+
+# ── contrato_asignar_caso (feature #9) ───────────────────────────────────────
+
+ASSIGN_ROUTE = "POST /cases/{id}/assign"
+
+
+def test_assign_route_is_called_by_orchestrator() -> None:
+    """contrato_asignar_caso R3: '- **Llama:**' de POST /cases/{id}/assign cita orchestrator."""
+    assert "orchestrator" in _bullet(ASSIGN_ROUTE, "Llama")
+
+
+def test_assign_errors_table_has_internal_error() -> None:
+    """contrato_asignar_caso R9: '#### Errores' de la ruta tiene la fila 500 internal_error."""
+    assert ("500", "internal_error") in _error_rows(_subsection(ASSIGN_ROUTE, "Errores"))
+
+
+def test_assign_section_documents_path_id() -> None:
+    """contrato_asignar_caso R10: la ruta indica que {id} es el case_id (1–64)."""
+    assert "`{id}` es el `case_id` (identificador, 1–64 caracteres)" in _route(ASSIGN_ROUTE)
+
+
+def test_assign_section_documents_s11() -> None:
+    """contrato_asignar_caso R11: la ruta describe assigned → 200 y closed → 409 (S11)."""
+    section = _route(ASSIGN_ROUTE)
+    for fragment in (
+        "`assigned`",
+        "`200`",
+        "sin cambiar el asesor",
+        "`closed`",
+        "`409`",
+        "`case_closed`",
+        "S11",
+    ):
+        assert fragment in section, fragment
+
+
+def test_common_rules_case_closed_row_cites_assign() -> None:
+    """contrato_asignar_caso R12: la fila común 409 case_closed cita /cases/{id}/assign."""
+    rules = _section(_doc(), "Reglas comunes", 2)
+    match = re.search(r"^\| 409\s+\| `case_closed`\s+\|(.*)$", rules, re.MULTILINE)
+    assert match, "falta la fila 409 case_closed en Reglas comunes"
+    assert "/cases/{id}/assign" in match.group(1)
+
+
+def test_assumptions_include_assign_idempotency() -> None:
+    """contrato_asignar_caso R14: S11 recoge assigned → 200 sin cambio y closed → 409."""
+    row = _assumption_row("S11")
+    for fragment in (
+        "`POST /cases/{id}/assign`",
+        "`assigned`",
+        "`200`",
+        "sin cambiar el asesor",
+        "`closed`",
+        "`409`",
+        "`case_closed`",
+    ):
+        assert fragment in row, fragment

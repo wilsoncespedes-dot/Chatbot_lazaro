@@ -32,6 +32,8 @@ MODEL_NAMES = [
     "ManualUploadResponse",
     "CaseCloseRequest",
     "CaseCloseResponse",
+    "CaseAssignRequest",
+    "CaseAssignResponse",
     "CheckTimeoutsRequest",
     "CheckTimeoutsResponse",
     "ErrorResponse",

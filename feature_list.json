@@ -139,8 +139,25 @@
       "auto_approved": true
     },
     {
+      "id": 9,
+      "name": "contrato_asignar_caso",
+      "title": "Contrato: asignar un caso a un asesor",
+      "description": "Feature previa de contrato que necesita la #7 (traspaso_asesor): añade la ruta aditiva POST /cases/{id}/assign del servicio handover, tal como la define specs/traspaso_asesor/design.md §Precondición de contrato. Solo toca contracts/.",
+      "acceptance": [
+        "`contracts/CONTRATOS.md` documenta `POST /cases/{id}/assign` con el mismo formato que las demás rutas: lo expone `handover`, lo llama `orchestrator`, modelos, tabla de campos del request y de la respuesta, y errores `401 unauthorized`, `422 validation_error`, `404 not_found`, `409 case_closed`, `500 internal_error`",
+        "`contracts/lazaro_contracts/cases.py` define `CaseAssignRequest {advisor_id: Identifier}` y `CaseAssignResponse {status: \"assigned\", case_id: Identifier}` sobre `ContractModel`, y ambos se exportan en `lazaro_contracts/__init__.py` y `__all__`",
+        "Existen `contracts/examples/case_assign_request.json` y `contracts/examples/case_assign_response.json`, válidos contra sus modelos",
+        "`contracts/tests/` cubre la ruta nueva igual que las existentes (sección en `CONTRATOS.md`, ejemplos válidos) y comprueba que un `CaseAssignRequest` sin `advisor_id` y un `CaseAssignResponse` con `status` distinto de `assigned` son rechazados",
+        "Supuesto S11 añadido a la tabla de supuestos de `CONTRATOS.md`: asignar un caso ya `assigned` responde `200` sin cambiar el asesor; asignar un caso `closed` responde `409 case_closed`",
+        "Cambio aditivo: ningún modelo, ruta, ejemplo ni test existente cambia de comportamiento ni se elimina; todos los tests previos siguen en verde"
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
       "id": 7,
       "name": "traspaso_asesor",
+      "depends_on": [9],
       "title": "Traspaso a asesor",
       "description": "Servicio handover: abre casos, avisa a los asesores por Telegram, registra a quién avisó y por qué, y gestiona el tiempo de espera.",
       "acceptance": [

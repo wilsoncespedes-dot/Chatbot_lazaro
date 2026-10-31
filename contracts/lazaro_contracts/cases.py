@@ -1,4 +1,5 @@
-"""Modelos de /handover, /cases/{id}/reply, /cases/{id}/close y /cases/check-timeouts."""
+"""Modelos de /handover, /cases/{id}/reply, /cases/{id}/close, /cases/check-timeouts
+y /cases/{id}/assign."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -62,6 +63,20 @@ class CaseCloseResponse(ContractModel):
     """Respuesta 200 de POST /cases/{id}/close (idempotente, S8)."""
 
     status: Literal["closed"]
+    case_id: Identifier
+
+
+class CaseAssignRequest(ContractModel):
+    """Asignación de un caso a un asesor (la pide el orquestador, S11)."""
+
+    # S6: en la versión mínima, el chat_id del asesor en decimal.
+    advisor_id: Identifier
+
+
+class CaseAssignResponse(ContractModel):
+    """Respuesta 200 de POST /cases/{id}/assign (idempotente si ya estaba assigned, S11)."""
+
+    status: Literal["assigned"]
     case_id: Identifier
 
 
