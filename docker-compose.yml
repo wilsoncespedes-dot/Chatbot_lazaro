@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    env_file: [.env]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+  redis:
+    image: redis:7.2-alpine
+  telegram_gateway:
+    build: {context: ., dockerfile: services/telegram_gateway/Dockerfile}
+    env_file: [.env]
+    ports: ["8001:8000"]
+    depends_on: [redis]
+  orchestrator:
+    build: {context: ., dockerfile: services/orchestrator/Dockerfile}
+    env_file: [.env]
+    ports: ["8002:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+  rag:
+    build: {context: ., dockerfile: services/rag/Dockerfile}
+    env_file: [.env]
+    ports: ["8003:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  handover:
+    build: {context: ., dockerfile: services/handover/Dockerfile}
+    env_file: [.env]
+    ports: ["8004:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  pgdata:

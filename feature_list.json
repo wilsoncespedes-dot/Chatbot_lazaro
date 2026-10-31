@@ -58,7 +58,7 @@
         "Cada servicio tiene al menos un test de `/health` y uno de token ausente, y `./init.sh` queda verde"
       ],
       "sdd": true,
-      "status": "in_progress",
+      "status": "done",
       "auto_approved": true
     },
     {

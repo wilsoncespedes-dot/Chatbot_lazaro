@@ -32,3 +32,17 @@
   cambios de `.claude/settings.json` (modo nocturno) se restauran con
   `./modo.sh` y no se commitean con la feature; decidir en la feature 2 cómo
   llega `lazaro_contracts` a las imágenes Docker.
+
+## 2026-10-30 — Feature #2 esqueleto_servicios (done)
+- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Flujo:** spec vuelta 1 SPEC_CHANGES_REQUESTED, vuelta 2 SPEC_APPROVED →
+  `in_progress` con `auto_approved: true` → implementer T1–T19 → review APPROVED
+  (`progress/review_esqueleto_servicios.md`).
+- **Cambios:** 4 servicios FastAPI en `services/` (telegram_gateway,
+  orchestrator, rag, handover) con `/health`, auth por `X-Service-Token`,
+  Dockerfile y tests; `docker-compose.yml` (postgres con pgvector, redis, 4
+  servicios), script SQL de init, `.env.example`, `.github/workflows/ci.yml`,
+  `.dockerignore`, `scripts/`. Informe: `progress/impl_esqueleto_servicios.md`.
+- **Resultado:** `./init.sh` verde, 386 tests pasan.
+- **Pendiente humano:** revisar el spec auto-aprobado.
