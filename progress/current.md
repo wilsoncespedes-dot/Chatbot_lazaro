@@ -1,3 +1,4 @@
 # Sesión actual
 
-Feature en curso: ninguna
+Feature en curso: (ninguna)
+Plan: (vacío)

@@ -3,15 +3,28 @@ from __future__ import annotations
 
 import hmac
 import logging
+import uuid
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from lazaro_contracts import SERVICE_TOKEN_HEADER, ErrorResponse, HealthResponse
+from lazaro_contracts import (
+    SERVICE_TOKEN_HEADER,
+    ErrorResponse,
+    HealthResponse,
+    MessageRequest,
+    MessageResponse,
+)
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .adapters.gateway import HttpGatewayClient
+from .adapters.handover import HttpHandoverClient
+from .adapters.llm import HttpLLMClient
+from .adapters.rag import HttpRagClient
+from .adapters.repository import PostgresRepository
 from .config import Settings
-from .domain import DomainError
+from .domain import Adapters, DomainError, process_message
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +37,25 @@ def _error(status_code: int, error: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def build_default_adapters(settings: Settings) -> Adapters:
+    """Adaptadores reales; ninguno abre conexiones hasta su primer uso."""
+    timeout = settings.http_timeout_seconds
+    return Adapters(
+        repository=PostgresRepository(settings.database_url),
+        rag=HttpRagClient(settings.rag_url, settings.service_token, timeout),
+        llm=HttpLLMClient(
+            settings.llm_base_url, settings.llm_api_key, settings.llm_model, timeout
+        ),
+        gateway=HttpGatewayClient(settings.telegram_gateway_url, settings.service_token, timeout),
+        handover=HttpHandoverClient(settings.handover_url, settings.service_token, timeout),
+        clock=lambda: datetime.now(timezone.utc),
+        new_id=lambda: uuid.uuid4().hex,
+    )
+
+
+def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
     settings = settings or Settings()
+    adapters = adapters or build_default_adapters(settings)
     app = FastAPI(title=SERVICE_NAME)
 
     @app.middleware("http")
@@ -68,6 +98,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", service=SERVICE_NAME)
+
+    def _process(message: MessageRequest) -> None:
+        try:
+            process_message(message, settings, adapters)
+        except Exception as exc:
+            logger.error(
+                "process_message_failed update_id=%s code=%s",
+                message.update_id,
+                type(exc).__name__,
+            )
+
+    @app.post("/messages", status_code=202, response_model=MessageResponse)
+    def post_message(body: MessageRequest, background: BackgroundTasks) -> MessageResponse:
+        if not adapters.repository.mark_update_if_new(body.update_id):
+            return MessageResponse(status="duplicate")
+        background.add_task(_process, body)
+        return MessageResponse(status="accepted")
 
     return app
 

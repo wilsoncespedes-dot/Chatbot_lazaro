@@ -58,3 +58,17 @@
   adaptadores con versiones falsas y tests. Informe: `progress/impl_telegram_gateway.md`.
 - **Resultado:** `./init.sh` verde.
 - **Pendiente humano:** revisar el spec auto-aprobado.
+
+## 2026-10-30 — Feature #4 orquestador_basico (done)
+- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Flujo:** spec aprobado (`progress/specreview_orquestador_basico.md`) →
+  `in_progress` con `auto_approved: true` → implementer T1–T29 → review APPROVED
+  (`progress/review_orquestador_basico.md`).
+- **Cambios:** `services/orchestrator/` con `POST /messages` (202, dedup por
+  `update_id`), contactos e historial, eventos de decisión, búsqueda en RAG,
+  respuesta con LLM, `NO_ANSWER_REPLY` + traspaso sin resultados, traspaso por
+  palabras clave, adaptadores con versiones falsas y tests. Informe:
+  `progress/impl_orquestador_basico.md`.
+- **Resultado:** `./init.sh` verde, 460 tests pasan.
+- **Pendiente humano:** revisar el spec auto-aprobado.

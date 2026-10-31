@@ -97,7 +97,8 @@
         "Fuera de alcance de esta feature: agrupar mensajes con worker y caché, memoria a largo plazo, clasificador, validación de citas (feature 6)"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 5,
