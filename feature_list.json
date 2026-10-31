@@ -154,7 +154,8 @@
         "Los tests cubren: aviso a 3 asesores, sin asesores, fallo de un aviso, respuesta del asesor, caso inexistente, vencimiento y cierre"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "blocked",
+      "auto_approved": true
     },
     {
       "id": 8,
