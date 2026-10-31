@@ -1,6 +1,8 @@
 """Tests de las decisiones: lista vacía, LLM, traspaso y fallos."""
 from __future__ import annotations
 
+import json
+
 from lazaro_contracts import SearchResult
 
 from orchestrator.domain import build_llm_prompt, is_handover_request, normalize_text
@@ -66,7 +68,9 @@ def test_prompt_neutralizes_closing_tags():
 
 def test_llm_answer_sent_to_chat(env):
     """R18"""
-    env.llm.reply = "La respuesta"
+    env.llm.reply = json.dumps(
+        {"answer": "La respuesta", "citations": [{"chunk_id": "ch1", "quote": "Texto del  FRAGMENTO 1"}]}
+    )
     env.post()
     assert env.gateway.sent == [(100, "La respuesta")]
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import re
 from pathlib import Path
@@ -23,6 +24,9 @@ def test_instruction_message_only_triggers_search_send_handover(env):
     assert [chat for chat, _ in env.gateway.sent] == [100]
 
     env.rag.results = [SearchResult(chunk_id="c", manual="M", text="contenido", score=0.9)]
+    env.llm.reply = json.dumps(
+        {"answer": "ok", "citations": [{"chunk_id": "c", "quote": "contenido"}]}
+    )
     env.post(text=INJECTION, update_id=2)
     assert len(env.llm.calls) == 1
     assert len(env.handover.requests) == 1
@@ -62,3 +66,23 @@ def test_logs_do_not_contain_message_text(env, caplog):
     env.post(text=f"quiero un asesor {secret}", update_id=4)
     assert caplog.records
     assert secret not in caplog.text
+
+
+def test_fake_llm_invented_quote_gets_fixed_rejection(env):
+    """R19: respuesta bien formada con quote inexistente -> solo NO_ANSWER_REPLY."""
+    env.llm.reply = json.dumps(
+        {"answer": "Dato inventado", "citations": [{"chunk_id": "ch1", "quote": "frase que no existe"}]}
+    )
+    env.post()
+    assert env.gateway.sent == [(100, env.settings.no_answer_reply)]
+    assert ("invalid_answer", "quote_not_literal") in env.events()
+
+
+def test_fake_llm_invented_number_gets_fixed_rejection(env):
+    """R20: citas válidas pero número ausente de los fragmentos citados."""
+    env.llm.reply = json.dumps(
+        {"answer": "Cuesta 4999 euros", "citations": [{"chunk_id": "ch1", "quote": "texto del fragmento 1"}]}
+    )
+    env.post()
+    assert env.gateway.sent == [(100, env.settings.no_answer_reply)]
+    assert ("invalid_answer", "number_not_in_citations") in env.events()

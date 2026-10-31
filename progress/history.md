@@ -85,3 +85,16 @@
   nuevas en `.env.example` y tests. Informe: `progress/impl_rag_ingesta_busqueda.md`.
 - **Resultado:** `./init.sh` verde, 498 tests pasan.
 - **Pendiente humano:** revisar el spec auto-aprobado; calibrar umbral 0.75 y modelo de embeddings con un manual real.
+
+## 2026-10-30 — Feature #6 no_inventar (done)
+- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Flujo:** spec revisado (`progress/specreview_no_inventar.md`) →
+  `in_progress` con `auto_approved: true` → implementer → review APPROVED
+  (`progress/review_no_inventar.md`).
+- **Cambios:** barrera anti-alucinaciones en el orquestador: salida JSON del LLM
+  `{answer, citations}`, validación de citas (chunk_id, quote literal) y números,
+  rechazo fijo `NO_ANSWER_REPLY` con evento `invalid_answer`, tests de seguridad.
+  Informe: `progress/impl_no_inventar.md`.
+- **Resultado:** `./init.sh` verde, 527 tests pasan.
+- **Pendiente humano:** revisar el spec auto-aprobado.

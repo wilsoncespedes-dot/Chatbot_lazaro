@@ -135,7 +135,8 @@
         "Los tests cubren: respuesta válida, JSON inválido, sin citas, chunk_id ajeno, cita no literal, número inventado"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 7,

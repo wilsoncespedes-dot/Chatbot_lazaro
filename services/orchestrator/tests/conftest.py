@@ -1,6 +1,7 @@
 """Fixtures del orquestador: solo adaptadores falsos (sin red ni Postgres)."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -20,6 +21,13 @@ from orchestrator.main import create_app
 SERVICE_TOKEN = "svc-token"
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 RECEIVED_AT = "2026-01-02T03:04:00+00:00"
+
+
+def llm_json(answer: str, chunk_id: str, quote: str) -> str:
+    return json.dumps(
+        {"answer": answer, "citations": [{"chunk_id": chunk_id, "quote": quote}]},
+        ensure_ascii=False,
+    )
 
 
 def make_chunks(n: int = 2) -> list[SearchResult]:
@@ -63,7 +71,7 @@ def env() -> Env:
     settings = Settings(service_token=SERVICE_TOKEN, rag_top_k=7)
     repo = FakeRepository()
     rag = FakeRagClient(results=make_chunks())
-    llm = FakeLLM(reply="Respuesta final")
+    llm = FakeLLM(reply=llm_json("Respuesta final", "ch1", "texto del fragmento 1"))
     gateway = FakeGatewayClient()
     handover = FakeHandoverClient()
     counter = iter(range(1, 10_000))
