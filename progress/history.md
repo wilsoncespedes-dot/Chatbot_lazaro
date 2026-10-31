@@ -98,3 +98,15 @@
   Informe: `progress/impl_no_inventar.md`.
 - **Resultado:** `./init.sh` verde, 527 tests pasan.
 - **Pendiente humano:** revisar el spec auto-aprobado.
+
+## 2026-10-30 — Feature #8 evaluacion (done)
+- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Flujo:** spec revisado (`progress/specreview_evaluacion.md`) →
+  `in_progress` con `auto_approved: true` → implementer → review APPROVED
+  (`progress/review_evaluacion.md`).
+- **Cambios:** `eval/` con `preguntas.json` (>=15 preguntas), manual de ejemplo,
+  `scoring.py`, `run_eval.py` (informe `eval/resultados_<fecha>.md`), tests y
+  `EVAL_SINK_PORT` en `.env.example`. Informe: `progress/impl_evaluacion.md`.
+- **Resultado:** `./init.sh` verde, 565 tests pasan.
+- **Pendiente humano:** revisar el spec auto-aprobado.

@@ -170,7 +170,8 @@
         "Supuesto (confirmar): cuando llegue un manual real, se añaden sus preguntas en un archivo aparte y se recalibra `RAG_SIMILARITY_THRESHOLD`"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     }
   ]
 }
