@@ -1,0 +1,4 @@
+# Herramientas para correr los tests en local. Cada servicio declara sus
+# dependencias de ejecución en services/<servicio>/requirements.txt.
+pytest>=8,<9
+httpx>=0.27,<1

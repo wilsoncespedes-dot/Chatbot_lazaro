@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.tmp
+.DS_Store
+
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Arnés
+progress/nocturno.log
+.claude/settings.json.bak
+.claude/settings.local.json
+
+# Resultados locales
+eval/resultados_*.md
+
+# Repos de referencia clonados (solo lectura, no son parte del proyecto)
+referencias/
