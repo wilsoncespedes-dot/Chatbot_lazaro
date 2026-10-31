@@ -1,0 +1,4 @@
+{
+  "error": "unauthorized",
+  "message": "Falta el encabezado X-Service-Token o no es válido."
+}

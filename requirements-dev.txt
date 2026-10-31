@@ -2,3 +2,4 @@
 # dependencias de ejecución en services/<servicio>/requirements.txt.
 pytest>=8,<9
 httpx>=0.27,<1
+-r contracts/requirements.txt

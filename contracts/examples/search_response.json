@@ -1,0 +1,14 @@
+[
+  {
+    "chunk_id": "manual-ventas-0007",
+    "manual": "Manual de ventas",
+    "text": "Para emitir una factura, entra en Ventas > Facturas > Nueva.",
+    "score": 0.87
+  },
+  {
+    "chunk_id": "manual-ventas-0008",
+    "manual": "Manual de ventas",
+    "text": "La factura se envía al cliente al pulsar Confirmar.",
+    "score": 0.74
+  }
+]

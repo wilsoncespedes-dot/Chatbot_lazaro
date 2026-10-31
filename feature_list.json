@@ -39,7 +39,8 @@
         "Supuesto (confirmar): `POST /manuals` es multipart (archivo + nombre); `last_messages` de `/handover` son los últimos 10 mensajes como lista de `{role, text, at}`"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 2,

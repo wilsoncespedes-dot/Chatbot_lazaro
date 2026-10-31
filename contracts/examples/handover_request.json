@@ -1,0 +1,23 @@
+{
+  "case_id": "6f1c2a3e-0000-4000-8000-000000000001",
+  "contact_id": "contact-0001",
+  "chat_id": 111111111,
+  "reason": "no_relevant_chunks",
+  "last_messages": [
+    {
+      "role": "user",
+      "text": "Hola, ¿cómo cambio la clave del sistema?",
+      "at": "2026-10-30T19:04:00Z"
+    },
+    {
+      "role": "bot",
+      "text": "No encontré esa información en los manuales. Te paso con un asesor.",
+      "at": "2026-10-30T19:04:05Z"
+    },
+    {
+      "role": "user",
+      "text": "Gracias, espero.",
+      "at": "2026-10-30T19:05:00Z"
+    }
+  ]
+}
