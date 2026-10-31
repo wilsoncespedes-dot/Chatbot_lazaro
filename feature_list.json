@@ -21,7 +21,8 @@
     "Panel de asesores",
     "Clasificador de tipo de pregunta",
     "Edición de fragmentos",
-    "Agrupar mensajes con worker y caché"
+    "Agrupar mensajes con worker y caché",
+    "Worker o cron que llame periódicamente a POST /cases/check-timeouts de handover. Sin él, los casos open sin respuesta de asesor nunca vencen y el cliente no recibe HANDOVER_TIMEOUT_REPLY (ver specs/traspaso_asesor/design.md, Supuestos a confirmar)"
   ],
   "features": [
     {
@@ -171,7 +172,7 @@
         "Los tests cubren: aviso a 3 asesores, sin asesores, fallo de un aviso, respuesta del asesor, caso inexistente, vencimiento y cierre"
       ],
       "sdd": true,
-      "status": "blocked",
+      "status": "done",
       "auto_approved": true
     },
     {

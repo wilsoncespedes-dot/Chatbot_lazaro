@@ -70,4 +70,15 @@ def test_only_health_and_messages_routes_exposed():
     """R35"""
     app = create_app(Settings(service_token="t"))
     paths = {r.path for r in app.routes if isinstance(r, APIRoute)}
-    assert paths == {"/health", "/messages"}
+    # Feature 7 (T30) añade POST /cases/{id}/reply.
+    assert paths == {"/health", "/messages", "/cases/{case_id}/reply"}
+
+
+def test_no_advisors_reply_has_default(monkeypatch):
+    """R27: NO_ADVISORS_REPLY se lee del entorno y tiene un valor por defecto no vacío."""
+    monkeypatch.delenv("NO_ADVISORS_REPLY", raising=False)
+    assert Settings().no_advisors_reply.strip()
+    monkeypatch.setenv("NO_ADVISORS_REPLY", "Sin asesores ahora")
+    assert Settings().no_advisors_reply == "Sin asesores ahora"
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert any(ln.startswith("NO_ADVISORS_REPLY=") for ln in text.splitlines())

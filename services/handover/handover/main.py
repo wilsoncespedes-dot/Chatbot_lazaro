@@ -1,17 +1,32 @@
-"""Aplicación FastAPI del servicio handover: token de servicio, errores y /health."""
+"""Aplicación FastAPI del servicio handover: casos, avisos a asesores, cierre y vencimiento."""
 from __future__ import annotations
 
 import hmac
 import logging
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from lazaro_contracts import SERVICE_TOKEN_HEADER, ErrorResponse, HealthResponse
+from lazaro_contracts import (
+    SERVICE_TOKEN_HEADER,
+    CaseAssignRequest,
+    CaseAssignResponse,
+    CaseCloseRequest,
+    CaseCloseResponse,
+    CheckTimeoutsRequest,
+    CheckTimeoutsResponse,
+    ErrorResponse,
+    HandoverRequest,
+    HandoverResponse,
+    HealthResponse,
+)
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .adapters.gateway import HttpGatewayClient
+from .adapters.repository import PostgresCaseRepository
 from .config import Settings
-from .domain import DomainError
+from .domain import Adapters, DomainError, assign_case, check_timeouts, close_case, open_case
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +39,20 @@ def _error(status_code: int, error: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def build_default_adapters(settings: Settings) -> Adapters:
+    """Adaptadores reales; ninguno abre conexiones hasta su primer uso."""
+    return Adapters(
+        repository=PostgresCaseRepository(settings.database_url),
+        gateway=HttpGatewayClient(
+            settings.telegram_gateway_url, settings.service_token, settings.http_timeout_seconds
+        ),
+        clock=lambda: datetime.now(timezone.utc),
+    )
+
+
+def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
     settings = settings or Settings()
+    adapters = adapters or build_default_adapters(settings)
     app = FastAPI(title=SERVICE_NAME)
 
     @app.middleware("http")
@@ -68,6 +95,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", service=SERVICE_NAME)
+
+    @app.post("/handover", response_model=HandoverResponse)
+    def post_handover(body: HandoverRequest) -> HandoverResponse:
+        return open_case(body, settings, adapters)
+
+    @app.post("/cases/check-timeouts", response_model=CheckTimeoutsResponse)
+    def post_check_timeouts(body: CheckTimeoutsRequest) -> CheckTimeoutsResponse:
+        return check_timeouts(settings, adapters)
+
+    @app.post("/cases/{case_id}/assign", response_model=CaseAssignResponse)
+    def post_assign(case_id: str, body: CaseAssignRequest) -> CaseAssignResponse:
+        return assign_case(case_id, body.advisor_id, adapters)
+
+    @app.post("/cases/{case_id}/close", response_model=CaseCloseResponse)
+    def post_close(case_id: str, body: CaseCloseRequest) -> CaseCloseResponse:
+        return close_case(case_id, body.advisor_id, adapters)
 
     return app
 

@@ -15,3 +15,10 @@ no puede tocar `contracts/` y el implementer se detiene si faltan (tasks.md, pre
 3. Confirmar los supuestos marcados "CONFIRMABLE" en `design.md` (p. ej. `timed_out` → `assigned`).
 
 `./init.sh` queda verde (no hay cambios de código).
+
+## Desbloqueo (2026-10-30, sesión supervisada)
+
+- Feature previa de contrato #9 `contrato_asignar_caso` creada, aprobada por el humano (sin R13) y `done`
+  (`progress/review_contrato_asignar_caso.md`). `lazaro_contracts` exporta `CaseAssignRequest` y `CaseAssignResponse`.
+- Supuestos CONFIRMABLE R10 (`no_advisors` → `timed_out`) y R11 (`timed_out` → `assigned`) confirmados por el humano.
+- `.venv` con `httpx 0.28.1` y `pg8000 1.31.6`. La #7 pasa a `in_progress` por indicación del humano.

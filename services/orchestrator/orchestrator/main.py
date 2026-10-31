@@ -1,4 +1,4 @@
-"""Aplicación FastAPI del servicio orchestrator: token de servicio, errores y /health."""
+"""Aplicación FastAPI del servicio orchestrator: mensajes, respuestas de asesores y /health."""
 from __future__ import annotations
 
 import hmac
@@ -11,6 +11,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from lazaro_contracts import (
     SERVICE_TOKEN_HEADER,
+    CaseReplyRequest,
+    CaseReplyResponse,
     ErrorResponse,
     HealthResponse,
     MessageRequest,
@@ -24,7 +26,7 @@ from .adapters.llm import HttpLLMClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
 from .config import Settings
-from .domain import Adapters, DomainError, process_message
+from .domain import Adapters, DomainError, process_message, reply_to_case
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             return MessageResponse(status="duplicate")
         background.add_task(_process, body)
         return MessageResponse(status="accepted")
+
+    @app.post("/cases/{case_id}/reply", response_model=CaseReplyResponse)
+    def post_case_reply(case_id: str, body: CaseReplyRequest) -> CaseReplyResponse:
+        return reply_to_case(case_id, body, settings, adapters)
 
     return app
 

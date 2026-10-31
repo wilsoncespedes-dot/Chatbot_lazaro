@@ -1,4 +1,4 @@
-"""Persistencia (contactos, historial, eventos, update_id) detrás de un Repository."""
+"""Persistencia (contactos, historial, eventos, update_id, casos) detrás de un Repository."""
 from __future__ import annotations
 
 import uuid
@@ -25,6 +25,10 @@ class Repository(Protocol):
 
     def add_event(self, contact_id: str, type: str, reason: str, at: datetime) -> None: ...
 
+    def link_case(self, case_id: str, contact_id: str, at: datetime) -> None: ...
+
+    def get_case_contact(self, case_id: str) -> Contact | None: ...
+
 
 @dataclass
 class StoredMessage:
@@ -48,6 +52,7 @@ class FakeRepository:
         self.messages: list[StoredMessage] = []
         self.events: list[StoredEvent] = []
         self.processed: set[int] = set()
+        self.case_links: dict[str, str] = {}
 
     def mark_update_if_new(self, update_id: int) -> bool:
         if update_id in self.processed:
@@ -74,6 +79,16 @@ class FakeRepository:
     def add_event(self, contact_id: str, type: str, reason: str, at: datetime) -> None:
         self.events.append(StoredEvent(contact_id, type, reason, at))
 
+    def link_case(self, case_id: str, contact_id: str, at: datetime) -> None:
+        self.case_links.setdefault(case_id, contact_id)
+
+    def get_case_contact(self, case_id: str) -> Contact | None:
+        contact_id = self.case_links.get(case_id)
+        for contact in self.contacts.values():
+            if contact.id == contact_id:
+                return contact
+        return None
+
 
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS contacts ("
@@ -86,6 +101,8 @@ _SCHEMA = (
     "id BIGSERIAL PRIMARY KEY, contact_id TEXT NOT NULL, type TEXT NOT NULL, "
     "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
     "CREATE TABLE IF NOT EXISTS processed_updates (update_id BIGINT PRIMARY KEY)",
+    "CREATE TABLE IF NOT EXISTS case_links ("
+    "case_id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
 )
 
 
@@ -181,3 +198,22 @@ class PostgresRepository:
             "INSERT INTO events (contact_id, type, reason, at) VALUES (%s, %s, %s, %s)",
             (contact_id, type, reason, at),
         )
+
+    def link_case(self, case_id: str, contact_id: str, at: datetime) -> None:
+        self._run(
+            "INSERT INTO case_links (case_id, contact_id, created_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (case_id) DO NOTHING",
+            (case_id, contact_id, at),
+        )
+
+    def get_case_contact(self, case_id: str) -> Contact | None:
+        rows = self._run(
+            "SELECT c.id, c.telegram_user_id, c.chat_id FROM case_links l "
+            "JOIN contacts c ON c.id = l.contact_id WHERE l.case_id = %s",
+            (case_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return Contact(id=row[0], telegram_user_id=row[1], chat_id=row[2])

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     )
     handover_ack_reply: str = "Avisé a un asesor; te responderá por aquí en cuanto pueda."
     error_reply: str = "Tuve un problema para responderte. Inténtalo de nuevo en unos minutos."
+    no_advisors_reply: str = (
+        "En este momento no hay asesores disponibles. Tu consulta quedó registrada y te "
+        "escribiremos en cuanto haya alguien."
+    )
     invalid_answer_handover: bool = True
     handover_keywords: str = DEFAULT_HANDOVER_KEYWORDS
 

@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
-from lazaro_contracts import HandoverRequest, LastMessage, MessageRequest, SearchResult
+from lazaro_contracts import (
+    CaseReplyRequest,
+    CaseReplyResponse,
+    HandoverRequest,
+    LastMessage,
+    MessageRequest,
+    SearchResult,
+)
 from pydantic import BaseModel, StrictStr, ValidationError, field_validator
 
 from .config import Settings
@@ -56,6 +63,16 @@ class DomainError(Exception):
 
     code = "domain_error"
     status_code = 400
+
+
+class CaseNotFound(DomainError):
+    code = "not_found"
+    status_code = 404
+
+
+class UpstreamError(DomainError):
+    code = "upstream_error"
+    status_code = 502
 
 
 class ServiceUnavailable(Exception):
@@ -197,8 +214,10 @@ def _handover(
         logger.error("handover_failed contact_id=%s code=handover_unavailable", contact.id)
         repo.add_event(contact.id, "handover_failed", "handover_unavailable", adapters.clock())
         return
+    repo.link_case(response.case_id, contact.id, adapters.clock())
     if response.status == "no_advisors":
         repo.add_event(contact.id, "handover_failed", "no_advisors", adapters.clock())
+        _send(contact, settings.no_advisors_reply, adapters)
         return
     if reason == "user_request":
         _send(contact, settings.handover_ack_reply, adapters)
@@ -261,3 +280,26 @@ def process_message(request: MessageRequest, settings: Settings, adapters: Adapt
 
     repo.add_event(contact.id, "rag_answer", "chunks_found", adapters.clock())
     _send(contact, validated.answer, adapters)
+
+
+def reply_to_case(
+    case_id: str, req: CaseReplyRequest, settings: Settings, adapters: Adapters
+) -> CaseReplyResponse:
+    """Reenvía al cliente la respuesta de un asesor y pide a handover marcar el caso assigned."""
+    repo = adapters.repository
+    contact = repo.get_case_contact(case_id)
+    if contact is None:
+        raise CaseNotFound("El caso no existe.")
+    try:
+        adapters.gateway.send(contact.chat_id, req.text)
+    except ServiceUnavailable:
+        logger.error("advisor_reply_send_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo enviar la respuesta al cliente.") from None
+    repo.add_message(contact.id, "advisor", req.text, adapters.clock())
+    repo.add_event(contact.id, "advisor_reply", f"advisor:{req.advisor_id}", adapters.clock())
+    try:
+        adapters.handover.assign(case_id, req.advisor_id)
+    except ServiceUnavailable:
+        logger.error("assign_failed case_id=%s", case_id)
+        repo.add_event(contact.id, "assign_failed", case_id, adapters.clock())
+    return CaseReplyResponse(sent=True)

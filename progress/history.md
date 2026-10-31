@@ -126,3 +126,19 @@
   Informe: `progress/impl_contrato_asignar_caso.md`.
 - **Resultado:** `./init.sh` verde, 598 tests pasan.
 - **Siguiente:** desbloquea la #7 `traspaso_asesor`.
+
+## 2026-10-31 — Feature #7 traspaso_asesor (done)
+- **Agente:** leader + spec_author, reviewer, implementer.
+- **Modo:** spec auto-aprobado en nocturno; bloqueada allí
+  (`progress/blocked_traspaso_asesor.md`) y retomada en supervisado.
+- **Flujo:** dependía de la #9 `contrato_asignar_caso` (ruta
+  `POST /cases/{id}/assign`); con la #9 cerrada → implementer → review APPROVED
+  (`progress/review_traspaso_asesor.md`). El humano confirmó los supuestos
+  R10 y R11.
+- **Cambios:** servicio handover con `POST /handover` (crea/reutiliza caso, avisa
+  a `ADVISOR_CHAT_IDS`, registra avisos, `no_advisors`), `POST /cases/{id}/assign`,
+  `POST /cases/{id}/close`, `POST /cases/check-timeouts` con reloj inyectado,
+  adaptadores gateway y repositorio con versiones falsas; en el orquestador
+  `POST /cases/{id}/reply` y `NO_ADVISORS_REPLY`; tests de seguridad.
+  Spec: `specs/traspaso_asesor/`. Informe: `progress/impl_traspaso_asesor.md`.
+- **Resultado:** `./init.sh` verde, 674 tests pasan.

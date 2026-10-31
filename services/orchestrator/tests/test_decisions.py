@@ -103,7 +103,8 @@ def test_ack_sent_when_notified_for_user_request(env):
     assert env.gateway.sent == [(100, ACK)]
     env.handover.status = "no_advisors"
     env.post(text="quiero un asesor", update_id=2)
-    assert env.gateway.sent == [(100, ACK)]
+    # Feature 7 (R30): con no_advisors se envía NO_ADVISORS_REPLY, nunca el ACK.
+    assert env.gateway.sent == [(100, ACK), (100, env.settings.no_advisors_reply)]
 
 
 def test_handover_request_has_new_case_id_and_last_10_chronological(env):

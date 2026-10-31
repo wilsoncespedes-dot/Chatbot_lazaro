@@ -134,7 +134,14 @@ def test_requirements_txt_matches_design():
         if ln.strip() and not ln.strip().startswith("#")
     ]
     names = sorted(re.split(r"[<>=]", ln)[0] for ln in lines)
-    assert names == ["fastapi", "pydantic", "pydantic-settings", "uvicorn"]
+    assert names == [
+        "fastapi",
+        "httpx",
+        "pg8000",
+        "pydantic",
+        "pydantic-settings",
+        "uvicorn",
+    ]
     for ln in lines:
         assert ">=" in ln and "<" in ln, ln
 
