@@ -72,3 +72,16 @@
   `progress/impl_orquestador_basico.md`.
 - **Resultado:** `./init.sh` verde, 460 tests pasan.
 - **Pendiente humano:** revisar el spec auto-aprobado.
+
+## 2026-10-30 — Feature #5 rag_ingesta_busqueda (done)
+- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Flujo:** spec revisado (`progress/specreview_rag_ingesta_busqueda.md`) →
+  `in_progress` con `auto_approved: true` → implementer T1–T17 → review APPROVED
+  (`progress/review_rag_ingesta_busqueda.md`).
+- **Cambios:** servicio RAG: `POST /manuals` (PDF/DOCX, extracción, chunking,
+  embeddings), `POST /search` con umbral y `top_k`, adaptadores de embeddings y
+  repositorio (falso en memoria + pgvector), `scripts/cargar_manual.py`, variables
+  nuevas en `.env.example` y tests. Informe: `progress/impl_rag_ingesta_busqueda.md`.
+- **Resultado:** `./init.sh` verde, 498 tests pasan.
+- **Pendiente humano:** revisar el spec auto-aprobado; calibrar umbral 0.75 y modelo de embeddings con un manual real.

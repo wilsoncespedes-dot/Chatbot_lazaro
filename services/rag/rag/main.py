@@ -4,14 +4,25 @@ from __future__ import annotations
 import hmac
 import logging
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from lazaro_contracts import SERVICE_TOKEN_HEADER, ErrorResponse, HealthResponse
+from lazaro_contracts import (
+    SERVICE_TOKEN_HEADER,
+    ErrorResponse,
+    HealthResponse,
+    ManualUploadRequest,
+    ManualUploadResponse,
+    SearchRequest,
+    SearchResponse,
+)
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings
-from .domain import DomainError
+from .adapters.embeddings import EmbeddingsClient, HttpEmbeddingsClient
+from .adapters.repository import ChunkRepository, PgVectorChunkRepository
+from .domain import DomainError, ingest_manual, search_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +35,23 @@ def _error(status_code: int, error: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    embeddings: EmbeddingsClient | None = None,
+    repository: ChunkRepository | None = None,
+) -> FastAPI:
     settings = settings or Settings()
+    # Adaptadores reales perezosos: no conectan ni llaman a la red al construirse.
+    if embeddings is None:
+        embeddings = HttpEmbeddingsClient(
+            settings.embeddings_base_url,
+            settings.embeddings_api_key,
+            settings.embeddings_model,
+            settings.embeddings_dim,
+            settings.http_timeout_seconds,
+        )
+    if repository is None:
+        repository = PgVectorChunkRepository(settings.database_url, settings.embeddings_dim)
     app = FastAPI(title=SERVICE_NAME)
 
     @app.middleware("http")
@@ -68,6 +94,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", service=SERVICE_NAME)
+
+    @app.post("/manuals", status_code=201, response_model=ManualUploadResponse)
+    def upload_manual(
+        file: UploadFile = File(...), name: str = Form(...)
+    ) -> ManualUploadResponse | JSONResponse:
+        try:
+            ManualUploadRequest(name=name)
+        except ValidationError:
+            return _error(422, "validation_error", "El nombre del manual no es válido.")
+        data = file.file.read()
+        return ingest_manual(data, name, settings, embeddings, repository)
+
+    @app.post("/search", response_model=SearchResponse)
+    def search(body: SearchRequest) -> SearchResponse:
+        results = search_chunks(body, settings, embeddings, repository)
+        return SearchResponse(results)
 
     return app
 

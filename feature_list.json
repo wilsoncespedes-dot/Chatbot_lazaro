@@ -117,7 +117,8 @@
         "Los tests usan un PDF y un DOCX pequeños generados en el propio test o guardados en `services/rag/tests/fixtures/`"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 6,

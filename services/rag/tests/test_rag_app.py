@@ -127,14 +127,17 @@ def test_settings_reads_service_token_from_env(monkeypatch):
 
 
 def test_requirements_txt_matches_design():
-    """R5: requirements.txt tiene exactamente las 4 dependencias con cota doble."""
+    """R5: requirements.txt tiene exactamente las dependencias del design con cota doble."""
     lines = [
         ln.strip()
         for ln in (SERVICE_DIR / "requirements.txt").read_text(encoding="utf-8").splitlines()
         if ln.strip() and not ln.strip().startswith("#")
     ]
     names = sorted(re.split(r"[<>=]", ln)[0] for ln in lines)
-    assert names == ["fastapi", "pydantic", "pydantic-settings", "uvicorn"]
+    assert names == sorted([
+        "fastapi", "pydantic", "pydantic-settings", "uvicorn",
+        "httpx", "pg8000", "pypdf", "python-docx", "python-multipart",
+    ])
     for ln in lines:
         assert ">=" in ln and "<" in ln, ln
 

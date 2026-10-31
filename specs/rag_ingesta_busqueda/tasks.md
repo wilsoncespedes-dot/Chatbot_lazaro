@@ -1,0 +1,21 @@
+# Tasks — rag_ingesta_busqueda
+
+Dependencias nuevas ya instaladas por el humano (ver `design.md`) antes de empezar.
+
+- [x] T1 — Ampliar `services/rag/rag/config.py` con los campos de `design.md` y añadir las variables nuevas a `.env.example`. Cubre: R3, R5.
+- [x] T2 — Añadir en `services/rag/rag/domain.py` `UnsupportedFormat`, `EmptyDocument`, `EmbeddingsUnavailable`, `Chunk`, `detect_format`, `chunk_text`, `cosine_similarity`. Cubre: R3, R4, R6, R7, R8.
+- [x] T3 — Crear `services/rag/rag/extraction.py` con `extract_text` para PDF (`pypdf`) y DOCX (`python-docx`), con archivo ilegible → `EmptyDocument`. Cubre: R1, R2, R8.
+- [x] T4 — Crear `services/rag/rag/adapters/embeddings.py`: `EmbeddingsClient`, `HttpEmbeddingsClient`, `FakeEmbeddings` determinista. Cubre: R5, R10, R22, R23, R24.
+- [x] T5 — Crear `services/rag/rag/adapters/repository.py`: `ChunkRepository`, `FakeChunkRepository`, `PgVectorChunkRepository` (SQL parametrizado, umbral y `active` en la consulta). Cubre: R13, R14, R15, R16, R22, R25.
+- [x] T6 — Añadir `ingest_manual` y `search_chunks` en `domain.py` (re-filtro defensivo por umbral y `top_k`; `category` ignorada). Cubre: R1-R5, R10-R15, R17.
+- [x] T7 — Modificar `services/rag/rag/main.py`: `create_app(settings, embeddings, repository)`, rutas `POST /manuals` (multipart) y `POST /search`, adaptadores reales perezosos; actualizar `requirements.txt`. Cubre: R1, R2, R9, R11, R18.
+- [x] T8 — Actualizar `test_requirements_txt_matches_design` en `services/rag/tests/test_rag_app.py` a las dependencias de `design.md`. Cubre: R22.
+- [x] T9 — Crear `services/rag/tests/conftest.py`, `fakes.py` y los generadores de PDF y DOCX de prueba (o `fixtures/`), sin red ni DB. Cubre: R1, R2, R22.
+- [x] T10 — `tests/test_ingest.py`: `test_upload_pdf_returns_201_with_chunks`, `test_upload_docx_returns_201_with_chunks`, `test_upload_stores_chunk_fields_and_active_true`, `test_upload_uses_name_in_search_manual`, `test_upload_text_file_returns_415`, `test_upload_fake_pdf_extension_returns_415`, `test_upload_empty_file_returns_422_empty_document`, `test_upload_pdf_without_text_returns_422`, `test_upload_missing_name_returns_422_validation_error`, `test_upload_name_too_long_returns_422`, `test_upload_embeddings_failure_returns_500_and_stores_nothing`. Cubre: R1, R2, R4, R5, R6, R7, R8, R9, R10.
+- [x] T11 — `tests/test_chunking.py`: `test_chunks_respect_size_and_overlap`, `test_short_text_gives_single_chunk`, `test_chunk_order_starts_at_one`. Cubre: R3, R4.
+- [x] T12 — `tests/test_search.py`: `test_search_orders_by_score_desc`, `test_search_returns_at_most_top_k`, `test_search_filters_below_threshold`, `test_search_returns_empty_when_no_chunk_passes_threshold`, `test_search_does_not_return_closest_below_threshold`, `test_search_excludes_inactive_chunks`, `test_search_ignores_category`, `test_search_result_shape`. Cubre: R11, R12, R13, R14, R15, R16, R17.
+- [x] T13 — `tests/test_security.py`: `test_manuals_without_token_returns_401`, `test_search_without_token_returns_401`, `test_search_with_wrong_token_returns_401_and_no_embedding_call`. Cubre: R18.
+- [x] T14 — `tests/test_adapters.py`: `test_fake_embeddings_is_deterministic`, `test_fake_embeddings_same_text_cosine_one`, `test_http_embeddings_error_raises_embeddings_unavailable` (httpx `MockTransport`), `test_pgvector_repository_uses_parameters_only` (conexión DB-API falsa; el texto no aparece en la sentencia), `test_pgvector_search_sql_filters_active_and_threshold`. Cubre: R10, R16, R22, R23, R24, R25.
+- [x] T15 — Crear `scripts/cargar_manual.py` con `main(argv, client)`: lee `RAG_URL` y `SERVICE_TOKEN` del entorno, sube el archivo como multipart, imprime `manual_id` y `chunks`, devuelve código de salida. Cubre: R19, R20, R21.
+- [x] T16 — `services/rag/tests/test_cargar_manual.py` (carga el script con `importlib`, `httpx.MockTransport`): `test_script_posts_multipart_with_token`, `test_script_prints_manual_id_and_chunks`, `test_script_exits_nonzero_on_error_response`, `test_script_exits_nonzero_when_rag_unreachable`, `test_script_fails_when_file_missing`, `test_script_fails_when_env_missing`. Cubre: R19, R20, R21.
+- [x] T17 — Ejecutar `./init.sh`, rellenar la trazabilidad `R<n>` ↔ test en `progress/impl_rag_ingesta_busqueda.md` y comprobar que cada test lleva `"""R<n>: ..."""`. Cubre: R1-R25.
