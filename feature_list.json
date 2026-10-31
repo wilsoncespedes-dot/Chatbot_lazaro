@@ -76,7 +76,8 @@
         "Telegram y Redis se usan detrás de adaptadores con versión falsa; los tests cubren: update nuevo, repetido, secreto inválido, update sin texto, orquestador caído, envío correcto y envío fallido"
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 4,

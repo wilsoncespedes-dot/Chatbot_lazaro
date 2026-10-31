@@ -1,0 +1,25 @@
+# Tasks — telegram_gateway
+
+- [x] T1 — Ampliar `config.py` con `telegram_webhook_secret`, `telegram_bot_token`, `redis_url`, `orchestrator_url`, `dedup_ttl_seconds`, `non_text_reply`, `http_timeout_seconds` (por defecto 10). Cubre: R22.
+- [x] T2 — Añadir `DEDUP_TTL_SECONDS`, `NON_TEXT_REPLY` y `HTTP_TIMEOUT_SECONDS` a `.env.example`; añadir `httpx` y `redis` a `services/telegram_gateway/requirements.txt` (el humano los instala). Cubre: R25.
+- [x] T3 — En `domain.py`: `TelegramError`, `OrchestratorError`, `IncomingUpdate`, `extract_incoming`, `build_message_request`, `Adapters`. Cubre: R4, R5, R13, R16.
+- [x] T4 — Crear `adapters/telegram.py` (Protocol, `HttpTelegramClient`, `FakeTelegramClient`); el token del bot no se registra en logs. Cubre: R18, R19, R23, R24.
+- [x] T5 — Crear `adapters/dedup.py` (Protocol, `RedisDedupStore` con `SET NX EX`, `FakeDedupStore`). Cubre: R9, R10, R23.
+- [x] T6 — Crear `adapters/orchestrator.py` (Protocol, `HttpOrchestratorClient` con `X-Service-Token`, `FakeOrchestratorClient`). Cubre: R4, R6, R23.
+- [x] T7 — En `main.py`: `create_app(settings, adapters)`, exentar `/telegram/webhook` del token de servicio y validar el secreto con `hmac.compare_digest`. Cubre: R1, R2, R3.
+- [x] T8 — En `main.py`: implementar el flujo del webhook (extracción, dedup, reenvío, texto fijo, `200` siempre, logs). Cubre: R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17.
+- [x] T9 — En `main.py`: `POST /send` con `SendRequest`/`SendResponse` y conversión de `TelegramError` a `502`. Cubre: R18, R19, R20, R21.
+- [x] T10 — Test `test_webhook_without_secret_returns_401` y `test_webhook_wrong_secret_returns_401` (orquestador no llamado). Cubre: R1.
+- [x] T11 — Test `test_webhook_empty_configured_secret_returns_401`. Cubre: R2.
+- [x] T12 — Test `test_webhook_does_not_require_service_token`. Cubre: R3.
+- [x] T13 — Test `test_new_text_update_is_forwarded_with_contract_fields` (campos, `received_at` con zona y reloj fijo, encabezado `X-Service-Token`, respuesta `200`). Cubre: R4, R5, R6, R7.
+- [x] T14 — Test `test_duplicate_update_is_not_forwarded_and_returns_200` y `test_dedup_key_stored_with_ttl`. Cubre: R8, R9.
+- [x] T15 — Test `test_dedup_store_failure_still_forwards`. Cubre: R10.
+- [x] T16 — Test `test_orchestrator_down_returns_200_and_logs_error` (con `caplog`, sin texto del mensaje en el log). Cubre: R11, R12.
+- [x] T17 — Test `test_non_text_update_sends_fixed_reply_and_not_forwarded` y `test_non_text_reply_failure_returns_200`, y `test_empty_or_blank_text_treated_as_non_text` (`text` "" y "   ": respuesta fija, orquestador no llamado). Cubre: R4, R13, R14, R15.
+- [x] T18 — Test `test_update_without_message_is_ignored` y `test_webhook_invalid_body_returns_422`. Cubre: R16, R17.
+- [x] T19 — Tests `test_send_ok_returns_sent_true`, `test_send_telegram_failure_returns_502`, `test_send_without_token_returns_401`, `test_send_invalid_body_returns_422`. Cubre: R18, R19, R20, R21.
+- [x] T20 — Test `test_settings_defaults` (TTL 86400, `HTTP_TIMEOUT_SECONDS` 10, texto por defecto de `NON_TEXT_REPLY`). Cubre: R22.
+- [x] T20b — Test `test_env_example_lists_all_variables` (todas las variables de R22 figuran en `.env.example`). Cubre: R25.
+- [x] T21 — Test `test_bot_token_not_in_logs_or_errors` con el cliente de Telegram fallando. Cubre: R24.
+- [x] T22 — Verificar que todos los tests usan solo fakes (sin red ni Redis) y documentar la trazabilidad en `progress/impl_telegram_gateway.md`. Cubre: R23.

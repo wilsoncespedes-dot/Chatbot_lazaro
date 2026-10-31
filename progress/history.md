@@ -46,3 +46,15 @@
   `.dockerignore`, `scripts/`. Informe: `progress/impl_esqueleto_servicios.md`.
 - **Resultado:** `./init.sh` verde, 386 tests pasan.
 - **Pendiente humano:** revisar el spec auto-aprobado.
+
+## 2026-10-30 — Feature #3 telegram_gateway (done)
+- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Flujo:** spec aprobado (`progress/specreview_telegram_gateway.md`) →
+  `in_progress` con `auto_approved: true` → implementer → review APPROVED
+  (`progress/review_telegram_gateway.md`).
+- **Cambios:** `services/telegram_gateway/` con webhook protegido por secreto,
+  dedup en Redis, cliente del orquestador, envío a Telegram (`POST /send`),
+  adaptadores con versiones falsas y tests. Informe: `progress/impl_telegram_gateway.md`.
+- **Resultado:** `./init.sh` verde.
+- **Pendiente humano:** revisar el spec auto-aprobado.
