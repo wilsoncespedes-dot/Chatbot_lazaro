@@ -41,11 +41,12 @@ class HttpGatewayClient:
 
 
 class FakeGatewayClient:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, fail_for: set[int] | None = None) -> None:
         self.sent: list[tuple[int, str]] = []
         self.fail = fail
+        self.fail_for: set[int] = set(fail_for or ())
 
     def send(self, chat_id: int, text: str) -> None:
-        if self.fail:
+        if self.fail or chat_id in self.fail_for:
             raise ServiceUnavailable("Gateway caído")
         self.sent.append((chat_id, text))

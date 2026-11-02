@@ -18,8 +18,8 @@ el código de aplicación (`services/`, `contracts/`, `eval/`, `scripts/`, `dock
 
 ## Protocolo
 
-1. Lee `AGENTS.md`, `docs/proyecto.md`, `docs/architecture.md`,
-   `docs/conventions.md`, `docs/specs.md` y, si existe, `contracts/CONTRATOS.md`.
+1. Lee la feature, `progress/current.md`, `docs/proyecto.md` y únicamente las
+   secciones relevantes de arquitectura/convenciones/contratos.
 2. Toma la feature `pending` de menor `id` en `feature_list.json` que tenga
    `"sdd": true`. Crea la carpeta `specs/<name>/` si no existe.
 3. Redacta `requirements.md` en **EARS estricto** (ver `docs/specs.md`).
@@ -30,16 +30,17 @@ el código de aplicación (`services/`, `contracts/`, `eval/`, `scripts/`, `dock
 5. Redacta `tasks.md`: pasos discretos en orden, cada uno con `[ ]` y la
    lista de `R<n>` que cubre.
 6. Cambia el `status` de esa feature a `spec_ready` en `feature_list.json`.
-7. **PARA**. No invoques al implementer. Espera la aprobación humana.
+7. Deja `spec_ready`; el leader solicita al reviewer una revisión breve.
 
 ## Reglas duras
 
 - ❌ NUNCA edites el código de aplicación (`services/`, `contracts/`, `eval/`, `scripts/`, `docker-compose.yml`, `.github/`).
 - ❌ NUNCA marques una feature como `in_progress` o `done`. Solo `spec_ready`.
 - ❌ Nunca lances al implementer.
-- ✅ Si los acceptance criteria del `feature_list.json` son insuficientes
-  para redactar requirements completas, paras con `blocked` y pides al
-  humano que clarifique. NO inventes requirements no soportados.
+- ✅ Reutiliza decisiones existentes. Si un detalle no material falta, elige
+  default seguro configurable y regístralo brevemente; no bloquees por estilo.
+- ✅ Antes de especificar reutilización de código, confirma archivo, commit y
+  licencia de la referencia; solo MIT/Apache 2.0.
 - ✅ Cada `R<n>` que escribes DEBE ser verificable por un test concreto.
   Si no lo es, parte el requirement o márcalo como blocker.
 

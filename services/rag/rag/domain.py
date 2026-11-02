@@ -9,7 +9,16 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from lazaro_contracts import ManualUploadResponse, SearchRequest, SearchResult
+from lazaro_contracts import (
+    ChunkActiveRequest,
+    ChunkItem,
+    ChunkUpdateRequest,
+    ChunkUpdateResponse,
+    ManualSummary,
+    ManualUploadResponse,
+    SearchRequest,
+    SearchResult,
+)
 
 if TYPE_CHECKING:  # solo para anotaciones; evita importaciones circulares
     from .adapters.embeddings import EmbeddingsClient
@@ -37,6 +46,16 @@ class EmptyDocument(DomainError):
 class EmbeddingsUnavailable(DomainError):
     code = "internal_error"
     status_code = 500
+
+
+class ChunkNotFound(DomainError):
+    code = "not_found"
+    status_code = 404
+
+
+class ManualNotFound(DomainError):
+    code = "not_found"
+    status_code = 404
 
 
 @dataclass(frozen=True)
@@ -156,3 +175,71 @@ def search_chunks(
     kept = [r for r in found if r.score >= threshold]
     kept.sort(key=lambda r: r.score, reverse=True)
     return kept[: request.top_k]
+
+
+def list_manuals(repository: "ChunkRepository") -> list[ManualSummary]:
+    """Manuales del más reciente al más antiguo (lo decide el repositorio)."""
+    return repository.list_manuals()
+
+
+def list_manual_chunks(
+    manual_id: str, repository: "ChunkRepository"
+) -> list[ChunkItem]:
+    """Todos los fragmentos del manual, activos e inactivos, en orden ascendente."""
+    chunks = repository.list_chunks(manual_id)
+    if chunks is None:
+        raise ManualNotFound("El manual no existe.")
+    return [
+        ChunkItem(
+            chunk_id=chunk.chunk_id,
+            manual_id=chunk.manual_id,
+            manual=chunk.manual,
+            order=chunk.order,
+            text=chunk.text,
+            active=chunk.active,
+        )
+        for chunk in chunks
+    ]
+
+
+def set_chunk_active(
+    chunk_id: str, request: ChunkActiveRequest, repository: "ChunkRepository"
+) -> ChunkItem:
+    """Cambia solo `active`; texto, embedding, manual y orden no se tocan."""
+    updated = repository.update_active(chunk_id, request.active)
+    return ChunkItem(
+        chunk_id=updated.chunk_id,
+        manual_id=updated.manual_id,
+        manual=updated.manual,
+        order=updated.order,
+        text=updated.text,
+        active=updated.active,
+    )
+
+
+def update_chunk_text(
+    chunk_id: str,
+    request: ChunkUpdateRequest,
+    embeddings: "EmbeddingsClient",
+    repository: "ChunkRepository",
+) -> ChunkUpdateResponse:
+    """Recalcula el embedding antes de persistir y conserva los metadatos del fragmento."""
+    if not repository.exists(chunk_id):
+        raise ChunkNotFound("El fragmento no existe.")
+    try:
+        vectors = embeddings.embed([request.text])
+    except EmbeddingsUnavailable:
+        raise
+    except Exception as exc:
+        raise EmbeddingsUnavailable("No se pudo calcular el embedding del fragmento.") from exc
+    if len(vectors) != 1:
+        raise EmbeddingsUnavailable("Respuesta de embeddings inesperada.")
+    updated = repository.update_text(chunk_id, request.text, list(vectors[0]))
+    return ChunkUpdateResponse(
+        chunk_id=updated.chunk_id,
+        manual_id=updated.manual_id,
+        manual=updated.manual,
+        order=updated.order,
+        text=updated.text,
+        active=updated.active,
+    )

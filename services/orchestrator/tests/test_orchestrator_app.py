@@ -127,7 +127,7 @@ def test_settings_reads_service_token_from_env(monkeypatch):
 
 
 def test_requirements_txt_matches_design():
-    """R5: requirements.txt tiene exactamente las 4 dependencias con cota doble."""
+    """R5: requirements.txt tiene las dependencias del design con cota doble."""
     lines = [
         ln.strip()
         for ln in (SERVICE_DIR / "requirements.txt").read_text(encoding="utf-8").splitlines()
@@ -140,6 +140,7 @@ def test_requirements_txt_matches_design():
         "pg8000",
         "pydantic",
         "pydantic-settings",
+        "python-multipart",
         "uvicorn",
     ]
     for ln in lines:
@@ -155,7 +156,8 @@ def test_dockerfile_base_image_and_cmd():
     assert f"services/{SVC}/requirements.txt" in text
     assert "pip install" in text
     assert (
-        f'CMD ["uvicorn", "{SVC}.main:app", "--host", "0.0.0.0", "--port", "8000"]' in text
+        f'CMD ["sh", "-c", "exec uvicorn {SVC}.main:app --host 0.0.0.0 '
+        f'--port ${{PORT:-8000}}"]' in text
     )
 
 

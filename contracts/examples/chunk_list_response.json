@@ -1,0 +1,18 @@
+[
+  {
+    "chunk_id": "manual-facturacion-1",
+    "manual_id": "manual-facturacion",
+    "manual": "Manual de facturación",
+    "order": 1,
+    "text": "Para reiniciar el equipo, mantenga pulsado el botón de encendido durante diez segundos.",
+    "active": true
+  },
+  {
+    "chunk_id": "manual-facturacion-2",
+    "manual_id": "manual-facturacion",
+    "manual": "Manual de facturación",
+    "order": 2,
+    "text": "Las facturas rectificativas se emiten desde el módulo de contabilidad.",
+    "active": false
+  }
+]

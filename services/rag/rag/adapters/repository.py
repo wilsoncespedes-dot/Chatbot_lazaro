@@ -5,9 +5,9 @@ from dataclasses import replace
 from typing import Any, Callable, Protocol
 from urllib.parse import unquote, urlparse
 
-from lazaro_contracts import SearchResult
+from lazaro_contracts import ManualSummary, SearchResult
 
-from ..domain import Chunk, cosine_similarity
+from ..domain import Chunk, ChunkNotFound, cosine_similarity
 
 
 class ChunkRepository(Protocol):
@@ -18,6 +18,16 @@ class ChunkRepository(Protocol):
     ) -> list[SearchResult]: ...
 
     def set_active(self, chunk_id: str, active: bool) -> None: ...
+
+    def exists(self, chunk_id: str) -> bool: ...
+
+    def update_text(self, chunk_id: str, text: str, embedding: list[float]) -> Chunk: ...
+
+    def list_manuals(self) -> list[ManualSummary]: ...
+
+    def list_chunks(self, manual_id: str) -> list[Chunk] | None: ...
+
+    def update_active(self, chunk_id: str, active: bool) -> Chunk: ...
 
 
 class FakeChunkRepository:
@@ -46,6 +56,44 @@ class FakeChunkRepository:
         for i, c in enumerate(self.chunks):
             if c.chunk_id == chunk_id:
                 self.chunks[i] = replace(c, active=active)
+
+    def exists(self, chunk_id: str) -> bool:
+        return any(c.chunk_id == chunk_id for c in self.chunks)
+
+    def update_text(self, chunk_id: str, text: str, embedding: list[float]) -> Chunk:
+        for i, c in enumerate(self.chunks):
+            if c.chunk_id == chunk_id:
+                updated = replace(c, text=text, embedding=list(embedding))
+                self.chunks[i] = updated
+                return updated
+        raise ChunkNotFound("El fragmento no existe.")
+
+    def list_manuals(self) -> list[ManualSummary]:
+        """El más reciente primero: orden inverso al de inserción."""
+        return [
+            ManualSummary(
+                manual_id=manual_id,
+                name=name,
+                chunks=sum(1 for c in self.chunks if c.manual_id == manual_id),
+            )
+            for manual_id, name in reversed(list(self.manuals.items()))
+        ]
+
+    def list_chunks(self, manual_id: str) -> list[Chunk] | None:
+        if manual_id not in self.manuals:
+            return None
+        return sorted(
+            (c for c in self.chunks if c.manual_id == manual_id),
+            key=lambda c: c.order,
+        )
+
+    def update_active(self, chunk_id: str, active: bool) -> Chunk:
+        for i, c in enumerate(self.chunks):
+            if c.chunk_id == chunk_id:
+                updated = replace(c, active=active)
+                self.chunks[i] = updated
+                return updated
+        raise ChunkNotFound("El fragmento no existe.")
 
 
 def _pg_connect(database_url: str) -> Any:
@@ -153,3 +201,138 @@ class PgVectorChunkRepository:
         except Exception:
             conn.rollback()
             raise
+
+    def exists(self, chunk_id: str) -> bool:
+        conn = self._connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1 FROM chunks WHERE chunk_id = %s", (chunk_id,))
+            row = cur.fetchone()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return row is not None
+
+    def update_text(self, chunk_id: str, text: str, embedding: list[float]) -> Chunk:
+        """Texto y vector se escriben en la misma sentencia; los metadatos no se tocan."""
+        conn = self._connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE chunks SET text = %s, embedding = CAST(%s AS vector) "
+                "WHERE chunk_id = %s",
+                (text, _vector_literal(embedding), chunk_id),
+            )
+            if cur.rowcount == 0:
+                raise ChunkNotFound("El fragmento no existe.")
+            cur.execute(
+                "SELECT c.chunk_id, c.manual_id, m.name, c.ord, c.text, c.active "
+                "FROM chunks c JOIN manuals m ON m.manual_id = c.manual_id "
+                "WHERE c.chunk_id = %s",
+                (chunk_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ChunkNotFound("El fragmento no existe.")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return Chunk(
+            chunk_id=row[0],
+            manual_id=row[1],
+            manual=row[2],
+            order=row[3],
+            text=row[4],
+            embedding=list(embedding),
+            active=bool(row[5]),
+        )
+
+    def list_manuals(self) -> list[ManualSummary]:
+        conn = self._connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT m.manual_id, m.name, COUNT(c.chunk_id) "
+                "FROM manuals m LEFT JOIN chunks c ON c.manual_id = m.manual_id "
+                "GROUP BY m.manual_id, m.name, m.created_at "
+                "ORDER BY m.created_at DESC, m.manual_id"
+            )
+            rows = list(cur.fetchall())
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return [
+            ManualSummary(manual_id=row[0], name=row[1], chunks=int(row[2]))
+            for row in rows
+        ]
+
+    def list_chunks(self, manual_id: str) -> list[Chunk] | None:
+        conn = self._connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT 1 FROM manuals WHERE manual_id = %s", (manual_id,)
+            )
+            if cur.fetchone() is None:
+                conn.commit()
+                return None
+            cur.execute(
+                "SELECT c.chunk_id, c.manual_id, m.name, c.ord, c.text, c.active "
+                "FROM chunks c JOIN manuals m ON m.manual_id = c.manual_id "
+                "WHERE c.manual_id = %s ORDER BY c.ord",
+                (manual_id,),
+            )
+            rows = list(cur.fetchall())
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return [
+            Chunk(
+                chunk_id=row[0],
+                manual_id=row[1],
+                manual=row[2],
+                order=row[3],
+                text=row[4],
+                embedding=[],
+                active=bool(row[5]),
+            )
+            for row in rows
+        ]
+
+    def update_active(self, chunk_id: str, active: bool) -> Chunk:
+        """Solo cambia `active`; el resto de columnas no aparece en el UPDATE."""
+        conn = self._connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE chunks SET active = %s WHERE chunk_id = %s",
+                (active, chunk_id),
+            )
+            if cur.rowcount == 0:
+                raise ChunkNotFound("El fragmento no existe.")
+            cur.execute(
+                "SELECT c.chunk_id, c.manual_id, m.name, c.ord, c.text, c.active "
+                "FROM chunks c JOIN manuals m ON m.manual_id = c.manual_id "
+                "WHERE c.chunk_id = %s",
+                (chunk_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ChunkNotFound("El fragmento no existe.")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return Chunk(
+            chunk_id=row[0],
+            manual_id=row[1],
+            manual=row[2],
+            order=row[3],
+            text=row[4],
+            embedding=[],
+            active=bool(row[5]),
+        )

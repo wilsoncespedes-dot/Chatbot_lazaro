@@ -2,6 +2,8 @@
 # dependencias de ejecución en services/<servicio>/requirements.txt.
 pytest>=8,<9
 httpx>=0.27,<1
+# Solo para validar render.yaml en los tests (MIT).
+PyYAML>=6,<7
 -r contracts/requirements.txt
 -r services/telegram_gateway/requirements.txt
 -r services/orchestrator/requirements.txt

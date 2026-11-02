@@ -78,16 +78,25 @@ class Env:
         return case
 
 
-def make_env(advisors: list[int] | None = None) -> Env:
+def make_env(
+    advisors: list[int] | None = None,
+    repo: FakeCaseRepository | None = None,
+    gateway: FakeGatewayClient | None = None,
+    settings_overrides: dict | None = None,
+) -> Env:
     ids = ADVISORS if advisors is None else advisors
-    settings = Settings(
-        service_token=SERVICE_TOKEN,
-        advisor_chat_ids=",".join(str(i) for i in ids),
-        handover_timeout_seconds=300,
-        handover_timeout_reply=TIMEOUT_REPLY,
-    )
-    repo = FakeCaseRepository()
-    gateway = FakeGatewayClient()
+    values = {
+        "service_token": SERVICE_TOKEN,
+        "advisor_chat_ids": ",".join(str(i) for i in ids),
+        "handover_timeout_seconds": 300,
+        "handover_timeout_reply": TIMEOUT_REPLY,
+        "privacy_retention_days": "30",
+        "privacy_active_case_max_days": "7",
+    }
+    values.update(settings_overrides or {})
+    settings = Settings(**values)
+    repo = repo or FakeCaseRepository()
+    gateway = gateway or FakeGatewayClient()
     clock = FakeClock()
     adapters = Adapters(repository=repo, gateway=gateway, clock=clock)
     client = TestClient(create_app(settings, adapters))
@@ -97,6 +106,12 @@ def make_env(advisors: list[int] | None = None) -> Env:
 @pytest.fixture()
 def env() -> Env:
     return make_env()
+
+
+@pytest.fixture()
+def env_factory():
+    """Devuelve la fábrica para pruebas que necesitan ajustar asesores o repositorio."""
+    return make_env
 
 
 @pytest.fixture()

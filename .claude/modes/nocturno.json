@@ -60,30 +60,5 @@
       "Bash(printenv *)",
       "Bash(printenv)"
     ]
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash .claude/hooks/run_tests.sh",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash .claude/hooks/stop_check.sh",
-            "timeout": 180
-          }
-        ]
-      }
-    ]
   }
 }

@@ -2,10 +2,9 @@
 description: Implementa la siguiente feature pendiente siguiendo el flujo SDD
 ---
 
-Implementa la siguiente feature pendiente.
-
-Sigue tu protocolo de arranque (AGENTS.md → feature_list.json →
-progress/current.md → ./init.sh) y aplica el caso A/B/C/D que corresponda.
-Respeta la puerta de aprobación humana en `spec_ready`.
+Continúa la siguiente feature accionable, una a la vez. Revisa el contexto
+existente, no repitas lecturas/pruebas ya hechas. En `spec_ready`, solicita una
+revisión de spec y avanza automáticamente si aprueba. Ejecuta `./init.sh` solo
+después de cambios de código.
 
 $ARGUMENTS

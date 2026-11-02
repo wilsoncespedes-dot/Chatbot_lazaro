@@ -87,7 +87,7 @@ def test_failed_send_is_not_saved_as_outgoing(env):
 def test_rag_answer_event_saved(env):
     """R9"""
     env.post()
-    event = env.repo.events[0]
+    event = next(e for e in env.repo.events if e.type == "rag_answer")
     assert (event.type, event.reason, event.at) == ("rag_answer", "chunks_found", FIXED_NOW)
     assert event.contact_id == env.repo.contacts[10].id
 
@@ -96,7 +96,7 @@ def test_no_results_event_saved(env):
     """R10"""
     env.rag.results = []
     env.post()
-    event = env.repo.events[0]
+    event = next(e for e in env.repo.events if e.type == "no_results")
     assert (event.type, event.reason, event.at) == ("no_results", "no_relevant_chunks", FIXED_NOW)
     assert event.contact_id == env.repo.contacts[10].id
 

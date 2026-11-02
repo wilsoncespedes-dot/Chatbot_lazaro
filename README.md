@@ -5,9 +5,10 @@ Chatbot de atención y soporte por **Telegram**: responde con los manuales
 humano** cuando no puede resolver. Microservicios en **Python + FastAPI**, con
 Docker, en un monorepo.
 
-El desarrollo se hace con un **arnés SDD** (Spec Driven Development) para
-**Claude Code**: un agente `leader` coordina, `spec_author` escribe el spec,
-tú lo apruebas, `implementer` programa con tests y `reviewer` verifica.
+El desarrollo se hace con un **arnés SDD** (Spec Driven Development): Claude
+Code coordina (`leader`, `spec_author` y `reviewer`); después de aprobar el
+spec, **OpenCode con DeepSeek escribe el código**. El mismo writer se usa en
+modo supervisado y nocturno.
 
 - Contexto, decisiones y dudas abiertas: [`docs/proyecto.md`](docs/proyecto.md)
 - Reglas técnicas: [`docs/architecture.md`](docs/architecture.md) y [`docs/conventions.md`](docs/conventions.md)
@@ -56,16 +57,31 @@ instalarlas tú a mano en otro equipo:
 python -m pip install -r services/<servicio>/requirements.txt
 ```
 
+## Primer administrador
+
+En una instalación vacía, crea el administrador inicial desde dentro del
+contenedor del orquestador:
+
+```bash
+docker compose exec orchestrator python -m orchestrator.bootstrap_admin --username <nombre>
+```
+
+El comando usa `DATABASE_URL`, pide la contraseña dos veces sin mostrarla y se
+niega si ya existe un administrador. No hay endpoint HTTP ni credenciales por
+defecto.
+
 ## Trabajo diario (modo supervisado)
 
-1. En Claude Code: **`/siguiente`**. El leader lanza al spec_author y se para.
-2. Lee `specs/<feature>/requirements.md`, `design.md` y `tasks.md`. Fíjate
-   en **«Supuestos a confirmar»**: son decisiones de `docs/proyecto.md` §12
-   que el spec tomó con un valor por defecto configurable.
-3. Si está bien: **`/aprobar`**. Si no, pide cambios en el chat.
-4. El implementer programa con tests y el reviewer verifica. Los informes
-   quedan en `progress/impl_<feature>.md` y `progress/review_<feature>.md`.
-5. **`/estado`** en cualquier momento para ver dónde estás.
+1. En Claude Code: **`/siguiente`**. El leader prepara y revisa el spec y,
+   si pasa revisión, continúa sin esperar aprobación manual.
+2. El implementer delega el código a OpenCode/DeepSeek Flash. Antes de
+   implementar, busca en `referencias/` piezas reutilizables; confirma repo,
+   archivo, commit y licencia. Adapta solo lo necesario y registra avisos
+   MIT/Apache en `THIRD_PARTY_NOTICES.md`; no uses código sin licencia ni
+   GPL/AGPL.
+3. Tras terminar el código, se ejecuta `./init.sh` una vez y el reviewer
+   hace una revisión final. Los informes deben ser breves.
+4. **`/estado`** en cualquier momento para ver dónde estás.
 
 ## Modo nocturno
 
@@ -75,10 +91,24 @@ git add -A && git commit -m "antes de dormir"
 ./nocturno.sh --max-sesiones 3
 ```
 
-Trabaja feature tras feature sin preguntar: el reviewer aprueba los specs
-por ti, hace un commit por feature y se para solo ante problemas. Por la
-mañana: `progress/nocturno_<fecha>.md`, revisa los specs `"auto_approved"`
-y usa `/revisado`.
+Claude coordina feature tras feature sin preguntar; OpenCode/DeepSeek escribe
+el código. El reviewer aprueba los specs por ti, el script hace un commit por
+feature y se para ante problemas. Por la mañana: `progress/nocturno_<fecha>.md`,
+revisa los specs `"auto_approved"` y usa `/revisado`.
+
+### Conectar DeepSeek (una vez)
+
+En el CLI de OpenCode, ejecuta `/connect`, selecciona **Other**, usa el id de
+proveedor `deepseek` y pega una API key de DeepSeek. La credencial se guarda en
+el almacén de OpenCode del usuario, fuera del repositorio. Comprueba que el
+modelo aparece con `opencode models deepseek`. El writer usa por defecto
+`deepseek/deepseek-flash`. También está configurado `deepseek/deepseek-v4-pro`;
+puedes elegirlo con la variable de entorno `OPENCODE_WRITER_MODEL`.
+
+OpenCode tiene permisos de edición solo dentro del proyecto; su shell, red y
+subagentes están bloqueados. Claude ejecuta `./init.sh` después de cada sesión
+del writer. Para usar el modo nocturno, configura antes la credencial y ejecuta
+`opencode auth list` para confirmar que DeepSeek aparece.
 
 Tu propio documento (D6) recomienda **empezar en supervisado**: de noche el
 reviewer aprueba los specs en tu lugar y los agentes instalan las

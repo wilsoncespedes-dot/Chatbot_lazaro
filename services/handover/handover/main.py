@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
@@ -12,6 +13,10 @@ from lazaro_contracts import (
     SERVICE_TOKEN_HEADER,
     CaseAssignRequest,
     CaseAssignResponse,
+    CaseAuthorizeRequest,
+    CaseAuthorizeResponse,
+    CaseClientMessageRequest,
+    CaseClientMessageResponse,
     CaseCloseRequest,
     CaseCloseResponse,
     CheckTimeoutsRequest,
@@ -20,18 +25,43 @@ from lazaro_contracts import (
     HandoverRequest,
     HandoverResponse,
     HealthResponse,
+    PrivacyPurgeRequest,
+    PrivacyPurgeResponse,
 )
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .adapters.gateway import HttpGatewayClient
 from .adapters.repository import PostgresCaseRepository
 from .config import Settings
-from .domain import Adapters, DomainError, assign_case, check_timeouts, close_case, open_case
+from .domain import (
+    Adapters,
+    DomainError,
+    assign_case,
+    authorize_case,
+    check_timeouts,
+    close_case,
+    forward_client_message,
+    log_orphan_cases,
+    open_case,
+    purge_personal_data,
+)
 
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "handover"
 PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def configure_logging() -> None:
+    """Hace visibles en stderr los registros INFO o superiores del paquete handover."""
+    package_logger = logging.getLogger("handover")
+    package_logger.setLevel(logging.INFO)
+    if not package_logger.handlers and not logging.getLogger().handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        package_logger.addHandler(handler)
 
 
 def _error(status_code: int, error: str, message: str) -> JSONResponse:
@@ -52,8 +82,18 @@ def build_default_adapters(settings: Settings) -> Adapters:
 
 def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
     settings = settings or Settings()
+    advisor_count = len(settings.advisor_ids)
+    logger.info("advisors_configured count=%d", advisor_count)
+    if advisor_count == 0:
+        logger.warning("no_advisors_configured")
     adapters = adapters or build_default_adapters(settings)
-    app = FastAPI(title=SERVICE_NAME)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        await run_in_threadpool(log_orphan_cases, settings, adapters)
+        yield
+
+    app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):
@@ -106,13 +146,28 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @app.post("/cases/{case_id}/assign", response_model=CaseAssignResponse)
     def post_assign(case_id: str, body: CaseAssignRequest) -> CaseAssignResponse:
-        return assign_case(case_id, body.advisor_id, adapters)
+        return assign_case(case_id, body.advisor_id, settings, adapters)
 
     @app.post("/cases/{case_id}/close", response_model=CaseCloseResponse)
     def post_close(case_id: str, body: CaseCloseRequest) -> CaseCloseResponse:
-        return close_case(case_id, body.advisor_id, adapters)
+        return close_case(case_id, body.advisor_id, settings, adapters)
+
+    @app.post("/cases/{case_id}/authorize", response_model=CaseAuthorizeResponse)
+    def post_authorize(case_id: str, body: CaseAuthorizeRequest) -> CaseAuthorizeResponse:
+        return authorize_case(case_id, body, settings, adapters)
+
+    @app.post("/cases/{case_id}/client-message", response_model=CaseClientMessageResponse)
+    def post_client_message(
+        case_id: str, body: CaseClientMessageRequest
+    ) -> CaseClientMessageResponse:
+        return forward_client_message(case_id, body, adapters)
+
+    @app.post("/privacy/purge", response_model=PrivacyPurgeResponse)
+    def post_privacy_purge(body: PrivacyPurgeRequest) -> PrivacyPurgeResponse:
+        return purge_personal_data(settings, adapters)
 
     return app
 
 
+configure_logging()
 app = create_app()

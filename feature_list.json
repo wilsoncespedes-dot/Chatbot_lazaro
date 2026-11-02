@@ -15,14 +15,14 @@
     "sdd_required_when": "feature has \"sdd\": true"
   },
   "later": [
-    "Consulta a la base de datos en lenguaje natural (docs/proyecto.md §6)",
-    "Verificación de cuentas: enlace Telegram ↔ perfil",
-    "Panel de administración",
-    "Panel de asesores",
-    "Clasificador de tipo de pregunta",
-    "Edición de fragmentos",
+    "Consulta a la base de datos en lenguaje natural (docs/proyecto.md §6). Antes del spec, definir identidad/permisos del personal y límites de alcance. Revisar pgmcp (Apache 2.0) y otras referencias: confirmar repo, commit, archivo y licencia; proponer la adaptación mínima. Reutilizar solo código compatible MIT/Apache con avisos; no copiar dbchatbot sin licencia ni código AGPL.",
+    "Panel de asesores. Definir cómo complementa los comandos de Telegram de la #16 y qué datos/acciones necesita. Revisar referencias de panel por repo, commit, archivos y licencia; proponer la adaptación mínima y copiar solo piezas MIT/Apache 2.0 con avisos. No copiar código AGPL ni sin licencia.",
+    "Clasificador de tipo de pregunta. Medir primero el baseline con la evaluación (#8). Revisar el router de rag-support-bot (MIT) y referencias RAG disponibles: verificar repo, commit, archivo y licencia y proponer adaptación mínima antes del spec/código. Copiar solo código compatible MIT/Apache 2.0 con avisos; no usar código AGPL ni sin licencia.",
     "Agrupar mensajes con worker y caché",
-    "Worker o cron que llame periódicamente a POST /cases/check-timeouts de handover. Sin él, los casos open sin respuesta de asesor nunca vencen y el cliente no recibe HANDOVER_TIMEOUT_REPLY (ver specs/traspaso_asesor/design.md, Supuestos a confirmar)"
+    "Worker o cron que llame periódicamente a POST /cases/check-timeouts de handover. Sin él, los casos open sin respuesta de asesor nunca vencen y el cliente no recibe HANDOVER_TIMEOUT_REPLY (ver specs/traspaso_asesor/design.md, Supuestos a confirmar). Propuesto como feature #12 vencimiento_automatico",
+    "Candidata (decisión del humano 2026-10-31): búsqueda híbrida en RAG (full-text de Postgres + semántica; RRF solo para ordenar, umbral sobre la similitud semántica). Solo después de medir el RAG actual con la evaluación (#8). Referencia: 0xrezan/customer-support-rag (MIT) query_service.py",
+    "Al programar la consulta a la base de datos en lenguaje natural: guard SQL de solo lectura (rol de BD de solo lectura, transacción READ ONLY + statement_timeout, límite de filas exterior siempre aplicado, filtro de verbos tras quitar literales y comentarios, lista de tablas/vistas permitidas). Patrones de pgmcp (Apache 2.0) y dbchatbot (sin licencia: no copiar código)",
+    "Pospuesto (decisión del humano 2026-10-31): traspaso automático tras varios fallos seguidos (idea de NURA, sin licencia: solo el patrón). El clasificador de tipo de pregunta también queda pospuesto (referencia: router de Shcherbin96/rag-support-bot, MIT)"
   ],
   "features": [
     {
@@ -158,7 +158,9 @@
     {
       "id": 7,
       "name": "traspaso_asesor",
-      "depends_on": [9],
+      "depends_on": [
+        9
+      ],
       "title": "Traspaso a asesor",
       "description": "Servicio handover: abre casos, avisa a los asesores por Telegram, registra a quién avisó y por qué, y gestiona el tiempo de espera.",
       "acceptance": [
@@ -186,6 +188,392 @@
         "`python eval/run_eval.py --url <orquestador_o_rag>` ejecuta las preguntas y escribe `eval/resultados_<fecha>.md` con: aciertos de recuperación, rechazos correctos, respuestas inventadas detectadas y la lista de fallos",
         "La lógica de puntuación está separada de la red y tiene tests con resultados de ejemplo",
         "Supuesto (confirmar): cuando llegue un manual real, se añaden sus preguntas en un archivo aparte y se recalibra `RAG_SIMILARITY_THRESHOLD`"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 10,
+      "name": "validacion_config_asesores",
+      "title": "Validación de ADVISOR_CHAT_IDS al arrancar handover",
+      "description": "Handover detecta al arrancar una ADVISOR_CHAT_IDS mal escrita en lugar de descartar entradas en silencio. Solo toca services/handover. BLOQUEADA hasta que el humano revise su spec; decisiones del humano incorporadas (progress/propuesta_etapa2.md §6).",
+      "acceptance": [
+        "Al construir `Settings` de handover, cada entrada no vacía de `ADVISOR_CHAT_IDS` (separada por comas, sin contar los espacios alrededor) debe ser un entero; si alguna no lo es, `Settings()` lanza un error de validación que indica la posición y el valor inválido, y `create_app()` no llega a crear la app",
+        "Las entradas vacías (comas seguidas o al final) se siguen ignorando, como hoy",
+        "Si la lista queda vacía, el servicio arranca y registra al iniciar un aviso `no_advisors_configured` en el log; el comportamiento `no_advisors` de la #7 no cambia",
+        "Al iniciar, handover registra en el log cuántos asesores hay configurados, no sus ids",
+        "Decidido por el humano (2026-10-31): un id repetido en `ADVISOR_CHAT_IDS` es una configuración incorrecta: `Settings()` lanza un error de validación que lo indica y el servicio no arranca",
+        "Decidido por el humano (2026-10-31): los ids negativos (grupos y canales de Telegram) siguen siendo válidos, como hoy",
+        "Decidido por el humano (2026-10-31): se acepta cambiar R23 de la #7. Hoy los valores no numéricos se descartan en silencio y `services/handover/tests/test_config.py::test_advisor_ids_discards_blank_and_non_numeric` lo comprueba. La parte de entradas vacías se conserva y la de no numéricos pasa a esperar un error; ninguna otra aserción se elimina",
+        "Fuera de alcance: comprobar que el bot puede escribir a cada chat. Cada aviso fallido ya queda registrado con `delivered = false` y comprobarlo antes exigiría una ruta nueva en el gateway",
+        "Tests: valor no numérico, duplicado, solo comas, lista vacía con aviso en el log, negativos válidos, espacios alrededor, `create_app` falla con una configuración inválida, y el log de arranque no contiene ids"
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 11,
+      "name": "registro_solicitudes_traspaso",
+      "title": "Registro de cada solicitud de traspaso en handover",
+      "description": "Handover guarda un registro por cada POST /handover, también cuando no hay asesores o se reutiliza un caso, para no depender solo de los eventos del orquestador. Solo toca services/handover; no cambia contratos. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); pendiente revisión nocturna del spec.",
+      "acceptance": [
+        "Cada `POST /handover` válido crea un registro en una tabla nueva de handover con: id propio, `case_id` pedido, `case_id` efectivo, `contact_id`, `reason`, fecha de recepción (reloj inyectado), resultado, número de asesores configurados y número de avisos entregados",
+        "El registro se crea también cuando no hay asesores configurados (resultado `no_advisors`, 0 avisos) y cuando todos los avisos fallan",
+        "Al reutilizar un caso se crea un registro nuevo con el motivo de la petición nueva; `Case.reason` conserva el motivo original, como aceptó el humano en la #7",
+        "SI el procesamiento de la solicitud termina con un error interno ENTONCES el registro queda guardado con resultado `error`",
+        "La respuesta de `POST /handover` y las notificaciones existentes no cambian; el orquestador no se toca (ya guarda un evento `handover` por solicitud y el historial completo de mensajes)",
+        "Repositorio con versión falsa y versión Postgres: SQL parametrizado y `CREATE TABLE IF NOT EXISTS` en el primer uso, como el resto de handover; los logs no contienen texto de clientes",
+        "Decidido por el humano (2026-10-31): el registro NO guarda una copia de `last_messages` ni ningún texto de mensajes (Ley 1581), solo cuántos mensajes llegaron; el historial completo ya vive en el orquestador",
+        "Fuera de alcance: rutas para consultar los registros (panel de asesores) y política de retención y borrado",
+        "Tests: solicitud nueva, reutilización con otro motivo (dos registros y `Case.reason` original), sin asesores, todos los avisos fallan, error interno, y SQL parametrizado con una conexión falsa"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 12,
+      "name": "vencimiento_automatico",
+      "title": "Ejecución periódica de POST /cases/check-timeouts",
+      "description": "Script y worker que llaman periódicamente a la ruta de vencimiento ya existente (CONTRATOS.md: la llama un worker o cron), y vencimiento seguro ante ejecuciones simultáneas. Toca scripts/, docker-compose.yml y services/handover; no cambia contratos. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); pendiente revisión nocturna del spec.",
+      "acceptance": [
+        "Existe `scripts/vencer_casos.py` que llama a `POST /cases/check-timeouts` de `HANDOVER_URL` con `SERVICE_TOKEN`. Sin opciones hace una sola llamada y termina con código 0 si handover responde 200 y distinto de 0 si no",
+        "Con `--intervalo <segundos>` (por defecto `CHECK_TIMEOUTS_INTERVAL_SECONDS`) el script repite la llamada en bucle; un fallo (red, 401, 5xx) se registra en el log con su código y el bucle continúa",
+        "El script nunca escribe `SERVICE_TOKEN` en el log ni en la salida",
+        "`docker-compose.yml` incluye un servicio `timeouts_worker` sin puertos publicados que ejecuta el script en modo bucle; toda variable nueva se añade a `.env.example`",
+        "El paso `open` → `timed_out` es condicional: SI entre la lectura del caso y la escritura el caso pasó a `assigned` o `closed` ENTONCES handover no lo sobrescribe y no se pierden la asignación ni el asesor (hoy `update_case` reescribe todos los campos)",
+        "Dos ejecuciones simultáneas de `check-timeouts` nunca envían dos veces `HANDOVER_TIMEOUT_REPLY` al mismo caso",
+        "Una reutilización de caso (`POST /handover`) simultánea con una asignación no deshace la asignación",
+        "Decidido por el humano (2026-10-31): intervalo inicial `CHECK_TIMEOUTS_INTERVAL_SECONDS=60`, configurable, así que el cliente recibe el aviso entre 300 y 360 s después de abrirse el caso",
+        "Decidido por el humano (2026-10-31): queda PENDIENTE elegir cómo se ejecuta en Render hasta revisar costes y límites (Render Cron Job, worker de pago o GitHub Actions con `schedule`); un bucle dentro de handover no sirve porque el plan gratuito duerme el servicio. Esta feature entrega el script y el servicio de Compose y no despliega nada",
+        "Tests: llamada única correcta y fallida (códigos de salida, con transporte HTTP falso), 401, el bucle continúa tras un fallo (sueño inyectado y número de vueltas acotado), el token no aparece en el log, carrera asignación-vencimiento y carrera asignación-reutilización con repositorio falso, dos vencimientos simultáneos"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 13,
+      "name": "contrato_autorizacion_asesores",
+      "title": "Contrato: autorización de asesores sobre un caso",
+      "description": "Feature de contrato previa a la #14. Solo toca contracts/. Spec aprobada por el humano con las decisiones C1, C2, C3, C5, C6, R26 y D4(a); implementa según requirements, design y tasks.",
+      "acceptance": [
+        "`CONTRATOS.md` documenta `POST /cases/{id}/authorize`: lo expone `handover` y lo llama `orchestrator`. Request `CaseAuthorizeRequest {advisor_id: Identifier, action: reply | close}`; `200` `CaseAuthorizeResponse {allowed: true, case_id}`; errores `401 unauthorized`, `422 validation_error`, `403 forbidden`, `404 not_found`, `409 case_closed`, `500 internal_error`",
+        "El código `403 forbidden` se añade a la tabla de errores de `## Reglas comunes` y a las tablas de errores de `POST /cases/{id}/reply`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`",
+        "Un supuesto S12 en `CONTRATOS.md` recoge las reglas de autorización decididas por el humano en la #14 y la limitación de identidad por HTTP",
+        "Modelos en `lazaro_contracts` exportados en `__all__`, ejemplos en `contracts/examples/` y tests de contrato: rechazo sin `advisor_id`, con `action` fuera de la lista y con `allowed` distinto de `true`",
+        "Cambio aditivo: ningún modelo, ruta, ejemplo ni test existente se elimina ni se debilita; las filas nuevas en tablas de rutas existentes son el único cambio en secciones ya publicadas, salvo las excepciones decididas por el humano (C5 y R26)",
+        "Decidido por el humano (2026-10-31): C1, precedencia de errores en authorize, close y assign: 403 (asesor no registrado) → 404 → 409 (caso closed; en close, 200 sin cambios por S8) → 403 (asignado a otro asesor)",
+        "Decidido por el humano (2026-10-31): C2, close sobre un caso closed devuelve 200 sin cambios (S8); authorize(close) sobre closed devuelve 409",
+        "Decidido por el humano (2026-10-31): C3, el fallo cerrado reutiliza la fila 502 upstream_error ya publicada de reply, sin editarla",
+        "Decidido por el humano (2026-10-31): C5, reply sobre un caso closed devuelve 409 case_closed sin enviar nada al cliente; se autoriza editar la «Dónde» de la fila común 409 case_closed y las referencias necesarias",
+        "Decidido por el humano (2026-10-31): C6, en reply el orquestador autoriza antes de comprobar si el caso existe; un no asesor recibe 403",
+        "Decidido por el humano (2026-10-31): R26, otro asesor que asigna un caso ya assigned recibe 403; se autoriza editar S11 y documentar que cambia el «200 sin cambios» de la #9 (el asesor asignado sigue con 200)",
+        "Decidido por el humano (2026-10-31): D4 de la #16 opción (a), la línea Llama de authorize incluye el comando /cerrar de la #16"
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 14,
+      "name": "autorizacion_asesores",
+      "title": "Autorización de asesores para responder y cerrar casos",
+      "description": "Solo un asesor autorizado puede responder, asignar o cerrar un caso. Handover, dueño de los casos y de ADVISOR_CHAT_IDS, decide; el orquestador consulta antes de enviar. Depende de la #13; conviene después de la #10.  decisiones del humano incorporadas (progress/propuesta_etapa2.md §6). Spec alineado con C5 de la #13 y con las decisiones del humano del 2026-10-31; depende también de la #17 (cierre de casos huérfanos en S12).",
+      "depends_on": [
+        10,
+        13,
+        17
+      ],
+      "acceptance": [
+        "Handover implementa `POST /cases/{id}/authorize` según las reglas aprobadas: un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `403 forbidden`",
+        "`POST /cases/{id}/close` y `POST /cases/{id}/assign` de handover aplican las mismas reglas y responden `403 forbidden` sin modificar el caso",
+        "`POST /cases/{id}/reply` del orquestador pide autorización a handover ANTES de enviar: con `403` responde `403 forbidden` sin enviar al cliente ni guardar nada",
+        "Cada denegación queda registrada: evento `advisor_forbidden` en el orquestador y registro en handover con caso, asesor, acción y fecha",
+        "Decidido por el humano (2026-10-31): solo son asesores los chat_id de `ADVISOR_CHAT_IDS` hasta que existan el panel y la verificación de cuentas",
+        "Decidido por el humano (2026-10-31): un caso `open` o `timed_out` lo puede responder cualquier asesor registrado y la primera respuesta lo asigna (como hoy); un caso `assigned` solo lo puede responder el asesor asignado; no se permite reasignar ni existe rol supervisor",
+        "Decidido por el humano (2026-10-31): un caso sin asignar (`open` o `timed_out`) lo puede cerrar cualquier asesor registrado; un caso `assigned` solo lo cierra el asesor asignado (regla de la propuesta, que el humano no cambió); salvo un caso huérfano, que puede cerrar cualquier asesor registrado (decisión del 2026-10-31, regla publicada por la #17)",
+        "Decidido por el humano (2026-10-31): si handover no está disponible para autorizar, el orquestador falla cerrado: NO envía la respuesta y responde `502 upstream_error`",
+        "Limitación aceptada y documentada (en `CONTRATOS.md` S12 y en el design): la autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado. La identidad por persona llega con la #16 (remitente del webhook validado) o con el panel y la verificación de cuentas",
+        "Los tests existentes de la #7 que usan asesores no registrados se ajustan para usar asesores de `ADVISOR_CHAT_IDS`; ninguna aserción se elimina ni se debilita",
+        "Tests (incluida una prueba de seguridad obligatoria): asesor no registrado responde y recibe 403 sin envío; otro asesor sobre un caso `assigned` recibe 403; el asesor asignado responde bien; caso `open` con cualquier asesor registrado; cierre prohibido; handover caído sin envío; denegaciones registradas",
+        "Decidido por el humano (2026-10-31): C5, reply sobre un caso `closed` propaga `409 case_closed` sin enviar nada al cliente; un `409` no genera `advisor_forbidden` (ese evento queda para los `403`)",
+        "Decidido por el humano (2026-10-31): asignación y cierre condicionales (opción (b) de la D1 de la #12); el `assign` de otro asesor que pierde la carrera recibe `403` sin escribir; el cierre condicional no puede cerrar un caso que ya quedó asignado a otro asesor (`403` + denegación); si la respuesta ya llegó al cliente se registra `assign_failed`",
+        "Decidido por el humano (2026-10-31): `threading.Lock` alrededor de `_run` de `PostgresCaseRepository` de handover; la misma protección del `PostgresRepository` del orquestador es la feature #18 `candado_repositorio_orquestador`, previa a la #16",
+        "Decidido por el humano (2026-10-31): casos huérfanos (opción C + procedimiento A): cualquier asesor registrado puede cerrar un caso `assigned` cuyo asesor ya no está en `ADVISOR_CHAT_IDS` o cuyo `advisor_id` es nulo, pero no responderlo ni asignarlo; handover registra al arrancar cuántos casos huérfanos hay, sin ids; la #14 no edita `contracts/` (lo publica la #17)",
+        "Decidido por el humano (2026-10-31): solo los `403` cuentan como denegación (incluido el de carrera perdida); si falla guardar la denegación, `500`; sin contacto vinculado, solo el log del orquestador; el recuento de huérfanos va en el `lifespan` y, si falla, `WARNING` y el servicio arranca"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 15,
+      "name": "contrato_conversacion_caso",
+      "title": "Contrato: mensajes del cliente hacia el asesor",
+      "description": "Feature de contrato previa a la #16. Solo toca contracts/. Los nombres son una propuesta. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); pendiente revisión nocturna del spec.",
+      "acceptance": [
+        "`CONTRATOS.md` documenta `POST /cases/{id}/client-message`: lo expone `handover` y lo llama `orchestrator`. Request `CaseClientMessageRequest {text: MessageText, at: AwareDatetime}`; `200` `CaseClientMessageResponse {status: forwarded | not_assigned, case_id}`; errores `401 unauthorized`, `422 validation_error`, `404 not_found`, `502 upstream_error` (falló el envío al asesor), `500 internal_error`",
+        "La línea `- **Llama:**` de `POST /cases/{id}/close` añade `orchestrator` (comandos de asesor desde Telegram, #16). Es el único cambio de texto en una sección existente",
+        "Un supuesto S13 en `CONTRATOS.md` recoge el funcionamiento aprobado (ver #16)",
+        "Modelos en `lazaro_contracts` exportados en `__all__`, ejemplos y tests de contrato: rechazo sin `text`, con `at` sin zona horaria y con `status` fuera de la lista",
+        "Los comandos de asesor llegan por la ruta existente `POST /messages`; esta feature no cambia ese contrato",
+        "Cambio aditivo salvo la línea `Llama` indicada; todos los tests previos siguen en verde"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 16,
+      "name": "conversacion_cliente_asesor",
+      "title": "Conversación bidireccional cliente-asesor por Telegram",
+      "description": "Mientras un caso está asignado, los mensajes del cliente van al asesor en lugar de al RAG, y el asesor responde y cierra desde Telegram con comandos. Toca orchestrator y handover. Depende de la #15 y la #14; conviene después de la #10. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); dependencias #15 y #18 completadas. Spec alineado con C5 de la #13 (case_closed → 409).",
+      "depends_on": [
+        10,
+        14,
+        15,
+        18
+      ],
+      "acceptance": [
+        "CUANDO llega un mensaje de un cliente cuyo último caso (vínculo caso-contacto del orquestador) está `assigned`, el orquestador lo guarda en el historial, llama a `POST /cases/{id}/client-message` y NO llama a RAG ni al LLM; handover lo envía al asesor asignado como texto plano `Caso <id> | Cliente: <texto>`, recortado a 4096 caracteres, y el orquestador registra el evento `forwarded_to_advisor`",
+        "Con `not_assigned` o `404` el mensaje sigue el flujo actual (RAG, rechazo o traspaso) sin cambios",
+        "Un mensaje de Telegram con el comando `/responder <case_id> <texto>` cuyo remitente está autorizado (#14) tiene los mismos efectos que `POST /cases/{id}/reply`; `/cerrar <case_id>` cierra el caso en handover con la misma autorización",
+        "Decidido por el humano (2026-10-31): en los comandos de Telegram el `advisor_id` es siempre el id del remitente que llega en el update del webhook validado con `TELEGRAM_WEBHOOK_SECRET` (`telegram_user_id` de `POST /messages`), nunca un id escrito en el texto del mensaje. Prueba de seguridad obligatoria: un `/responder` que incluye en el texto el id de otro asesor se autoriza solo con el id del remitente",
+        "Los comandos de asesor nunca pasan por RAG ni por el LLM; un comando mal formado recibe un texto de ayuda fijo y configurable",
+        "Prueba de seguridad obligatoria: un cliente no autorizado que envía `/responder <case_id> <texto>` no consigue que llegue nada a otro cliente; recibe un texto fijo y queda un evento `advisor_forbidden`",
+        "Prueba de seguridad obligatoria: el texto que el cliente reenvía al asesor no se interpreta como instrucción ni como comando, y se envía como texto plano sin formato de Telegram",
+        "Decidido por el humano (2026-10-31): solo se reenvían al asesor los mensajes de casos `assigned`; mientras el caso está `open` (avisado, sin asignar) sigue el flujo actual con RAG y no se reenvía",
+        "Decidido por el humano (2026-10-31): los asesores responden con los comandos `/responder <case_id> <texto>` y `/cerrar <case_id>`, no contestando al aviso",
+        "Decidido por el humano (2026-10-31): un mensaje de un asesor que no es un comando sigue el flujo actual, como el de cualquier cliente",
+        "Decidido por el humano (2026-10-31): si falla el reenvío al asesor (`502`), el cliente recibe un texto fijo configurable y queda el evento `forward_failed`; NO se vuelve al RAG",
+        "Decidido por el humano (2026-10-31): el asesor recibe una confirmación fija configurable tras `/responder` y `/cerrar`, y el cliente recibe un aviso fijo configurable cuando se cierra su caso",
+        "Toda variable nueva se añade a `.env.example`; el orquestador no lee la lista de asesores (la decide handover)",
+        "Tests: reenvío con caso `assigned`, `not_assigned` va a RAG, caso inexistente, fallo de envío al asesor, `/responder` y `/cerrar` autorizados, comando no autorizado, comando mal formado, el comando no llama a RAG ni al LLM, recorte a 4096"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 17,
+      "name": "contrato_cierre_casos_huerfanos",
+      "title": "Contrato: cierre de casos huérfanos (asesor retirado de ADVISOR_CHAT_IDS)",
+      "description": "Feature de contrato previa a la #14. Solo toca contracts/. Actualiza S12 (publicado por la #13) para la decisión del humano del 2026-10-31 sobre casos assigned cuyo asesor ya no está en ADVISOR_CHAT_IDS (opción C + procedimiento A de progress/specreview_conversacion_cliente_asesor.md §6).",
+      "acceptance": [
+        "Decidido por el humano (2026-10-31): un caso `assigned` cuyo `advisor_id` ya no está en `ADVISOR_CHAT_IDS` (caso huérfano) lo puede CERRAR cualquier asesor registrado, por `POST /cases/{id}/close` y con `authorize` `action` = `close`",
+        "Decidido por el humano (2026-10-31): un caso huérfano NO lo puede responder ni asignar ningún otro asesor (sin reasignación); `reply`/`assign` siguen respondiendo `403` a quien no es el asesor asignado",
+        "S12 de `CONTRATOS.md` se actualiza para recogerlo, incluida la precedencia de errores de la #13 (el escalón `403` por caso asignado a otro asesor no aplica a `close`/`authorize(close)` sobre un caso huérfano); la edición de S12 es una excepción cerrada al principio aditivo, con su línea antes/después exacta",
+        "Procedimiento A documentado: antes de retirar a un asesor, este cierra sus casos; handover registrará al arrancar cuántos casos huérfanos hay, sin ids (lo implementa la #14)",
+        "Tests de contrato: S12 contiene la regla de cierre de huérfanos y la prohibición de responder/asignar; ninguna otra fila publicada se edita; ningún test existente se elimina ni se debilita"
+      ],
+      "depends_on": [
+        13
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 18,
+      "name": "candado_repositorio_orquestador",
+      "title": "Candado en la conexión compartida de PostgresRepository del orquestador",
+      "description": "Feature previa a la #16 (decisión del humano 2026-10-31, D2 de la #12). Solo toca services/orchestrator. Mismo patrón que el threading.Lock alrededor de _run de PostgresCaseRepository de handover decidido en la #14.",
+      "acceptance": [
+        "Decidido por el humano (2026-10-31): `PostgresRepository` del orquestador protege su conexión pg8000 compartida con un `threading.Lock`, de modo que dos llamadas concurrentes (rutas síncronas y `BackgroundTasks` en el pool de hilos) no usan la conexión a la vez",
+        "Sin cambios de contrato ni de comportamiento observable; SQL parametrizado como hoy",
+        "Tests: dos hilos que usan el repositorio con una conexión falsa no se solapan dentro de la sección protegida; ningún test existente se elimina ni se debilita"
+      ],
+      "depends_on": [],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 19,
+      "name": "edicion_fragmentos",
+      "title": "Edición del contenido de fragmentos RAG",
+      "description": "Añade al servicio RAG el API autenticado que el futuro panel administrativo usará para editar fragmentos. Alcance de esta feature: backend y contrato; el panel va aparte.",
+      "depends_on": [
+        1,
+        5
+      ],
+      "acceptance": [
+        "El API permite editar el texto de un fragmento existente sin cambiar su identidad, manual, orden ni estado activo.",
+        "Al guardar texto nuevo, el servicio recalcula el embedding con el proveedor configurado antes de persistir el cambio.",
+        "La edición exige X-Service-Token; un fragmento inexistente devuelve 404 y un texto vacío devuelve 422.",
+        "La ruta y sus modelos quedan documentados en contracts/CONTRATOS.md y lazaro_contracts con ejemplos válidos.",
+        "Tests cubren edición exitosa, fragmento inexistente, texto inválido, fallo de embeddings sin cambio parcial y token inválido."
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 20,
+      "name": "verificacion_cuentas",
+      "title": "Vincular perfiles verificados con cuentas de Telegram",
+      "description": "Backend previo a consultas de personal: perfiles con rol y vinculación de Telegram mediante token de un solo uso. Sin panel en esta feature.",
+      "depends_on": [
+        3,
+        4,
+        16
+      ],
+      "acceptance": [
+        "El orquestador guarda perfiles con username único, rol admin/asesor/cliente y contraseña como hash; nunca conserva la contraseña en claro.",
+        "Un endpoint interno autenticado puede emitir un enlace/token aleatorio de un solo uso con expiración configurable (15 minutos por defecto) para un perfil.",
+        "Al recibir el token por el flujo validado de Telegram, el orquestador vincula el telegram_user_id del remitente al perfil y consume el token atómicamente.",
+        "Credenciales y tokens nunca se envían en mensajes de Telegram; errores de token no revelan si un perfil existe.",
+        "Las pruebas cubren roles, token inválido/expirado/reutilizado, vínculo correcto, unicidad y almacenamiento de hash."
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 21,
+      "name": "panel_administracion",
+      "title": "Panel administrativo mínimo",
+      "description": "Interfaz propia en el orchestrator para que un administrador autenticado gestione perfiles/roles y consulte eventos. Manuales y fragmentos pasan a #22. No copia código de TGO/Helpdock; reutiliza APIs y modelos internos ya construidos.",
+      "depends_on": [
+        11,
+        20
+      ],
+      "acceptance": [
+        "El panel sirve login y vistas administrativas sin cargar JavaScript o estilos desde CDNs externos.",
+        "Solo perfiles con rol admin pueden ver o ejecutar operaciones; credenciales de servicio nunca llegan al navegador.",
+        "El administrador puede crear perfiles, cambiar roles y emitir un enlace de vinculación Telegram.",
+        "El administrador puede consultar eventos recientes con datos personales y tokens redactados.",
+        "El login limita de forma persistente y configurable los intentos fallidos por usuario e IP, respondiendo 429 antes de verificar la contraseña.",
+        "Tests cubren sesión, control de rol, CSRF, límite de intentos de login, perfiles y redacción de secretos."
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 22,
+      "name": "panel_fragmentos",
+      "title": "Manuales y fragmentos en el panel administrativo",
+      "description": "Separada de #21: añade al contrato del RAG listar manuales/fragmentos y activar/desactivar fragmentos, y las vistas del panel que los usan reutilizando sesión, rol y CSRF de #21 y PATCH /chunks/{id} de #19.",
+      "depends_on": [
+        5,
+        19,
+        21
+      ],
+      "acceptance": [
+        "El administrador puede cargar manuales, consultar sus fragmentos, editar fragmentos y activar/desactivar fragmentos.",
+        "Las rutas nuevas del RAG quedan en contracts/CONTRATOS.md y lazaro_contracts con ejemplos válidos y exigen X-Service-Token.",
+        "Tests cubren manuales/fragmentos, control de sesión/CSRF de las vistas nuevas y que SERVICE_TOKEN no llega al navegador."
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 23,
+      "name": "bootstrap_administrador",
+      "title": "Crear el primer administrador de forma segura",
+      "description": "Comando local/operativo de un solo uso para crear el administrador inicial en una instalación vacía, sin credenciales por defecto ni endpoint público.",
+      "depends_on": [
+        20,
+        21
+      ],
+      "acceptance": [
+        "Una instalación vacía permite crear el primer perfil admin mediante un comando autenticado al DB y que solicita la contraseña sin imprimirla ni guardarla en claro.",
+        "El comando se niega si ya hay un administrador y no cambia datos en ese caso.",
+        "Tests verifican hash, rol, unicidad y ausencia de exposición de la contraseña."
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 24,
+      "name": "despliegue_produccion",
+      "title": "Configuración y verificaciones para despliegue de producción",
+      "description": "Preparar Blueprint de Render, secretos, servicios públicos (telegram_gateway y orchestrator con el panel accesible a clientes) y privados (rag, handover, worker), health checks y pruebas de construcción; sin desplegar, sin fijar planes ni precios y sin crear recursos facturables.",
+      "depends_on": [
+        2,
+        12,
+        23
+      ],
+      "acceptance": [
+        "Un Blueprint describe los servicios del monorepo, la base persistente, Redis y el worker: telegram_gateway y orchestrator son los dos únicos servicios públicos (type web, healthCheckPath /health) para que el panel sea accesible a clientes; rag y handover son privados (pserv) y el worker es privado.",
+        "Con el orchestrator público, sus rutas internas (POST /messages, /profiles, /profiles/{id}/link-token y /cases/{id}/reply) siguen respondiendo 401 sin X-Service-Token válido, igual que las rutas protegidas de rag y handover, mientras el panel /admin exige sesión y CSRF y no se habilita con X-Service-Token.",
+        "Los secretos se solicitan o generan fuera del repositorio y los servicios fallan al arrancar en producción si faltan secretos obligatorios o conservan placeholders inseguros.",
+        "CI verifica tests y construcción Docker de los servicios.",
+        "Un procedimiento verificable registra configuración del webhook Telegram y variables necesarias sin imprimir secretos.",
+        "En Render el orchestrator define ADMIN_TRUST_PROXY_HEADERS=true y el rate limit del login usa el primer valor de X-Forwarded-For (IP del cliente según Render), nunca el valor terminal del proxy; si la cabecera falta o está vacía se usa la IP de la conexión."
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 25,
+      "name": "clasificador_consultas",
+      "title": "Clasificar consultas por categoría configurable",
+      "description": "Clasificador con categorías administrables y nivel de confianza; el resultado bajo umbral queda sin clasificar.",
+      "depends_on": [
+        21,
+        22
+      ],
+      "acceptance": [
+        "Un administrador crea, edita y desactiva categorías desde el panel.",
+        "Las consultas elegibles reciben categoría y confianza entre 0 y 1 basadas en el contenido configurado.",
+        "La confianza bajo el umbral configurable se devuelve como sin clasificar y no altera la ruta RAG ni permisos.",
+        "Tests cubren categorías, umbral, entradas adversarias y ausencia de categorías."
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 26,
+      "name": "consulta_bd_lenguaje_natural",
+      "title": "Consultas de datos autorizadas en lenguaje natural",
+      "description": "Consulta para asesores verificados, con vistas permitidas, conexión read-only, límites, auditoría y rechazo seguro; sin acceso de clientes.",
+      "depends_on": [
+        20,
+        23,
+        24
+      ],
+      "acceptance": [
+        "Solo un asesor verificado puede solicitar una consulta y los perfiles cliente/admin no obtienen acceso por esta feature.",
+        "El sistema ejecuta exclusivamente una consulta de lectura sobre vistas permitidas y devuelve como máximo el límite configurado de filas.",
+        "Cada consulta queda auditada sin exponer credenciales y los fallos no revelan SQL interno ni esquema sensible.",
+        "Tests demuestran que SQL de escritura, múltiples sentencias, objetos fuera de allowlist y usuarios no autorizados no ejecutan consultas."
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 27,
+      "name": "privacidad_y_retencion_datos",
+      "title": "Política de privacidad, retención y eliminación de datos",
+      "description": "Feature pre-lanzamiento. Bloqueada hasta definir aviso/consentimiento, finalidades, plazo de retención y proceso de eliminación aplicables a los datos de clientes y asesores.",
+      "depends_on": [
+        20,
+        21
+      ],
+      "acceptance": [
+        "Los clientes reciben y aceptan un aviso de privacidad antes de que el sistema procese o almacene sus mensajes.",
+        "Los datos personales se retienen únicamente durante el plazo aprobado y existe un proceso verificable para eliminarlos.",
+        "Tests cubren consentimiento, retención y eliminación sin afectar registros operativos necesarios."
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 28,
+      "name": "despliegue_retencion",
+      "title": "Retención de datos en Render",
+      "description": "Integrar la purga periódica de privacidad al Blueprint de Render para que la política implementada por la #27 se ejecute en producción y documentar su configuración.",
+      "acceptance": [
+        "render.yaml declara un worker privado que ejecuta scripts/purgar_datos.py --intervalo con configuración compartida necesaria y sin puertos públicos",
+        "El Blueprint expone las variables PRIVACY_* requeridas en los servicios correctos; PRIVACY_RETENTION_DAYS comparte un único valor entre orchestrator y handover",
+        "docs/despliegue.md explica cómo configurar el worker y las variables, incluyendo que los valores legales de aviso/consentimiento/plazos deben ser definidos por el propietario antes de desplegar",
+        "Tests verifican worker, referencias, variables y documentación; ./init.sh pasa y Claude aprueba la revisión de código"
       ],
       "sdd": true,
       "status": "done",

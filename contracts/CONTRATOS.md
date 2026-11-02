@@ -39,12 +39,14 @@ Todo error tiene la forma `{"error": "<codigo>", "message": "<texto>"}` (modelo
 |------|----------------------|-------|--------|
 | 401  | `unauthorized`       | todas las rutas del contrato | falta `X-Service-Token` o no coincide con `SERVICE_TOKEN` |
 | 422  | `validation_error`   | todas | el cuerpo no valida contra el modelo (el servicio sustituye la respuesta 422 por defecto de FastAPI por `{error, message}`) |
+| 403  | `forbidden`          | `/cases/{id}/authorize`, `/cases/{id}/reply`, `/cases/{id}/close`, `/cases/{id}/assign` | el asesor no está autorizado para esa acción sobre el caso (S12) |
 | 404  | `not_found`          | `/cases/{id}/reply`, `/cases/{id}/close` | el caso no existe |
-| 409  | `case_closed`        | `/cases/{id}/assign` | el caso está cerrado (S11) |
+| 409  | `case_closed`        | `/cases/{id}/assign`, `/cases/{id}/reply` | el caso está cerrado (S11) |
 | 415  | `unsupported_format` | `/manuals` | el archivo no es PDF ni DOCX |
 | 422  | `empty_document`     | `/manuals` | archivo vacío o sin texto extraíble |
 | 502  | `telegram_error`     | `/send` | la API de Telegram falla |
 | 502  | `upstream_error`     | `/cases/{id}/reply` | la llamada a `POST /send` del gateway falla |
+| 503  | `privacy_not_configured` | `/privacy/purge` | falta `PRIVACY_RETENTION_DAYS` (o, en handover, `PRIVACY_ACTIVE_CASE_MAX_DAYS`); no se borra nada |
 | 500  | `internal_error`     | todas | error inesperado; nunca se devuelve el stack trace |
 
 ### Mensajes repetidos
@@ -230,7 +232,9 @@ Cada elemento de `last_messages` (`LastMessage`):
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
 | 422 | validation_error | el cuerpo no valida contra `CaseReplyRequest` |
+| 403 | forbidden | el asesor no está autorizado a responder el caso; no se envía nada al cliente (S12) |
 | 404 | not_found | el caso no existe |
+| 409 | case_closed | el caso está cerrado; no se envía nada al cliente (S12) |
 | 502 | upstream_error | la llamada a `POST /send` del gateway falla |
 | 500 | internal_error | error inesperado |
 
@@ -269,10 +273,154 @@ Cada elemento de `last_messages` (`LastMessage`):
 | 422 | empty_document | archivo vacío o sin texto extraíble |
 | 500 | internal_error | error inesperado |
 
+### PATCH /chunks/{id}
+
+- **Expone:** rag
+- **Llama:** panel de administración (futuro)
+- **Modelos:** `ChunkUpdateRequest` → `ChunkUpdateResponse`
+
+`{id}` es el `chunk_id` (identificador, 1–64 caracteres). Reemplaza el texto
+completo del fragmento y recalcula su embedding con el proveedor configurado
+antes de persistir; conserva `chunk_id`, `manual_id`, manual, orden y estado
+activo. El texto no vacío se guarda exactamente como se recibe (R3).
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `text` | texto no vacío | sí | texto nuevo del fragmento; vacío o solo espacios se rechaza |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `chunk_id` | identificador | sí | id del fragmento editado |
+| `manual_id` | identificador | sí | manual al que pertenece el fragmento |
+| `manual` | texto (1–200) | sí | nombre del manual |
+| `order` | entero ≥ 1 | sí | orden del fragmento dentro del manual |
+| `text` | texto | sí | texto nuevo guardado |
+| `active` | booleano | sí | estado activo del fragmento, sin cambios |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `ChunkUpdateRequest` |
+| 404 | not_found | el fragmento no existe |
+| 500 | internal_error | error inesperado |
+
+### GET /manuals
+
+- **Expone:** rag
+- **Llama:** orchestrator (panel de administración, #22)
+- **Modelos:** `ManualListResponse` (lista de `ManualSummary`)
+
+Devuelve todos los manuales, el más reciente primero, con el número de
+fragmentos de cada uno. Sin cuerpo de petición.
+
+#### Request
+
+Sin cuerpo.
+
+#### Respuesta
+
+`200 OK`. El cuerpo es un **arreglo JSON** de nivel superior (S10) con un
+elemento por manual (`ManualSummary`); puede ser el arreglo vacío `[]`.
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `manual_id` | identificador | sí | id del manual |
+| `name` | texto (1–200) | sí | nombre legible del manual |
+| `chunks` | entero ≥ 0 | sí | número de fragmentos del manual, activos e inactivos |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 500 | internal_error | error inesperado |
+
+### GET /manuals/{id}/chunks
+
+- **Expone:** rag
+- **Llama:** orchestrator (panel de administración, #22)
+- **Modelos:** `ChunkListResponse` (lista de `ChunkItem`)
+
+`{id}` es el `manual_id` (identificador, 1–64 caracteres). Devuelve todos los
+fragmentos del manual, activos e inactivos, en orden ascendente de `order`.
+
+#### Request
+
+Sin cuerpo.
+
+#### Respuesta
+
+`200 OK`. El cuerpo es un **arreglo JSON** de nivel superior (S10) con un
+elemento por fragmento (`ChunkItem`); puede ser el arreglo vacío `[]`.
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `chunk_id` | identificador | sí | id del fragmento |
+| `manual_id` | identificador | sí | manual al que pertenece el fragmento |
+| `manual` | texto (1–200) | sí | nombre del manual |
+| `order` | entero ≥ 1 | sí | orden del fragmento dentro del manual |
+| `text` | texto no vacío | sí | contenido del fragmento |
+| `active` | booleano | sí | si el fragmento participa en `POST /search` |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el manual no existe |
+| 500 | internal_error | error inesperado |
+
+### PATCH /chunks/{id}/active
+
+- **Expone:** rag
+- **Llama:** orchestrator (panel de administración, #22)
+- **Modelos:** `ChunkActiveRequest` → `ChunkItem`
+
+`{id}` es el `chunk_id` (identificador, 1–64 caracteres). Guarda el estado
+activo del fragmento y devuelve el fragmento completo; no cambia su texto,
+embedding, manual ni orden. Desactivar un fragmento solo lo saca de
+`POST /search`; no lo borra.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `active` | booleano JSON | sí | nuevo estado del fragmento; solo se aceptan `true` y `false` |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `chunk_id` | identificador | sí | id del fragmento |
+| `manual_id` | identificador | sí | manual al que pertenece el fragmento |
+| `manual` | texto (1–200) | sí | nombre del manual |
+| `order` | entero ≥ 1 | sí | orden del fragmento dentro del manual |
+| `text` | texto no vacío | sí | contenido del fragmento, sin cambios |
+| `active` | booleano | sí | estado activo guardado |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el fragmento no existe |
+| 422 | validation_error | el cuerpo no valida contra `ChunkActiveRequest` |
+| 500 | internal_error | error inesperado |
+
 ### POST /cases/{id}/close
 
 - **Expone:** handover
-- **Llama:** asesor (herramienta interna con token; panel en el futuro)
+- **Llama:** asesor (herramienta interna con token; panel en el futuro), orchestrator (comando `/cerrar` de un asesor desde Telegram, #16)
 - **Modelos:** `CaseCloseRequest` → `CaseCloseResponse`
 
 `{id}` es el `case_id` (identificador, 1–64 caracteres). Cerrar un caso ya
@@ -299,6 +447,7 @@ cerrado responde igual, `200` con `status` = `closed` (S8).
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
 | 422 | validation_error | el cuerpo no valida contra `CaseCloseRequest` |
+| 403 | forbidden | el asesor no está autorizado a cerrar el caso; el caso no cambia (S12) |
 | 404 | not_found | el caso no existe |
 | 500 | internal_error | error inesperado |
 
@@ -367,9 +516,127 @@ asignado; asignar un caso `closed` responde `409` con `error` = `case_closed`
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
 | 422 | validation_error | el cuerpo no valida contra `CaseAssignRequest` |
+| 403 | forbidden | el asesor no está autorizado sobre el caso; el caso no cambia (S12) |
 | 404 | not_found | el caso no existe |
 | 409 | case_closed | el caso está cerrado (S11) |
 | 500 | internal_error | error inesperado |
+
+### POST /cases/{id}/authorize
+
+- **Expone:** handover
+- **Llama:** orchestrator (antes de reenviar la respuesta de un asesor con `POST /cases/{id}/reply` y, con el comando `/cerrar` de un asesor, antes de `POST /cases/{id}/close`)
+- **Modelos:** `CaseAuthorizeRequest` → `CaseAuthorizeResponse`
+
+`{id}` es el `case_id` (identificador, 1–64 caracteres). Consulta si el asesor
+`advisor_id` puede hacer `action` sobre el caso según las reglas de S12. Si puede,
+responde `200` con `allowed` = `true`; si no, responde `403` con `error` =
+`forbidden` (nunca `allowed` = `false`). Autorizar sobre un caso `closed` responde
+`409` con `error` = `case_closed`.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `advisor_id` | identificador | sí | asesor que quiere actuar sobre el caso (S6) |
+| `action` | `reply` \| `close` | sí | acción que se quiere autorizar: responder o cerrar |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `allowed` | `true` | sí | siempre `true`; si no está autorizado se responde `403` |
+| `case_id` | identificador | sí | caso consultado |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `CaseAuthorizeRequest` |
+| 403 | forbidden | el asesor no está autorizado para `action` sobre el caso (S12) |
+| 404 | not_found | el caso no existe |
+| 409 | case_closed | el caso está cerrado |
+| 500 | internal_error | error inesperado |
+
+### POST /cases/{id}/client-message
+
+- **Expone:** handover
+- **Llama:** orchestrator (al recibir por `POST /messages` un mensaje de un cliente con caso; S13)
+- **Modelos:** `CaseClientMessageRequest` → `CaseClientMessageResponse`
+
+`{id}` es el `case_id` (identificador, 1–64 caracteres). Si el caso está `assigned`,
+handover envía el texto al asesor asignado y responde `200` con `status` =
+`forwarded`; si el caso existe y no está `assigned`, responde `200` con `status` =
+`not_assigned` sin enviar nada (S13).
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `text` | texto (1–4096) | sí | mensaje del cliente que se reenvía al asesor |
+| `at` | fecha ISO 8601 con zona | sí | momento del mensaje del cliente |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `forwarded` \| `not_assigned` | sí | `forwarded` si se envió al asesor asignado; `not_assigned` si el caso no está `assigned` |
+| `case_id` | identificador | sí | caso del mensaje |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `CaseClientMessageRequest` |
+| 404 | not_found | el caso no existe |
+| 502 | upstream_error | falló el envío al asesor (la llamada a `POST /send` del gateway falla) |
+| 500 | internal_error | error inesperado |
+
+### POST /privacy/purge
+
+- **Expone:** orchestrator y handover (cada servicio purga solo su propia base)
+- **Llama:** `scripts/purgar_datos.py` (servicio `retention_worker`), en el orden
+  fijo **handover → orchestrator**: si la purga de handover no responde `200`,
+  no se llama al orchestrator en esa iteración.
+- **Modelos:** `PrivacyPurgeRequest` → `PrivacyPurgeResponse`
+
+Borra los datos personales más antiguos que el plazo aprobado
+(`PRIVACY_RETENTION_DAYS`). Handover cierra y borra además los casos activos
+(`open`, `assigned` o `timed_out`) que superan `PRIVACY_ACTIVE_CASE_MAX_DAYS`
+(R35). Los registros operativos necesarios y `privacy_consents` se conservan
+(R26, R39).
+
+#### Request
+
+El cuerpo es el objeto vacío `{}`.
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| (sin campos) | — | — | — |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `cutoff` | fecha ISO 8601 con zona | sí | instante de corte usado en la purga |
+| `deleted` | objeto `{tabla: entero}` | sí | filas borradas por tabla en esta llamada |
+| `closed_active_cases` | entero ≥ 0 | sí | handover: casos activos cerrados y borrados; orchestrator: `0` |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | `unauthorized` | falta `X-Service-Token` o no es válido (R20, R33) |
+| 422 | `validation_error` | el cuerpo no es `{}` |
+| 503 | `privacy_not_configured` | falta la configuración de retención; no se borra nada (R21, R32) |
+| 500 | `internal_error` | error inesperado; la transacción hace rollback |
 
 ## Supuestos a confirmar
 
@@ -388,4 +655,6 @@ contrato.
 | S8 | Cerrar un caso ya cerrado es idempotente: `200` con `status` = `closed` | — |
 | S9 | Límites: texto ≤ 4096 (límite de `sendMessage` de Telegram), `top_k` ≤ 20, identificadores ≤ 64, nombre de manual ≤ 200 | `MAX_TEXT_LENGTH`, `MAX_TOP_K`, `MAX_IDENTIFIER_LENGTH`, `MAX_MANUAL_NAME_LENGTH` |
 | S10 | La respuesta de `POST /search` es un arreglo JSON de nivel superior | — |
-| S11 | Asignar con `POST /cases/{id}/assign` un caso ya `assigned` responde `200` con `status` = `assigned` sin cambiar el asesor asignado; asignar un caso `closed` responde `409` con `error` = `case_closed` | — |
+| S11 | Asignar con `POST /cases/{id}/assign` un caso ya `assigned` responde `200` con `status` = `assigned` sin cambiar el asesor asignado cuando quien asigna es el asesor asignado; si es otro asesor, responde `403` con `error` = `forbidden` sin cambiar el caso (S12, cambio de la #13); asignar un caso `closed` responde `409` con `error` = `case_closed` | — |
+| S12 | Autorización de asesores (`POST /cases/{id}/authorize`). Solo son asesores los chat_id de `ADVISOR_CHAT_IDS` (hasta que existan el panel y la verificación de cuentas); un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `403` con `error` = `forbidden`. Responder (`reply`): un caso `open` o `timed_out` lo responde cualquier asesor registrado y la primera respuesta lo asigna; un caso `assigned` solo lo responde el asesor asignado. Cerrar (`close`): un caso `open` o `timed_out` lo cierra cualquier asesor registrado; un caso `assigned` solo lo cierra el asesor asignado, salvo un caso huérfano. Caso huérfano: un caso `assigned` cuyo `advisor_id` es nulo o ya no está en `ADVISOR_CHAT_IDS`. Un caso huérfano lo cierra cualquier asesor registrado: `POST /cases/{id}/close` lo pasa a `closed` y `authorize` con `action` = `close` responde `200` con `allowed` = `true`; cerrarlo no es reasignarlo. Un caso huérfano no lo responde ni lo asigna ningún otro asesor: `POST /cases/{id}/reply` y `authorize` con `action` = `reply` responden `403` con `error` = `forbidden`, y `POST /cases/{id}/assign` responde `403` con `error` = `forbidden` sin modificar el caso, como con cualquier caso asignado a otro asesor. Sin reasignación y sin rol supervisor. Las mismas reglas se aplican en `POST /cases/{id}/reply` (el orquestador responde `403` sin enviar nada al cliente), `POST /cases/{id}/close` y `POST /cases/{id}/assign` (handover responde `403` sin modificar el caso); asignar un caso ya `assigned` (S11) solo responde `200` al asesor asignado y otro asesor recibe `403`. Esto cambia el `200` sin cambios que S11 daba en la #9 a cualquier asesor: el asesor asignado sigue recibiendo `200` sin cambios. Precedencia de errores en `POST /cases/{id}/authorize`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`: `403` (asesor no registrado) → `404` (caso inexistente) → `409` (caso `closed`; en `POST /cases/{id}/close`, `200` sin cambios por S8) → `403` (caso asignado a otro asesor), escalón que no se aplica a `POST /cases/{id}/close` ni a `authorize` con `action` = `close` sobre un caso huérfano (para ellos, superados los tres primeros escalones, el cierre está permitido). En `POST /cases/{id}/reply` el orquestador autoriza antes de comprobar si el caso existe: un `advisor_id` no registrado recibe `403` con `error` = `forbidden` aunque el caso no exista. `POST /cases/{id}/close` sobre un caso `closed` sigue S8: `200` sin cambios para cualquier asesor registrado, aunque no sea el asignado; `authorize` con `action` = `close` sobre un caso `closed` responde `409`. `POST /cases/{id}/reply` sobre un caso `closed` responde `409` con `error` = `case_closed`, sin enviar nada al cliente (el orquestador propaga el `409` de `authorize`). Si handover no está disponible para autorizar, el orquestador falla cerrado: no envía la respuesta y responde `502` con `upstream_error` (la fila `502 upstream_error` ya publicada de `POST /cases/{id}/reply`). La autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado; la identidad por persona llega con la #16 (remitente del webhook validado) o con el panel y la verificación de cuentas. Retirada de un asesor: antes de quitar su chat_id de `ADVISOR_CHAT_IDS`, el asesor cierra sus casos; al arrancar, handover registra cuántos casos huérfanos hay, sin sus ids. | — |
+| S13 | Solo se reenvían al asesor, con `POST /cases/{id}/client-message`, los mensajes de un cliente cuyo caso está `assigned`; con un caso `open`, con `not_assigned` o con `404` sigue el flujo actual (RAG, rechazo o traspaso). Si el reenvío falla (`502`), el cliente recibe un texto fijo y no se vuelve al RAG. Los comandos de asesor `/responder <case_id> <texto>` y `/cerrar <case_id>` llegan por `POST /messages`, cuyo contrato no cambia; un mensaje de un asesor que no es `/responder` ni `/cerrar` sigue el flujo actual, como el de cualquier cliente. Los comandos se autorizan con las reglas de S12; en ellos el `advisor_id` es el `telegram_user_id` del update validado con `TELEGRAM_WEBHOOK_SECRET`, nunca un id escrito en el texto del mensaje, y la pertenencia a `ADVISOR_CHAT_IDS` se comprueba con ese `telegram_user_id`, no con el `chat_id`; por eso un id de grupo (negativo) de `ADVISOR_CHAT_IDS` no puede usar los comandos. | — |

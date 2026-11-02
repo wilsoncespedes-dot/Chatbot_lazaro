@@ -148,7 +148,8 @@ def test_dockerfile_base_image_and_cmd():
     assert f"services/{SVC}/requirements.txt" in text
     assert "pip install" in text
     assert (
-        f'CMD ["uvicorn", "{SVC}.main:app", "--host", "0.0.0.0", "--port", "8000"]' in text
+        f'CMD ["sh", "-c", "exec uvicorn {SVC}.main:app --host 0.0.0.0 '
+        f'--port ${{PORT:-8000}}"]' in text
     )
 
 

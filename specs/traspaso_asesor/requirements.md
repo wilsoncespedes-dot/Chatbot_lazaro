@@ -129,6 +129,11 @@ El sistema (handover) DEBE leer de variables de entorno `ADVISOR_CHAT_IDS` (ente
 por comas; las entradas vacías o no numéricas se descartan), `HANDOVER_TIMEOUT_SECONDS`
 (entero ≥ 1, por defecto 300) y `HANDOVER_TIMEOUT_REPLY` (texto, con valor por defecto).
 
+> **Nota (2026-10-31): R23 modificada por la #10 `validacion_config_asesores`.** Las entradas
+> vacías se siguen descartando, pero una entrada no numérica o un id repetido en
+> `ADVISOR_CHAT_IDS` ya no se descartan: `Settings()` lanza un error de validación y handover no
+> arranca. Ver `specs/validacion_config_asesores/` (decisión del humano del 2026-10-31).
+
 ## R24
 SI una petición a `POST /handover`, `POST /cases/{id}/assign`, `POST /cases/{id}/close` o
 `POST /cases/check-timeouts` llega sin `X-Service-Token` válido ENTONCES el sistema (handover)

@@ -7,7 +7,8 @@
 #   --max-sesiones N   máximo de sesiones de Claude Code (por defecto 20)
 #   --max-horas H      parar tras H horas (por defecto 10)
 #   --timeout-min M    máximo de minutos por sesión (por defecto 120)
-#   --modelo M         modelo a usar, p. ej. sonnet u opus
+#   --modelo M         modelo de Claude leader, p. ej. sonnet u opus
+#   OPENCODE_WRITER_MODEL  modelo DeepSeek writer (por defecto deepseek/deepseek-flash)
 #   --sin-commits      no hacer un commit de git después de cada sesión
 #
 # Cada sesión lanza `claude -p` con las instrucciones de .claude/nocturno.md
@@ -68,6 +69,11 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v opencode >/dev/null 2>&1; then
+  echo "[nocturno] No encuentro 'opencode'. Es necesario porque DeepSeek es el writer." >&2
+  exit 1
+fi
+
 MODEL_FLAG=""
 [ -n "$MODELO" ] && MODEL_FLAG="--model $MODELO"
 
@@ -107,6 +113,11 @@ PY
 }
 
 snapshot() { $PY -c 'import json;print(json.dumps([(f["id"],f["status"]) for f in json.load(open("feature_list.json",encoding="utf-8"))["features"]]))'; }
+
+if [ -n "$(next_feature)" ] && ! opencode auth list 2>&1 | grep -qi 'deepseek'; then
+  echo "[nocturno] Hay trabajo pendiente, pero DeepSeek no está conectado. Ejecuta /connect y configura el proveedor 'deepseek'." >&2
+  exit 1
+fi
 
 now() { date "+%Y-%m-%d %H:%M"; }
 

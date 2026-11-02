@@ -204,7 +204,7 @@ def test_http_handover_client_assign_posts_to_assign_route(captured):
     assert json.loads(request.content) == {"advisor_id": "555"}
 
 
-@pytest.mark.parametrize("status", [404, 409, 500])
+@pytest.mark.parametrize("status", [403, 404, 409, 500])
 def test_http_handover_client_assign_raises_on_error_status(captured, status):
     """R34: un 4xx/5xx de assign se convierte en ServiceUnavailable."""
     _, reply = captured

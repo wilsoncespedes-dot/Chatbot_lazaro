@@ -1,0 +1,12 @@
+[
+  {
+    "manual_id": "manual-facturacion",
+    "name": "Manual de facturación",
+    "chunks": 2
+  },
+  {
+    "manual_id": "manual-ventas",
+    "name": "Manual de ventas",
+    "chunks": 42
+  }
+]

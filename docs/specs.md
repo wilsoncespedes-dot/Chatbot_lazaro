@@ -1,7 +1,7 @@
 # Spec Driven Development (SDD)
 
-> Este proyecto sigue un flujo Kiro-style: requirements → design → tasks → code.
-> El código no se escribe hasta que el spec está aprobado por un humano.
+> Este proyecto usa un flujo ligero: requirements → design → tasks → code.
+> Un reviewer valida el spec antes de implementar; no requiere aprobación humana rutinaria.
 
 ## Estructura
 
@@ -22,29 +22,26 @@ El `feature-name` coincide con el campo `name` de `feature_list.json`.
 | Estado         | Significado                                                    |
 |----------------|----------------------------------------------------------------|
 | `pending`      | Sin spec. El `spec_author` es el primero en actuar.            |
-| `spec_ready`   | Spec drafted. Esperando aprobación humana. NO se toca código.  |
+| `spec_ready`   | Spec listo para revisión breve. Aún no se toca código.          |
 | `in_progress`  | Spec aprobado. `implementer` trabajando.                       |
 | `done`         | Código verde, `reviewer` aprobó, sesión cerrada.               |
 | `blocked`      | Atascado. Razón en `progress/current.md`.                      |
 
-## La puerta de aprobación humana
+## Revisión rápida del spec
 
-El flujo automático se detiene **una vez**: cuando el `spec_author` termina
-sus tres archivos, marca la feature como `spec_ready` y para. El humano
-lee `specs/<feature>/` y dice "aprobado" (o pide cambios).
+Al terminar el `spec_author`, el `reviewer` hace una sola revisión enfocada
+en aceptación, coherencia, dependencias y decisiones ya registradas. Si
+aprueba, el leader pasa directamente a `in_progress`. Si pide cambios, el
+autor corrige exclusivamente esos puntos y se hace una última revisión. No
+se pide aprobación humana rutinaria ni se repiten revisiones completas.
 
-Solo entonces el `leader` transiciona `spec_ready → in_progress` y lanza
-el `implementer`.
-
-> **Modo nocturno.** Si el humano no está (`./modo.sh nocturno` o
-> `./nocturno.sh`), el `reviewer` hace una *revisión de spec* con los
-> mismos criterios de este documento y deja su veredicto en
-> `progress/specreview_<name>.md`. La feature queda marcada con
-> `"auto_approved": true` hasta que el humano la revise (comando
-> `/revisado`).
+Solo se bloquea ante una decisión de producto material que no esté en
+`docs/proyecto.md`, el acceptance, decisiones anteriores o un default seguro
+configurable. El blocker debe incluir la pregunta concreta y la opción
+recomendada; se continúa con otras tareas independientes si existen.
 
 ```
-pending → [spec_author] → spec_ready → ⏸ HUMANO → in_progress → [implementer → reviewer] → done
+pending → [spec_author] → spec_ready → [reviewer: spec] → in_progress → [implementer → reviewer: código] → done
 ```
 
 ## requirements.md — EARS estricto

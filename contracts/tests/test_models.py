@@ -5,6 +5,7 @@ import copy
 import json
 from pathlib import Path
 from typing import Any
+from typing import get_args
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -17,12 +18,19 @@ from lazaro_contracts import (
     MAX_TOP_K,
     CaseAssignRequest,
     CaseAssignResponse,
+    CaseAuthorizeAction,
+    CaseAuthorizeRequest,
+    CaseAuthorizeResponse,
+    CaseClientMessageRequest,
+    CaseClientMessageResponse,
     CaseCloseRequest,
     CaseCloseResponse,
     CaseReplyRequest,
     CaseReplyResponse,
     CheckTimeoutsRequest,
     CheckTimeoutsResponse,
+    ChunkUpdateRequest,
+    ChunkUpdateResponse,
     ContractModel,
     ErrorResponse,
     HandoverRequest,
@@ -62,8 +70,14 @@ BASE_EXAMPLES: dict[type[BaseModel], tuple[str, str | None]] = {
     CaseCloseResponse: ("case_close_response.json", None),
     CaseAssignRequest: ("case_assign_request.json", None),
     CaseAssignResponse: ("case_assign_response.json", None),
+    CaseAuthorizeRequest: ("case_authorize_request.json", None),
+    CaseAuthorizeResponse: ("case_authorize_response.json", None),
+    CaseClientMessageRequest: ("case_client_message_request.json", None),
+    CaseClientMessageResponse: ("case_client_message_response.json", None),
     CheckTimeoutsRequest: ("check_timeouts_request.json", None),
     CheckTimeoutsResponse: ("check_timeouts_response.json", None),
+    ChunkUpdateRequest: ("chunk_update_request.json", None),
+    ChunkUpdateResponse: ("chunk_update_response.json", None),
     ErrorResponse: ("error_response.json", None),
     HealthResponse: ("health_response.json", None),
 }
@@ -186,6 +200,11 @@ IDENTIFIER_FIELDS = [
     (ManualUploadResponse, "manual_id"),
     (CaseAssignRequest, "advisor_id"),
     (CaseAssignResponse, "case_id"),
+    (CaseAuthorizeRequest, "advisor_id"),
+    (CaseAuthorizeResponse, "case_id"),
+    (CaseClientMessageResponse, "case_id"),
+    (ChunkUpdateResponse, "chunk_id"),
+    (ChunkUpdateResponse, "manual_id"),
 ]
 
 
@@ -507,3 +526,187 @@ def test_health_response_rejects_invalid_values(data: dict[str, str]) -> None:
     """R44: status distinto de ok o service vacío lanza ValidationError."""
     with pytest.raises(ValidationError):
         _validate(HealthResponse, data)
+
+
+# ── contrato_autorizacion_asesores (feature #13) ─────────────────────────────
+
+
+def test_case_authorize_action_is_reply_or_close() -> None:
+    """contrato_autorizacion_asesores R27: CaseAuthorizeAction es reply o close."""
+    assert get_args(CaseAuthorizeAction) == ("reply", "close")
+
+
+def test_case_authorize_request_requires_advisor_id_and_action() -> None:
+    """contrato_autorizacion_asesores R28: CaseAuthorizeRequest exige advisor_id y action."""
+    assert issubclass(CaseAuthorizeRequest, ContractModel)
+    assert {
+        name for name, f in CaseAuthorizeRequest.model_fields.items() if f.is_required()
+    } == {"advisor_id", "action"}
+    _validate(CaseAuthorizeRequest, _example(CaseAuthorizeRequest))
+
+
+def test_case_authorize_request_without_advisor_id_is_rejected() -> None:
+    """contrato_autorizacion_asesores R29: sin advisor_id lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(CaseAuthorizeRequest, {"action": "reply"})
+
+
+def test_case_authorize_request_without_action_is_rejected() -> None:
+    """contrato_autorizacion_asesores R30: sin action lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(CaseAuthorizeRequest, {"advisor_id": "222222222"})
+
+
+@pytest.mark.parametrize("action", ["reply", "close"])
+def test_case_authorize_request_accepts_valid_action(action: str) -> None:
+    """contrato_autorizacion_asesores R28, R31: reply y close son válidas."""
+    _validate(CaseAuthorizeRequest, _with(CaseAuthorizeRequest, action=action))
+
+
+@pytest.mark.parametrize("action", ["assign", "REPLY", "read", ""])
+def test_case_authorize_request_rejects_invalid_action(action: str) -> None:
+    """contrato_autorizacion_asesores R31: una action fuera de la lista es rechazada."""
+    with pytest.raises(ValidationError):
+        _validate(CaseAuthorizeRequest, _with(CaseAuthorizeRequest, action=action))
+
+
+def test_case_authorize_response_requires_allowed_and_case_id() -> None:
+    """contrato_autorizacion_asesores R33: CaseAuthorizeResponse exige allowed y case_id."""
+    assert issubclass(CaseAuthorizeResponse, ContractModel)
+    assert {
+        name for name, f in CaseAuthorizeResponse.model_fields.items() if f.is_required()
+    } == {"allowed", "case_id"}
+    response = _validate(CaseAuthorizeResponse, _example(CaseAuthorizeResponse))
+    assert response.allowed is True
+
+
+@pytest.mark.parametrize("allowed", [False, None, "false", 0])
+def test_case_authorize_response_rejects_allowed_not_true(allowed: Any) -> None:
+    """contrato_autorizacion_asesores R34: allowed distinto de true es rechazado."""
+    with pytest.raises(ValidationError):
+        _validate(CaseAuthorizeResponse, _with(CaseAuthorizeResponse, allowed=allowed))
+
+
+# ── contrato_conversacion_caso (feature #15) ─────────────────────────────────
+
+
+def test_case_client_message_request_requires_text_and_at() -> None:
+    """contrato_conversacion_caso R19, R20: exige text y at; sin text lanza ValidationError."""
+    assert issubclass(CaseClientMessageRequest, ContractModel)
+    assert {
+        name
+        for name, field in CaseClientMessageRequest.model_fields.items()
+        if field.is_required()
+    } == {"text", "at"}
+    with pytest.raises(ValidationError):
+        _validate(CaseClientMessageRequest, {"at": "2026-10-30T19:20:00Z"})
+
+
+def test_case_client_message_request_rejects_naive_at() -> None:
+    """contrato_conversacion_caso R22: at sin zona horaria lanza ValidationError."""
+    _validate(
+        CaseClientMessageRequest,
+        {"text": "hola", "at": "2026-10-30T19:20:00+00:00"},
+    )
+    with pytest.raises(ValidationError):
+        _validate(CaseClientMessageRequest, {"text": "hola", "at": "2026-10-30T19:20:00"})
+
+
+@pytest.mark.parametrize(
+    "text", ["", "a" * (MAX_TEXT_LENGTH + 1)], ids=["empty", "too_long"]
+)
+def test_case_client_message_request_rejects_invalid_text(text: str) -> None:
+    """contrato_conversacion_caso R23: text vacío o demasiado largo lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(
+            CaseClientMessageRequest,
+            {"text": text, "at": "2026-10-30T19:20:00Z"},
+        )
+
+
+def test_case_client_message_request_accepts_text_at_max_length() -> None:
+    """contrato_conversacion_caso R23: text de MAX_TEXT_LENGTH caracteres es válido."""
+    _validate(
+        CaseClientMessageRequest,
+        {"text": "a" * MAX_TEXT_LENGTH, "at": "2026-10-30T19:20:00Z"},
+    )
+
+
+def test_case_client_message_response_requires_status_and_case_id() -> None:
+    """contrato_conversacion_caso R24: exige exactamente status y case_id."""
+    assert issubclass(CaseClientMessageResponse, ContractModel)
+    assert {
+        name
+        for name, field in CaseClientMessageResponse.model_fields.items()
+        if field.is_required()
+    } == {"status", "case_id"}
+
+
+@pytest.mark.parametrize("status", ["forwarded", "not_assigned"])
+def test_case_client_message_response_accepts_valid_status(status: str) -> None:
+    """contrato_conversacion_caso R24: forwarded y not_assigned son válidos."""
+    _validate(
+        CaseClientMessageResponse,
+        {"status": status, "case_id": "case-1"},
+    )
+
+
+@pytest.mark.parametrize(
+    "status", ["assigned", "open", "closed", "FORWARDED", "sent", ""]
+)
+def test_case_client_message_response_rejects_invalid_status(status: str) -> None:
+    """contrato_conversacion_caso R25: un status fuera de la lista lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(
+            CaseClientMessageResponse,
+            {"status": status, "case_id": "case-1"},
+        )
+
+
+# ── edicion_fragmentos (feature #19) ─────────────────────────────────────────
+
+
+def test_chunk_update_request_requires_only_text() -> None:
+    """edicion_fragmentos R1: ChunkUpdateRequest exige únicamente text."""
+    assert issubclass(ChunkUpdateRequest, ContractModel)
+    assert {
+        name for name, field in ChunkUpdateRequest.model_fields.items() if field.is_required()
+    } == {"text"}
+    _validate(ChunkUpdateRequest, {"text": "texto nuevo"})
+
+
+@pytest.mark.parametrize("text", ["", "   ", "\n\t "], ids=["empty", "spaces", "whitespace"])
+def test_chunk_update_request_rejects_blank_text(text: str) -> None:
+    """edicion_fragmentos R2: texto vacío o solo espacios lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(ChunkUpdateRequest, {"text": text})
+
+
+def test_chunk_update_request_preserves_text_exactly() -> None:
+    """edicion_fragmentos R3: el texto no vacío se conserva sin normalizar."""
+    text = "  Texto con espacios  "
+    request = _validate(ChunkUpdateRequest, {"text": text})
+    assert request.text == text
+
+
+def test_chunk_update_response_has_fragment_metadata_fields() -> None:
+    """edicion_fragmentos R8: la respuesta devuelve los datos actualizados del fragmento."""
+    assert issubclass(ChunkUpdateResponse, ContractModel)
+    assert set(ChunkUpdateResponse.model_fields) == {
+        "chunk_id",
+        "manual_id",
+        "manual",
+        "order",
+        "text",
+        "active",
+    }
+    response = _validate(ChunkUpdateResponse, _example(ChunkUpdateResponse))
+    assert response.active is True
+    assert response.order == 1
+
+
+def test_chunk_update_response_rejects_invalid_order() -> None:
+    """edicion_fragmentos R8: order menor que 1 lanza ValidationError."""
+    with pytest.raises(ValidationError):
+        _validate(ChunkUpdateResponse, _with(ChunkUpdateResponse, order=0))
+

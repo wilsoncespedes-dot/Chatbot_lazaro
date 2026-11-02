@@ -13,3 +13,12 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [telegram_gateway, orchestrator, rag, handover]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir imagen
+        run: docker build -f services/${{ matrix.service }}/Dockerfile .

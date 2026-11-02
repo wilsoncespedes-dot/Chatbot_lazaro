@@ -1,0 +1,10 @@
+{
+  "cutoff": "2025-12-03T03:04:05Z",
+  "deleted": {
+    "messages": 12,
+    "events": 4,
+    "contacts": 2,
+    "case_links": 2
+  },
+  "closed_active_cases": 0
+}

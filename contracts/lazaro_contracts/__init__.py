@@ -4,6 +4,11 @@ from __future__ import annotations
 from .cases import (
     CaseAssignRequest,
     CaseAssignResponse,
+    CaseAuthorizeAction,
+    CaseAuthorizeRequest,
+    CaseAuthorizeResponse,
+    CaseClientMessageRequest,
+    CaseClientMessageResponse,
     CaseCloseRequest,
     CaseCloseResponse,
     CaseReplyRequest,
@@ -14,6 +19,13 @@ from .cases import (
     HandoverRequest,
     HandoverResponse,
     LastMessage,
+)
+from .chunks import (
+    ChunkActiveRequest,
+    ChunkItem,
+    ChunkListResponse,
+    ChunkUpdateRequest,
+    ChunkUpdateResponse,
 )
 from .common import (
     MAX_IDENTIFIER_LENGTH,
@@ -28,8 +40,14 @@ from .common import (
     Identifier,
     MessageText,
 )
-from .manuals import ManualUploadRequest, ManualUploadResponse
+from .manuals import (
+    ManualListResponse,
+    ManualSummary,
+    ManualUploadRequest,
+    ManualUploadResponse,
+)
 from .messages import MessageRequest, MessageResponse, SendRequest, SendResponse
+from .privacy import PrivacyPurgeRequest, PrivacyPurgeResponse
 from .search import SearchRequest, SearchResponse, SearchResult
 
 __all__ = [
@@ -40,6 +58,13 @@ __all__ = [
     "SearchRequest",
     "SearchResult",
     "SearchResponse",
+    "ChunkUpdateRequest",
+    "ChunkUpdateResponse",
+    "ChunkItem",
+    "ChunkListResponse",
+    "ChunkActiveRequest",
+    "ManualSummary",
+    "ManualListResponse",
     "HandoverRequest",
     "LastMessage",
     "HandoverResponse",
@@ -51,8 +76,14 @@ __all__ = [
     "CaseCloseResponse",
     "CaseAssignRequest",
     "CaseAssignResponse",
+    "CaseAuthorizeRequest",
+    "CaseAuthorizeResponse",
+    "CaseClientMessageRequest",
+    "CaseClientMessageResponse",
     "CheckTimeoutsRequest",
     "CheckTimeoutsResponse",
+    "PrivacyPurgeRequest",
+    "PrivacyPurgeResponse",
     "ErrorResponse",
     "HealthResponse",
     "SERVICE_TOKEN_HEADER",
@@ -65,4 +96,5 @@ __all__ = [
     "Identifier",
     "MessageText",
     "HandoverReason",
+    "CaseAuthorizeAction",
 ]

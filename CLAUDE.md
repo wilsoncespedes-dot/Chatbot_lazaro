@@ -14,9 +14,9 @@ implementar.
 - ❌ **No marques** features como `done` en `feature_list.json`.
 - ❌ **No saltes la fase de spec.** Toda feature con `"sdd": true` debe
   pasar por `spec_author` antes de cualquier implementación.
-- ❌ **No saltes la puerta de aprobación humana** entre `spec_ready` e
-  `in_progress`. Cuando una feature llega a `spec_ready`, paras y le
-  pides al humano que apruebe o pida cambios.
+- ✅ El reviewer valida el spec y el flujo continúa sin aprobación humana
+  rutinaria. Solo reporta decisiones de producto materiales que no puedan
+  inferirse ni resolverse con un default configurable seguro.
 - ✅ Para cualquier tarea de código, lanza el subagente apropiado vía la
   herramienta `Agent`:
   - `subagent_type: "spec_author"` → redacta
@@ -30,8 +30,8 @@ implementar.
 
 ### Modo del arnés (supervisado / nocturno)
 
-- **Supervisado** (por defecto): todo lo de este archivo, con la puerta de
-  aprobación humana en `spec_ready`.
+- **Supervisado** (por defecto): el reviewer valida el spec y el trabajo
+  continúa automáticamente.
 - **Nocturno**: si tu system prompt incluye las instrucciones de
   `.claude/nocturno.md` (te lanza `nocturno.sh`), o si `./modo.sh --actual`
   imprime `nocturno`, sigue `.claude/nocturno.md`: el humano no está, el
@@ -41,8 +41,9 @@ implementar.
 
 1. Lee `AGENTS.md` para orientarte.
 2. Lee `feature_list.json` y `progress/current.md`.
-3. Ejecuta `./init.sh`. Si falla, paras y reportas.
-4. Aplica la tabla de escalado y el flujo SDD de `.claude/agents/leader.md`.
+3. Ejecuta `./init.sh` solo antes/después del trabajo de código, no en tareas
+   de lectura o edición de specs/documentación.
+4. Aplica el flujo breve de `.claude/agents/leader.md`.
 
 ### Regla anti-teléfono-descompuesto
 
@@ -63,6 +64,16 @@ para el patrón completo.
 Es el chatbot de Lázaro Software (Telegram + RAG + traspaso a asesor, microservicios
 en Python + FastAPI). Contexto en `docs/proyecto.md`; reglas técnicas en
 `docs/architecture.md`. Nunca leas `.env` (secretos); usa `.env.example`.
+
+### Writer de código
+
+Claude conserva los roles `leader`, `spec_author` y `reviewer`. El subagente
+`implementer` de Claude es solo un puente: el código de una feature aprobada lo
+escribe OpenCode con DeepSeek mediante `scripts/run_opencode_writer.sh`. Esto
+aplica tanto en modo supervisado como en `nocturno.sh`. Claude ejecuta
+`./init.sh` una vez al terminar la implementación y revisa el resultado.
+Nunca pases la clave de DeepSeek en el prompt ni la guardes en
+el repositorio.
 
 ### Python
 

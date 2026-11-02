@@ -1,0 +1,62 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "deepseek": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "DeepSeek",
+      "options": {
+        "baseURL": "https://api.deepseek.com"
+      },
+      "models": {
+        "deepseek-v4-pro": {
+          "name": "DeepSeek V4 Pro"
+        },
+        "deepseek-flash": {
+          "name": "DeepSeek Flash"
+        }
+      }
+    }
+  },
+  "agent": {
+    "implementer": {
+      "description": "Implementa una feature SDD aprobada; Claude coordina y revisa.",
+      "mode": "primary",
+      "model": "deepseek/deepseek-flash",
+      "prompt": "{file:./.opencode/agents/implementer.md}",
+      "permission": {
+        "*": "deny",
+        "read": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny",
+          "*.env.example": "allow"
+        },
+        "edit": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny",
+          "*.env.example": "allow",
+          "AGENTS.md": "deny",
+          "CLAUDE.md": "deny",
+          "CHECKPOINTS.md": "deny",
+          "feature_list.json": "deny",
+          "init.sh": "deny",
+          "modo.sh": "deny",
+          "nocturno.sh": "deny",
+          "opencode.json": "deny",
+          ".claude/**": "deny",
+          ".opencode/**": "deny",
+          "scripts/run_opencode_writer.sh": "deny"
+        },
+        "list": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "external_directory": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
+    }
+  }
+}

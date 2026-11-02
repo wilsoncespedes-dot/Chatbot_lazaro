@@ -1,0 +1,180 @@
+# Blueprint de Render para el chatbot Lázaro.
+# Es un artefacto de preparación: no despliega ni crea recursos por sí mismo.
+# Sin `plan`: lo elige el humano al crear el Blueprint (R7).
+# Todos los recursos comparten región para poder usar la red privada (R6).
+
+envVarGroups:
+  - name: lazaro-compartido
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PORT
+        value: "8000"
+      - key: SERVICE_TOKEN
+        generateValue: true
+
+databases:
+  - name: lazaro-postgres
+    region: virginia
+    postgresMajorVersion: "16"
+    ipAllowList: []
+
+services:
+  - type: keyvalue
+    name: lazaro-redis
+    region: virginia
+    ipAllowList: []
+
+  - type: web
+    name: telegram-gateway
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/telegram_gateway/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: lazaro-redis
+          property: connectionString
+      - key: ORCHESTRATOR_URL
+        fromService:
+          type: web
+          name: orchestrator
+          property: hostport
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+
+  - type: web
+    name: orchestrator
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/orchestrator/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lazaro-postgres
+          property: connectionString
+      - key: RAG_URL
+        fromService:
+          type: pserv
+          name: rag
+          property: hostport
+      - key: HANDOVER_URL
+        fromService:
+          type: pserv
+          name: handover
+          property: hostport
+      - key: TELEGRAM_GATEWAY_URL
+        fromService:
+          type: web
+          name: telegram-gateway
+          property: hostport
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: ADMIN_TRUST_PROXY_HEADERS
+        value: "true"
+      - key: PRIVACY_NOTICE_TEXT
+        sync: false
+      - key: PRIVACY_NOTICE_VERSION
+        sync: false
+      - key: PRIVACY_ACCEPT_PHRASE
+        sync: false
+      - key: PRIVACY_ACCEPTED_REPLY
+        sync: false
+      - key: PRIVACY_RETENTION_DAYS
+        fromService:
+          type: pserv
+          name: handover
+          envVarKey: PRIVACY_RETENTION_DAYS
+
+  - type: pserv
+    name: rag
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/rag/Dockerfile
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lazaro-postgres
+          property: connectionString
+      - key: EMBEDDINGS_API_KEY
+        sync: false
+      - key: EMBEDDINGS_MODEL
+        sync: false
+
+  - type: pserv
+    name: handover
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/handover/Dockerfile
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lazaro-postgres
+          property: connectionString
+      - key: TELEGRAM_GATEWAY_URL
+        fromService:
+          type: web
+          name: telegram-gateway
+          property: hostport
+      - key: ADVISOR_CHAT_IDS
+        sync: false
+      - key: PRIVACY_RETENTION_DAYS
+        sync: false
+      - key: PRIVACY_ACTIVE_CASE_MAX_DAYS
+        sync: false
+
+  - type: worker
+    name: timeouts-worker
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/handover/Dockerfile
+    dockerCommand: python vencer_casos.py --intervalo
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: HANDOVER_URL
+        fromService:
+          type: pserv
+          name: handover
+          property: hostport
+
+  - type: worker
+    name: retention-worker
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/handover/Dockerfile
+    dockerCommand: python purgar_datos.py --intervalo
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: HANDOVER_URL
+        fromService:
+          type: pserv
+          name: handover
+          property: hostport
+      - key: ORCHESTRATOR_URL
+        fromService:
+          type: web
+          name: orchestrator
+          property: hostport
+      - key: PRIVACY_PURGE_INTERVAL_SECONDS
+        value: "86400"
+      - key: PRIVACY_PURGE_HTTP_TIMEOUT_SECONDS
+        value: "120"

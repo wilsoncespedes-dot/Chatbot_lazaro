@@ -1,9 +1,9 @@
-"""Modelos de POST /manuals (rag)."""
+"""Modelos de POST /manuals y GET /manuals (rag)."""
 from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import Field, StringConstraints
+from pydantic import Field, RootModel, StringConstraints
 
 from .common import MAX_MANUAL_NAME_LENGTH, ContractModel, Identifier
 
@@ -19,3 +19,15 @@ class ManualUploadResponse(ContractModel):
 
     manual_id: Identifier
     chunks: Annotated[int, Field(ge=1)]
+
+
+class ManualSummary(ContractModel):
+    """Resumen de un manual: id, nombre y número de fragmentos."""
+
+    manual_id: Identifier
+    name: Annotated[str, StringConstraints(min_length=1, max_length=MAX_MANUAL_NAME_LENGTH)]
+    chunks: Annotated[int, Field(ge=0)]
+
+
+class ManualListResponse(RootModel[list[ManualSummary]]):
+    """Respuesta 200 de GET /manuals: arreglo JSON de nivel superior."""

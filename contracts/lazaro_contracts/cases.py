@@ -1,5 +1,5 @@
 """Modelos de /handover, /cases/{id}/reply, /cases/{id}/close, /cases/check-timeouts
-y /cases/{id}/assign."""
+/cases/{id}/assign, /cases/{id}/authorize y /cases/{id}/client-message."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -80,6 +80,25 @@ class CaseAssignResponse(ContractModel):
     case_id: Identifier
 
 
+# S12: acciones que se autorizan.
+CaseAuthorizeAction = Literal["reply", "close"]
+
+
+class CaseAuthorizeRequest(ContractModel):
+    """Consulta de si un asesor puede responder o cerrar un caso (S12)."""
+
+    # S6: en la versión mínima, el chat_id del asesor en decimal.
+    advisor_id: Identifier
+    action: CaseAuthorizeAction
+
+
+class CaseAuthorizeResponse(ContractModel):
+    """Respuesta 200 de POST /cases/{id}/authorize; una denegación es 403 (S12)."""
+
+    allowed: Literal[True]
+    case_id: Identifier
+
+
 class CheckTimeoutsRequest(ContractModel):
     """Cuerpo vacío {} de POST /cases/check-timeouts."""
 
@@ -88,3 +107,17 @@ class CheckTimeoutsResponse(ContractModel):
     """Respuesta 200 de POST /cases/check-timeouts con los casos vencidos."""
 
     timed_out_cases: list[Identifier]
+
+
+class CaseClientMessageRequest(ContractModel):
+    """Mensaje de un cliente que el orquestador pide reenviar al asesor del caso (S13)."""
+
+    text: MessageText
+    at: AwareDatetime
+
+
+class CaseClientMessageResponse(ContractModel):
+    """Respuesta 200 de POST /cases/{id}/client-message (S13)."""
+
+    status: Literal["forwarded", "not_assigned"]
+    case_id: Identifier

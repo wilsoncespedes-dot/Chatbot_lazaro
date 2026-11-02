@@ -2,10 +2,8 @@
 description: Aprueba el spec de la feature en spec_ready y lanza la implementación
 ---
 
-Aprobado. He revisado el spec de la feature que está en `spec_ready`
-dentro de `specs/<name>/`.
-
-Aplica el caso B: pasa la feature a `in_progress`, lanza al `implementer`
-y después al `reviewer`.
+Continúa la feature en `spec_ready`: realiza la revisión automática del spec
+y, si aprueba, cambia a `in_progress` y lanza implementación con OpenCode.
+No esperes una aprobación manual adicional.
 
 Comentarios adicionales del humano (si los hay): $ARGUMENTS

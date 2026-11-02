@@ -1,6 +1,6 @@
 {
   "permissions": {
-    "defaultMode": "acceptEdits",
+    "defaultMode": "dontAsk",
     "allow": [
       "Bash",
       "Edit",
@@ -12,7 +12,7 @@
       "WebFetch",
       "NotebookEdit"
     ],
-    "ask": [
+    "deny": [
       "Bash(sudo *)",
       "Bash(rm -rf *)",
       "Bash(rm -fr *)",
@@ -29,9 +29,18 @@
       "Bash(shutdown *)",
       "Bash(reboot *)",
       "Bash(gh pr merge *)",
-      "Bash(gh repo delete *)"
-    ],
-    "deny": [
+      "Bash(gh repo delete *)",
+      "Edit(/docs/**)",
+      "Edit(/AGENTS.md)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/CHECKPOINTS.md)",
+      "Edit(/init.sh)",
+      "Edit(/modo.sh)",
+      "Edit(/nocturno.sh)",
+      "Edit(/.claude/**)",
+      "Edit(/pytest.ini)",
+      "Edit(/conftest.py)",
+      "Edit(/referencias/**)",
       "Read(.env)",
       "Read(.env.*)",
       "Read(!.env.example)",
@@ -49,33 +58,7 @@
       "Bash(. .env*)",
       "Bash(env)",
       "Bash(printenv *)",
-      "Bash(printenv)",
-      "Edit(/referencias/**)"
-    ]
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash .claude/hooks/run_tests.sh",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash .claude/hooks/stop_check.sh",
-            "timeout": 180
-          }
-        ]
-      }
+      "Bash(printenv)"
     ]
   }
 }

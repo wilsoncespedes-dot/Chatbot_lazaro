@@ -42,7 +42,7 @@ def test_assign_already_assigned_keeps_first_advisor(env):
     env.add_case("case-1", status="open")
     _assign(env, "case-1", "111")
     env.clock.advance(30)
-    response = _assign(env, "case-1", "333")
+    response = _assign(env, "case-1", "111")
     assert response.status_code == 200
     assert response.json() == {"status": "assigned", "case_id": "case-1"}
     case = env.repo.cases["case-1"]

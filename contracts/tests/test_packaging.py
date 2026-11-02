@@ -34,8 +34,19 @@ MODEL_NAMES = [
     "CaseCloseResponse",
     "CaseAssignRequest",
     "CaseAssignResponse",
+    "CaseAuthorizeRequest",
+    "CaseAuthorizeResponse",
+    "CaseClientMessageRequest",
+    "CaseClientMessageResponse",
     "CheckTimeoutsRequest",
     "CheckTimeoutsResponse",
+    "ChunkUpdateRequest",
+    "ChunkUpdateResponse",
+    "ChunkItem",
+    "ChunkListResponse",
+    "ChunkActiveRequest",
+    "ManualSummary",
+    "ManualListResponse",
     "ErrorResponse",
     "HealthResponse",
 ]
@@ -89,6 +100,12 @@ def test_all_names_are_importable() -> None:
     """R16: todo nombre de __all__ existe en el paquete."""
     for name in lazaro_contracts.__all__:
         assert hasattr(lazaro_contracts, name)
+
+
+def test_case_authorize_action_is_exported() -> None:
+    """contrato_autorizacion_asesores R37: CaseAuthorizeAction está en __all__ y existe."""
+    assert "CaseAuthorizeAction" in lazaro_contracts.__all__
+    assert hasattr(lazaro_contracts, "CaseAuthorizeAction")
 
 
 def _imported_modules(path: Path) -> list[tuple[str, int]]:

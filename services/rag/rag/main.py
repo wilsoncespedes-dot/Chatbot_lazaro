@@ -9,8 +9,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from lazaro_contracts import (
     SERVICE_TOKEN_HEADER,
+    ChunkActiveRequest,
+    ChunkItem,
+    ChunkListResponse,
+    ChunkUpdateRequest,
+    ChunkUpdateResponse,
     ErrorResponse,
     HealthResponse,
+    ManualListResponse,
     ManualUploadRequest,
     ManualUploadResponse,
     SearchRequest,
@@ -22,7 +28,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import Settings
 from .adapters.embeddings import EmbeddingsClient, HttpEmbeddingsClient
 from .adapters.repository import ChunkRepository, PgVectorChunkRepository
-from .domain import DomainError, ingest_manual, search_chunks
+from .domain import (
+    DomainError,
+    ingest_manual,
+    list_manual_chunks,
+    list_manuals,
+    search_chunks,
+    set_chunk_active,
+    update_chunk_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +120,26 @@ def create_app(
         data = file.file.read()
         return ingest_manual(data, name, settings, embeddings, repository)
 
+    @app.get("/manuals", response_model=ManualListResponse)
+    def read_manuals() -> ManualListResponse:
+        return ManualListResponse(list_manuals(repository))
+
+    @app.get("/manuals/{id}/chunks", response_model=ChunkListResponse)
+    def read_manual_chunks(id: str) -> ChunkListResponse:
+        return ChunkListResponse(list_manual_chunks(id, repository))
+
     @app.post("/search", response_model=SearchResponse)
     def search(body: SearchRequest) -> SearchResponse:
         results = search_chunks(body, settings, embeddings, repository)
         return SearchResponse(results)
+
+    @app.patch("/chunks/{id}", response_model=ChunkUpdateResponse)
+    def edit_chunk(id: str, body: ChunkUpdateRequest) -> ChunkUpdateResponse:
+        return update_chunk_text(id, body, embeddings, repository)
+
+    @app.patch("/chunks/{id}/active", response_model=ChunkItem)
+    def change_chunk_active(id: str, body: ChunkActiveRequest) -> ChunkItem:
+        return set_chunk_active(id, body, repository)
 
     return app
 

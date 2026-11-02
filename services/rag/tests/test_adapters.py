@@ -6,7 +6,7 @@ import pytest
 
 from rag.adapters.embeddings import FakeEmbeddings, HttpEmbeddingsClient
 from rag.adapters.repository import PgVectorChunkRepository
-from rag.domain import Chunk, EmbeddingsUnavailable, cosine_similarity
+from rag.domain import Chunk, ChunkNotFound, EmbeddingsUnavailable, cosine_similarity
 
 
 def test_fake_embeddings_is_deterministic():
@@ -111,3 +111,62 @@ def test_pgvector_add_manual_rolls_back_on_error():
     with pytest.raises(RuntimeError):
         repo.add_manual("m", "n", [Chunk("m-1", "m", "n", 1, "t", [0.0, 0.0, 1.0])])
     assert conn.rollbacks == 1
+
+
+class UpdateConn:
+    """Conexión falsa con rowcount y fetchone para la actualización de fragmentos."""
+
+    def __init__(self, row=None, rowcount: int = 1):
+        self.executed: list = []
+        self.row = row
+        self.rowcount = rowcount
+        self.rollbacks = 0
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql, params=()):
+        self.executed.append((sql, params))
+
+    def fetchone(self):
+        return self.row
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def test_pgvector_update_text_is_parameterized_and_keeps_metadata():
+    """R6, R7: texto y vector se escriben juntos; el resto de columnas no se toca."""
+    conn = UpdateConn(row=("c1", "m1", "Manual A", 2, SECRET, True))
+    repo = PgVectorChunkRepository("postgresql://x", 3, connect=lambda: conn)
+    updated = repo.update_text("c1", SECRET, [0.1, 0.2, 0.3])
+    update_sql, update_params = next(
+        (sql, params) for sql, params in conn.executed if sql.startswith("UPDATE chunks SET")
+    )
+    assert "text = %s" in update_sql
+    assert "embedding = CAST(%s AS vector)" in update_sql
+    assert "active" not in update_sql.split("SET", 1)[1]
+    assert "INSERT" not in update_sql and "DELETE" not in update_sql
+    assert SECRET not in update_sql and "DROP TABLE chunks;--" not in update_sql
+    assert update_params[0] == SECRET
+    assert updated.text == SECRET
+    assert (updated.chunk_id, updated.manual_id, updated.manual, updated.order) == (
+        "c1",
+        "m1",
+        "Manual A",
+        2,
+    )
+    assert updated.active is True
+
+
+def test_pgvector_update_text_missing_chunk_raises_not_found_and_rolls_back():
+    """R9, R10: si no existe el id no se escribe nada y se revierte la transacción."""
+    conn = UpdateConn(row=None, rowcount=0)
+    repo = PgVectorChunkRepository("postgresql://x", 3, connect=lambda: conn)
+    with pytest.raises(ChunkNotFound):
+        repo.update_text("no-existe", "texto", [0.0, 0.0, 1.0])
+    assert conn.rollbacks == 1
+
