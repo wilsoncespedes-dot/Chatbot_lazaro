@@ -27,8 +27,11 @@ modo supervisado y nocturno.
 | 7 | `traspaso_asesor`       | Casos, aviso a asesores, tiempo de espera, respuesta del asesor |
 | 8 | `evaluacion`            | Preguntas de ejemplo y métricas |
 
-Para después: consulta a la base de datos, verificación de cuentas, paneles,
-clasificador y edición de fragmentos (lista `later` en `feature_list.json`).
+Features completadas: consulta a la base de datos (#26), verificación de cuentas (#20),
+clasificador (#25), panel administrativo (#21–#22) y edición de fragmentos (#19, #22).
+El panel de asesores (#29) y su contrato de listado (#33) ya están implementados.
+El backlog actual incluye agrupación de mensajes (#30), búsqueda híbrida RAG (#31)
+y traspaso automático tras fallos (#32), en feature_list.json.
 
 ## Puesta en marcha (una vez)
 

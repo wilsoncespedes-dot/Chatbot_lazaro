@@ -638,6 +638,47 @@ El cuerpo es el objeto vacío `{}`.
 | 503 | `privacy_not_configured` | falta la configuración de retención; no se borra nada (R21, R32) |
 | 500 | `internal_error` | error inesperado; la transacción hace rollback |
 
+### GET /cases
+
+- **Expone:** handover
+- **Llama:** orchestrator (panel de asesores, #29)
+- **Modelos:** `CaseListQuery` → `CaseListResponse` (elementos `CaseListItem`)
+
+Lista de solo lectura de los casos que un asesor puede gestionar según S12 y la
+regla de huérfanos (S14). Exige `X-Service-Token`. Un `advisor_id` que no está en
+`ADVISOR_CHAT_IDS` recibe `200` con la lista vacía.
+
+#### Request
+
+Los parámetros viajan en la query; un parámetro no declarado se rechaza con
+`422 validation_error`.
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `advisor_id` | identificador (1–64) | sí | chat_id del asesor que pide el listado (S6) |
+
+#### Respuesta
+
+`200 OK`. El cuerpo es un **arreglo JSON** de nivel superior (S10) con como
+máximo `CASE_LIST_LIMIT` casos (por defecto 50, máximo 200), ordenados por
+`created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Cada
+elemento (`CaseListItem`):
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `case_id` | identificador | sí | caso listado |
+| `status` | `open` \| `timed_out` \| `assigned` | sí | estado actual del caso |
+| `created_at` | fecha ISO 8601 con zona | sí | fecha de creación del caso |
+| `actions` | lista no vacía y sin repetidos de `reply` \| `assign` \| `close` | sí | acciones que el asesor puede hacer hoy (S14) |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | los parámetros de query no validan contra `CaseListQuery` |
+| 500 | internal_error | error inesperado |
+
 ## Supuestos a confirmar
 
 Decisiones tomadas sin confirmación humana. Cambiar cualquiera es un cambio de
@@ -658,3 +699,4 @@ contrato.
 | S11 | Asignar con `POST /cases/{id}/assign` un caso ya `assigned` responde `200` con `status` = `assigned` sin cambiar el asesor asignado cuando quien asigna es el asesor asignado; si es otro asesor, responde `403` con `error` = `forbidden` sin cambiar el caso (S12, cambio de la #13); asignar un caso `closed` responde `409` con `error` = `case_closed` | — |
 | S12 | Autorización de asesores (`POST /cases/{id}/authorize`). Solo son asesores los chat_id de `ADVISOR_CHAT_IDS` (hasta que existan el panel y la verificación de cuentas); un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `403` con `error` = `forbidden`. Responder (`reply`): un caso `open` o `timed_out` lo responde cualquier asesor registrado y la primera respuesta lo asigna; un caso `assigned` solo lo responde el asesor asignado. Cerrar (`close`): un caso `open` o `timed_out` lo cierra cualquier asesor registrado; un caso `assigned` solo lo cierra el asesor asignado, salvo un caso huérfano. Caso huérfano: un caso `assigned` cuyo `advisor_id` es nulo o ya no está en `ADVISOR_CHAT_IDS`. Un caso huérfano lo cierra cualquier asesor registrado: `POST /cases/{id}/close` lo pasa a `closed` y `authorize` con `action` = `close` responde `200` con `allowed` = `true`; cerrarlo no es reasignarlo. Un caso huérfano no lo responde ni lo asigna ningún otro asesor: `POST /cases/{id}/reply` y `authorize` con `action` = `reply` responden `403` con `error` = `forbidden`, y `POST /cases/{id}/assign` responde `403` con `error` = `forbidden` sin modificar el caso, como con cualquier caso asignado a otro asesor. Sin reasignación y sin rol supervisor. Las mismas reglas se aplican en `POST /cases/{id}/reply` (el orquestador responde `403` sin enviar nada al cliente), `POST /cases/{id}/close` y `POST /cases/{id}/assign` (handover responde `403` sin modificar el caso); asignar un caso ya `assigned` (S11) solo responde `200` al asesor asignado y otro asesor recibe `403`. Esto cambia el `200` sin cambios que S11 daba en la #9 a cualquier asesor: el asesor asignado sigue recibiendo `200` sin cambios. Precedencia de errores en `POST /cases/{id}/authorize`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`: `403` (asesor no registrado) → `404` (caso inexistente) → `409` (caso `closed`; en `POST /cases/{id}/close`, `200` sin cambios por S8) → `403` (caso asignado a otro asesor), escalón que no se aplica a `POST /cases/{id}/close` ni a `authorize` con `action` = `close` sobre un caso huérfano (para ellos, superados los tres primeros escalones, el cierre está permitido). En `POST /cases/{id}/reply` el orquestador autoriza antes de comprobar si el caso existe: un `advisor_id` no registrado recibe `403` con `error` = `forbidden` aunque el caso no exista. `POST /cases/{id}/close` sobre un caso `closed` sigue S8: `200` sin cambios para cualquier asesor registrado, aunque no sea el asignado; `authorize` con `action` = `close` sobre un caso `closed` responde `409`. `POST /cases/{id}/reply` sobre un caso `closed` responde `409` con `error` = `case_closed`, sin enviar nada al cliente (el orquestador propaga el `409` de `authorize`). Si handover no está disponible para autorizar, el orquestador falla cerrado: no envía la respuesta y responde `502` con `upstream_error` (la fila `502 upstream_error` ya publicada de `POST /cases/{id}/reply`). La autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado; la identidad por persona llega con la #16 (remitente del webhook validado) o con el panel y la verificación de cuentas. Retirada de un asesor: antes de quitar su chat_id de `ADVISOR_CHAT_IDS`, el asesor cierra sus casos; al arrancar, handover registra cuántos casos huérfanos hay, sin sus ids. | — |
 | S13 | Solo se reenvían al asesor, con `POST /cases/{id}/client-message`, los mensajes de un cliente cuyo caso está `assigned`; con un caso `open`, con `not_assigned` o con `404` sigue el flujo actual (RAG, rechazo o traspaso). Si el reenvío falla (`502`), el cliente recibe un texto fijo y no se vuelve al RAG. Los comandos de asesor `/responder <case_id> <texto>` y `/cerrar <case_id>` llegan por `POST /messages`, cuyo contrato no cambia; un mensaje de un asesor que no es `/responder` ni `/cerrar` sigue el flujo actual, como el de cualquier cliente. Los comandos se autorizan con las reglas de S12; en ellos el `advisor_id` es el `telegram_user_id` del update validado con `TELEGRAM_WEBHOOK_SECRET`, nunca un id escrito en el texto del mensaje, y la pertenencia a `ADVISOR_CHAT_IDS` se comprueba con ese `telegram_user_id`, no con el `chat_id`; por eso un id de grupo (negativo) de `ADVISOR_CHAT_IDS` no puede usar los comandos. | — |
+| S14 | `GET /cases` lista solo los casos que el asesor puede gestionar según S12: `open` y `timed_out` con `actions` = `reply`, `assign`, `close`; `assigned` al solicitante con `actions` = `reply`, `close`; huérfanos (`assigned` con `advisor_id` nulo o fuera de `ADVISOR_CHAT_IDS`) con `actions` = `close`. Nunca incluye casos `closed` ni `assigned` a otro asesor registrado. Orden por `created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Límite `CASE_LIST_LIMIT` (default 50, máximo 200) aplicado después de filtrar; sin cursor en v1. Un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `200` con la lista vacía, sin registrar denegación. | `CASE_LIST_LIMIT = 50` |

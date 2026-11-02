@@ -15,6 +15,8 @@ from lazaro_contracts import (
     CaseClientMessageRequest,
     CaseClientMessageResponse,
     CaseCloseResponse,
+    CaseListItem,
+    CaseListResponse,
     CheckTimeoutsResponse,
     HandoverRequest,
     HandoverResponse,
@@ -173,6 +175,39 @@ def can_act_on_case(
     if case.advisor_id == advisor_id:
         return True
     return action == "close" and is_orphan_case(case, settings)
+
+
+def list_advisor_cases(
+    advisor_id: str, settings: Settings, adapters: Adapters
+) -> CaseListResponse:
+    """R10-R18: casos gestionables por el asesor, con las acciones de S12."""
+    if not is_registered_advisor(advisor_id, settings):
+        logger.info("cases_listed count=0")
+        return CaseListResponse([])
+    registered = [str(advisor) for advisor in settings.advisor_ids]
+    cases = adapters.repository.list_cases_for_advisor(
+        advisor_id, registered, settings.case_list_limit
+    )
+    items: list[CaseListItem] = []
+    for case in cases:
+        actions = [
+            action
+            for action in ("reply", "assign", "close")
+            if can_act_on_case(case, advisor_id, action, settings)
+            and not (action == "assign" and case.status == "assigned")
+        ]
+        if not actions:
+            continue
+        items.append(
+            CaseListItem(
+                case_id=case.case_id,
+                status=case.status,
+                created_at=case.created_at,
+                actions=actions,
+            )
+        )
+    logger.info("cases_listed count=%d", len(items))
+    return CaseListResponse(items)
 
 
 def _deny(

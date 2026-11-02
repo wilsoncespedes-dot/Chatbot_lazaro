@@ -18,6 +18,8 @@ from lazaro_contracts import (
     CaseClientMessageResponse,
     CaseCloseRequest,
     CaseCloseResponse,
+    CaseListItem,
+    CaseListResponse,
     ErrorResponse,
     HandoverRequest,
     HandoverResponse,
@@ -37,9 +39,13 @@ class HandoverClient(Protocol):
 
     def assign(self, case_id: str, advisor_id: str) -> CaseAssignResponse: ...
 
+    def try_assign(self, case_id: str, advisor_id: str) -> CaseAssignResponse: ...
+
     def authorize(
         self, case_id: str, advisor_id: str, action: CaseAuthorizeAction
     ) -> CaseAuthorizeResponse: ...
+
+    def list_cases(self, advisor_id: str) -> CaseListResponse: ...
 
     def forward_client_message(
         self, case_id: str, text: str, at: datetime
@@ -89,6 +95,70 @@ class HttpHandoverClient:
         except (httpx.HTTPError, ValueError, ValidationError) as exc:
             logger.error("handover_assign_error code=%s", type(exc).__name__)
             raise ServiceUnavailable("Handover no disponible.") from None
+
+    def try_assign(self, case_id: str, advisor_id: str) -> CaseAssignResponse:
+        try:
+            body = CaseAssignRequest(advisor_id=advisor_id)
+            response = httpx.post(
+                f"{self._base_url}/cases/{quote(case_id, safe='')}/assign",
+                content=body.model_dump_json(),
+                headers={
+                    SERVICE_TOKEN_HEADER: self._service_token,
+                    "Content-Type": "application/json",
+                },
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("handover_assign_error code=%s", type(exc).__name__)
+            raise ServiceUnavailable("Handover no disponible.") from None
+
+        if response.status_code in _DENIAL_CODES:
+            expected = _DENIAL_CODES[response.status_code]
+            try:
+                error = ErrorResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_assign_error code=%s", response.status_code)
+                raise ServiceUnavailable("Handover no disponible.") from None
+            if error.error != expected:
+                logger.error("handover_assign_error code=%s", response.status_code)
+                raise ServiceUnavailable("Handover no disponible.") from None
+            raise AuthorizationDenied(error.error)
+
+        if response.status_code == 200:
+            try:
+                parsed = CaseAssignResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_assign_error code=invalid_response")
+                raise ServiceUnavailable("Handover no disponible.") from None
+            if parsed.case_id != case_id:
+                logger.error("handover_assign_error code=case_mismatch")
+                raise ServiceUnavailable("Handover no disponible.") from None
+            return parsed
+
+        logger.error("handover_assign_error code=%s", response.status_code)
+        raise ServiceUnavailable("Handover no disponible.")
+
+    def list_cases(self, advisor_id: str) -> CaseListResponse:
+        try:
+            response = httpx.get(
+                f"{self._base_url}/cases",
+                params={"advisor_id": advisor_id},
+                headers={SERVICE_TOKEN_HEADER: self._service_token},
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("handover_list_cases_error code=%s", type(exc).__name__)
+            raise ServiceUnavailable("Handover no disponible.") from None
+
+        if response.status_code == 200:
+            try:
+                return CaseListResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_list_cases_error code=invalid_response")
+                raise ServiceUnavailable("Handover no disponible.") from None
+
+        logger.error("handover_list_cases_error code=%s", response.status_code)
+        raise ServiceUnavailable("Handover no disponible.")
 
     def authorize(
         self, case_id: str, advisor_id: str, action: CaseAuthorizeAction
@@ -235,10 +305,16 @@ class FakeHandoverClient:
         fail_client_message: bool = False,
         close_error: str | None = None,
         fail_close: bool = False,
+        assign_error: str | None = None,
+        fail_try_assign: bool = False,
+        case_list: list[CaseListItem] | None = None,
+        fail_list_cases: bool = False,
     ) -> None:
         self.requests: list[HandoverRequest] = []
         self.assigned: list[tuple[str, str]] = []
+        self.try_assigned: list[tuple[str, str]] = []
         self.authorized: list[tuple[str, str, str]] = []
+        self.listed: list[str] = []
         self.client_messages: list[tuple[str, str, datetime]] = []
         self.closed: list[tuple[str, str]] = []
         self.status = status
@@ -252,6 +328,10 @@ class FakeHandoverClient:
         self.fail_client_message = fail_client_message
         self.close_error = close_error
         self.fail_close = fail_close
+        self.assign_error = assign_error
+        self.fail_try_assign = fail_try_assign
+        self.case_list = case_list or []
+        self.fail_list_cases = fail_list_cases
 
     def request(self, req: HandoverRequest) -> HandoverResponse:
         self.requests.append(req)
@@ -264,6 +344,20 @@ class FakeHandoverClient:
         if self.fail_assign:
             raise ServiceUnavailable("Handover caído")
         return CaseAssignResponse(status="assigned", case_id=case_id)
+
+    def try_assign(self, case_id: str, advisor_id: str) -> CaseAssignResponse:
+        self.try_assigned.append((case_id, advisor_id))
+        if self.fail_try_assign:
+            raise ServiceUnavailable("Handover caído")
+        if self.assign_error:
+            raise AuthorizationDenied(self.assign_error)
+        return CaseAssignResponse(status="assigned", case_id=case_id)
+
+    def list_cases(self, advisor_id: str) -> CaseListResponse:
+        self.listed.append(advisor_id)
+        if self.fail_list_cases:
+            raise ServiceUnavailable("Handover caído")
+        return CaseListResponse(self.case_list)
 
     def authorize(
         self, case_id: str, advisor_id: str, action: CaseAuthorizeAction

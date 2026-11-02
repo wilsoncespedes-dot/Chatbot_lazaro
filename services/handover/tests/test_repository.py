@@ -548,6 +548,29 @@ def test_postgres_request_methods_use_parameters_only():
     assert params == ("case-1", "notified", 2, 7)
 
 
+# --- Listado de casos de un asesor (#33) --------------------------------------------------
+
+
+def test_postgres_list_cases_for_advisor_is_parameterized_and_ordered():
+    """contrato_listar_casos_asesor R13-R16: filtro, orden y límite con parámetros."""
+    evil = "'; DROP TABLE x; --"
+    conn = _FakeConn(rows=[])
+    repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
+    assert repo.list_cases_for_advisor(evil, ["111", "222"], 7) == []
+
+    sql, params = _statements(conn)[-1]
+    assert sql.startswith("SELECT case_id, contact_id, chat_id")
+    assert "status IN (%s, %s)" in sql
+    assert "advisor_id = %s" in sql
+    assert "advisor_id IS NULL" in sql
+    assert "NOT (advisor_id = ANY(%s))" in sql
+    assert "ORDER BY created_at ASC, case_id ASC LIMIT %s" in sql
+    assert evil not in sql
+    assert sql.count("%s") == len(params) == 7
+    assert params == ("open", "timed_out", "assigned", evil, "assigned", ["111", "222"], 7)
+    assert not re.search(r"'[^']*'", sql)
+
+
 def test_fake_repository_request_ids_are_incremental_and_copies():
     """R1, R6, R8: el fake asigna ids incrementales y no comparte estado."""
     record = HandoverRequestRecord(

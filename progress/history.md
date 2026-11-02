@@ -413,3 +413,13 @@
 - Añadido `retention-worker` privado en Render, configuración `PRIVACY_*` con fuente única del plazo, y documentación de despliegue/bloqueos del dueño.
 - Spec y revisión de código Claude APPROVED (`progress/specreview_despliegue_retencion.md`, `progress/review_despliegue_retencion.md`); writer OpenCode / DeepSeek Flash. `./init.sh`: 1877 tests pasan (1 warning).
 - No se desplegó; queda validar `envVarKey` al crear el Blueprint y completar los valores legales/operativos del dueño antes de producción.
+
+
+## 2026-11-01 — Feature #33 contrato_listar_casos_asesor (done)
+- Añadido GET /cases en handover con contrato tipado; el listado reutiliza can_act_on_case, filtra por advisor_id y expone solo case_id/status/created_at/actions.
+- Spec y revisión de código Claude APPROVED (progress/specreview_contrato_listar_casos_asesor.md, progress/review_contrato_listar_casos_asesor.md). ./init.sh: 1924 tests pasan (1 warning).
+
+
+## 2026-11-01 — Feature #29 panel_asesores (done)
+- Añadido panel con login separado por rol, vista de casos permitidos, responder/asignar/cerrar mediante autorización de handover y protección CSRF; no expone datos del cliente.
+- Spec y revisión de código Claude APPROVED (progress/specreview_panel_asesores.md, progress/review_panel_asesores.md). Writer OpenCode/DeepSeek Flash. ./init.sh: 1979 tests pasan (1 warning).

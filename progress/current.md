@@ -1,3 +1,3 @@
 # Sesión actual
 
-Sin feature en curso. #27 privacidad_y_retencion_datos y #28 despliegue_retencion están done con revisiones Claude APPROVED. `./init.sh`: 1877 passed, 1 warning. Antes de producción, el propietario debe definir y revisar legalmente aviso, versión, frase/respuesta de aceptación y plazos; al crear el Blueprint debe validarse `fromService.envVarKey`. No desplegar ni ejecutar purgas externas sin autorización.
+Feature #30 agrupacion_mensajes tiene spec en specs/agrupacion_mensajes/ y status spec_ready. Claude alcanzó el límite de uso de 5 horas antes de la revisión del spec; no se inicia código hasta que el reviewer esté disponible. Features #29 (panel_asesores) y #33 (contrato_listar_casos_asesor) están done; ./init.sh: 1979 passed, 1 warning. #31 búsqueda híbrida y #32 traspaso automático siguen pending.

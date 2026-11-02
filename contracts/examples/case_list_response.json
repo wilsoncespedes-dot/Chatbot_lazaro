@@ -1,0 +1,20 @@
+[
+  {
+    "case_id": "case-100",
+    "status": "open",
+    "created_at": "2026-01-02T03:00:00Z",
+    "actions": ["reply", "assign", "close"]
+  },
+  {
+    "case_id": "case-101",
+    "status": "assigned",
+    "created_at": "2026-01-02T03:05:00Z",
+    "actions": ["reply", "close"]
+  },
+  {
+    "case_id": "case-102",
+    "status": "assigned",
+    "created_at": "2026-01-02T03:10:00Z",
+    "actions": ["close"]
+  }
+]

@@ -24,7 +24,7 @@ from lazaro_contracts import (
 from pydantic import BaseModel, ConfigDict, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import admin
+from . import admin, advisor_panel
 from .accounts import USERNAME_PATTERN
 from .adapters.db_query import PostgresReadOnlyQuery, UnavailableDbQuery
 from .adapters.gateway import HttpGatewayClient
@@ -33,6 +33,7 @@ from .adapters.llm import HttpLLMClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
 from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
+from .advisor_routes import create_advisor_router
 from .config import Settings
 from .domain import (
     Adapters,
@@ -122,7 +123,13 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):
         path = request.url.path
-        if path in PUBLIC_PATHS or path == "/admin" or path.startswith("/admin/"):
+        if (
+            path in PUBLIC_PATHS
+            or path == "/admin"
+            or path.startswith("/admin/")
+            or path == "/asesor"
+            or path.startswith("/asesor/")
+        ):
             return await call_next(request)
         token = request.headers.get(SERVICE_TOKEN_HEADER)
         expected = settings.service_token
@@ -136,14 +143,23 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @app.exception_handler(LoginRequired)
     async def handle_login_required(request: Request, exc: LoginRequired):
+        target = (
+            "/asesor/login"
+            if request.url.path == "/asesor" or request.url.path.startswith("/asesor/")
+            else "/admin/login"
+        )
         return RedirectResponse(
-            url="/admin/login", status_code=303, headers=admin.security_headers()
+            url=target, status_code=303, headers=admin.security_headers()
         )
 
     @app.exception_handler(CsrfInvalid)
     async def handle_csrf_invalid(request: Request, exc: CsrfInvalid):
+        if request.url.path == "/asesor" or request.url.path.startswith("/asesor/"):
+            content = advisor_panel.render_advisor_error(403, "forbidden")
+        else:
+            content = admin.render_message("Acceso denegado", "Token CSRF inválido.")
         return HTMLResponse(
-            content=admin.render_message("Acceso denegado", "Token CSRF inválido."),
+            content=content,
             status_code=403,
             headers=admin.security_headers(),
         )
@@ -178,6 +194,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     # Registrar las rutas del panel una a una: con la versión instalada,
     # `include_router` las deja dentro de un objeto sin `path` en `app.routes`.
     app.router.routes.extend(create_admin_router(settings, adapters).routes)
+    app.router.routes.extend(create_advisor_router(settings, adapters).routes)
 
     def _process(message: MessageRequest) -> None:
         try:

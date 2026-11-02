@@ -14,16 +14,7 @@
     ],
     "sdd_required_when": "feature has \"sdd\": true"
   },
-  "later": [
-    "Consulta a la base de datos en lenguaje natural (docs/proyecto.md §6). Antes del spec, definir identidad/permisos del personal y límites de alcance. Revisar pgmcp (Apache 2.0) y otras referencias: confirmar repo, commit, archivo y licencia; proponer la adaptación mínima. Reutilizar solo código compatible MIT/Apache con avisos; no copiar dbchatbot sin licencia ni código AGPL.",
-    "Panel de asesores. Definir cómo complementa los comandos de Telegram de la #16 y qué datos/acciones necesita. Revisar referencias de panel por repo, commit, archivos y licencia; proponer la adaptación mínima y copiar solo piezas MIT/Apache 2.0 con avisos. No copiar código AGPL ni sin licencia.",
-    "Clasificador de tipo de pregunta. Medir primero el baseline con la evaluación (#8). Revisar el router de rag-support-bot (MIT) y referencias RAG disponibles: verificar repo, commit, archivo y licencia y proponer adaptación mínima antes del spec/código. Copiar solo código compatible MIT/Apache 2.0 con avisos; no usar código AGPL ni sin licencia.",
-    "Agrupar mensajes con worker y caché",
-    "Worker o cron que llame periódicamente a POST /cases/check-timeouts de handover. Sin él, los casos open sin respuesta de asesor nunca vencen y el cliente no recibe HANDOVER_TIMEOUT_REPLY (ver specs/traspaso_asesor/design.md, Supuestos a confirmar). Propuesto como feature #12 vencimiento_automatico",
-    "Candidata (decisión del humano 2026-10-31): búsqueda híbrida en RAG (full-text de Postgres + semántica; RRF solo para ordenar, umbral sobre la similitud semántica). Solo después de medir el RAG actual con la evaluación (#8). Referencia: 0xrezan/customer-support-rag (MIT) query_service.py",
-    "Al programar la consulta a la base de datos en lenguaje natural: guard SQL de solo lectura (rol de BD de solo lectura, transacción READ ONLY + statement_timeout, límite de filas exterior siempre aplicado, filtro de verbos tras quitar literales y comentarios, lista de tablas/vistas permitidas). Patrones de pgmcp (Apache 2.0) y dbchatbot (sin licencia: no copiar código)",
-    "Pospuesto (decisión del humano 2026-10-31): traspaso automático tras varios fallos seguidos (idea de NURA, sin licencia: solo el patrón). El clasificador de tipo de pregunta también queda pospuesto (referencia: router de Shcherbin96/rag-support-bot, MIT)"
-  ],
+  "later": [],
   "features": [
     {
       "id": 1,
@@ -574,6 +565,110 @@
         "El Blueprint expone las variables PRIVACY_* requeridas en los servicios correctos; PRIVACY_RETENTION_DAYS comparte un único valor entre orchestrator y handover",
         "docs/despliegue.md explica cómo configurar el worker y las variables, incluyendo que los valores legales de aviso/consentimiento/plazos deben ser definidos por el propietario antes de desplegar",
         "Tests verifican worker, referencias, variables y documentación; ./init.sh pasa y Claude aprueba la revisión de código"
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 29,
+      "name": "panel_asesores",
+      "title": "Panel de asesores para atender casos",
+      "description": "Interfaz autenticada para que los asesores gestionen los mismos casos y acciones disponibles por Telegram, sin exponer funciones administrativas.",
+      "acceptance": [
+        "Un perfil con rol asesor puede iniciar y cerrar sesión en un panel web protegido; perfiles cliente no acceden y perfiles admin mantienen sus permisos existentes",
+        "El asesor consulta únicamente los casos que las reglas actuales de autorización le permiten gestionar, incluidos casos huérfanos según el contrato",
+        "El asesor puede responder, asignar y cerrar casos desde el panel usando las rutas y reglas existentes; no se duplican reglas de autorización en el navegador",
+        "Las operaciones del panel protegen sesión, CSRF y datos personales; las rutas internas conservan X-Service-Token y no se expone al navegador",
+        "Las pruebas cubren roles, aislamiento entre asesores, CSRF, errores del servicio y acciones; ./init.sh pasa y la revisión aprueba"
+      ],
+      "dependencies": [
+        14,
+        16,
+        20,
+        21,
+        33
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 30,
+      "name": "agrupacion_mensajes",
+      "title": "Agrupar mensajes consecutivos del cliente",
+      "description": "Usa Redis y un worker para agrupar mensajes seguidos del mismo chat antes de enviarlos al orquestador, reduciendo respuestas fragmentadas.",
+      "acceptance": [
+        "El sistema agrupa mensajes consecutivos del mismo usuario/chat dentro de una ventana configurable y conserva su orden",
+        "Un mensaje de otro chat no se mezcla con el grupo actual y cada update_id se procesa como máximo una vez",
+        "El worker recupera o expira buffers de forma acotada ante reinicios y registra fallos sin filtrar texto personal",
+        "Los comandos de asesores y los estados de traspaso mantienen el comportamiento existente",
+        "Las pruebas cubren límites de ventana, orden, deduplicación, concurrencia, reinicio y errores; ./init.sh pasa y la revisión aprueba"
+      ],
+      "dependencies": [
+        3,
+        4,
+        7
+      ],
+      "sdd": true,
+      "status": "spec_ready"
+    },
+    {
+      "id": 31,
+      "name": "busqueda_hibrida_rag",
+      "title": "Búsqueda híbrida para manuales",
+      "description": "Combina búsqueda textual de PostgreSQL con búsqueda semántica en pgvector para mejorar la recuperación sin debilitar el umbral semántico.",
+      "acceptance": [
+        "El RAG combina resultados de búsqueda textual y semántica para el mismo query",
+        "La fusión por Reciprocal Rank Fusion solo ordena candidatos y el umbral de aceptación continúa aplicándose a la similitud semántica original",
+        "La búsqueda híbrida preserva filtros, categorías, límites y formato del contrato POST /search",
+        "La evaluación compara la recuperación actual y la híbrida con el mismo conjunto de preguntas antes de habilitar el comportamiento por defecto",
+        "Las pruebas cubren resultados de ambas fuentes, resultados vacíos, deduplicación, umbral y compatibilidad; ./init.sh pasa y la revisión aprueba"
+      ],
+      "dependencies": [
+        5,
+        8
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 32,
+      "name": "traspaso_automatico_fallos",
+      "title": "Derivar automáticamente tras fallos repetidos",
+      "description": "Ofrece o inicia un traspaso a asesor cuando consultas consecutivas no encuentran una respuesta confiable, con límite configurable y sin derivaciones duplicadas.",
+      "acceptance": [
+        "El orquestador cuenta únicamente los fallos de respuesta definidos por la política aprobada y aplica un umbral configurable",
+        "Una respuesta válida reinicia el conteo consecutivo",
+        "Al alcanzar el umbral, el sistema crea o reutiliza un solo caso y comunica al cliente el estado del traspaso",
+        "El conteo y la derivación permanecen aislados por conversación y sobreviven a reintentos sin duplicar casos",
+        "Las pruebas cubren fallos consecutivos, reinicio, umbral, aislamiento, duplicados y falta de asesores; ./init.sh pasa y la revisión aprueba"
+      ],
+      "dependencies": [
+        6,
+        7,
+        14,
+        16
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 33,
+      "name": "contrato_listar_casos_asesor",
+      "title": "Contrato para listar casos de un asesor",
+      "description": "Publica el endpoint autenticado de handover que permite al panel consultar una lista mínima de casos autorizados para un asesor.",
+      "acceptance": [
+        "contracts/CONTRATOS.md define GET /cases?advisor_id=<id>, autenticación X-Service-Token, parámetros, respuesta, errores y límite de paginación",
+        "El paquete lazaro_contracts incluye modelos tipados y ejemplos de request/query y response para el listado",
+        "La respuesta incluye solo case_id, status, created_at y actions; nunca contacto, chat_id ni mensajes",
+        "El spec define en handover las reglas de inclusión de casos open/timed_out, assigned al asesor y huérfanos; asesor no registrado recibe lista vacía",
+        "El máximo predeterminado de resultados es CASE_LIST_LIMIT=50, con orden estable por antigüedad y desempate por case_id",
+        "Las pruebas de contrato validan modelos, ejemplos, autenticación documentada, campos y límite; ./init.sh pasa y la revisión aprueba"
+      ],
+      "dependencies": [
+        14,
+        17
       ],
       "sdd": true,
       "status": "done",

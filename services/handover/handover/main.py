@@ -5,8 +5,9 @@ import hmac
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Annotated
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from lazaro_contracts import (
@@ -19,6 +20,8 @@ from lazaro_contracts import (
     CaseClientMessageResponse,
     CaseCloseRequest,
     CaseCloseResponse,
+    CaseListQuery,
+    CaseListResponse,
     CheckTimeoutsRequest,
     CheckTimeoutsResponse,
     ErrorResponse,
@@ -42,6 +45,7 @@ from .domain import (
     check_timeouts,
     close_case,
     forward_client_message,
+    list_advisor_cases,
     log_orphan_cases,
     open_case,
     purge_personal_data,
@@ -135,6 +139,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok", service=SERVICE_NAME)
+
+    @app.get("/cases", response_model=CaseListResponse)
+    def get_cases(query: Annotated[CaseListQuery, Query()]) -> CaseListResponse:
+        return list_advisor_cases(query.advisor_id, settings, adapters)
 
     @app.post("/handover", response_model=HandoverResponse)
     def post_handover(body: HandoverRequest) -> HandoverResponse:

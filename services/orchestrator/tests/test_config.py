@@ -76,6 +76,7 @@ def test_only_health_and_messages_routes_exposed():
     # Feature 20 añade POST /profiles y POST /profiles/{id}/link-token.
     # Feature 21 añade las rutas HTML del panel administrativo.
     # Feature 22 añade las vistas de manuales y fragmentos.
+    # Feature 29 añade las rutas HTML del panel de asesores.
     assert paths == {
         "/health",
         "/messages",
@@ -99,6 +100,13 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/categories/threshold",
         "/admin/categories/{category_id}",
         "/admin/categories/{category_id}/active",
+        "/asesor",
+        "/asesor/login",
+        "/asesor/logout",
+        "/asesor/cases",
+        "/asesor/reply",
+        "/asesor/assign",
+        "/asesor/close",
     }
 
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Callable
 
 from lazaro_contracts import (
     MAX_IDENTIFIER_LENGTH,
+    CaseAssignResponse,
     CaseAuthorizeAction,
     CaseReplyRequest,
     CaseReplyResponse,
@@ -457,32 +458,23 @@ def _command_close(
 ) -> None:
     advisor_id = str(request.telegram_user_id)
     try:
-        adapters.handover.authorize(command.case_id, advisor_id, "close")
-        adapters.handover.close(command.case_id, advisor_id)
-    except AuthorizationDenied as exc:
-        if exc.code == "forbidden":
-            _deny_command(
-                request, contact, "cerrar", command.case_id, "forbidden", settings, adapters
-            )
-            _log_command("close", contact.id, "forbidden")
-            return
-        if exc.code == "case_closed":
-            _notify_sender(
-                request.chat_id, settings.advisor_command_case_closed_reply, adapters
-            )
-        else:
-            _notify_sender(request.chat_id, settings.advisor_command_failed_reply, adapters)
+        close_case(command.case_id, advisor_id, settings, adapters)
+    except AdvisorForbidden:
+        _deny_command(
+            request, contact, "cerrar", command.case_id, "forbidden", settings, adapters
+        )
+        _log_command("close", contact.id, "forbidden")
+        return
+    except CaseClosed:
+        _notify_sender(
+            request.chat_id, settings.advisor_command_case_closed_reply, adapters
+        )
         _log_command("close", contact.id, "failed")
         return
-    except ServiceUnavailable:
+    except (CaseNotFound, UpstreamError):
         _notify_sender(request.chat_id, settings.advisor_command_failed_reply, adapters)
         _log_command("close", contact.id, "failed")
         return
-    case_contact = adapters.repository.get_case_contact(command.case_id)
-    if case_contact is None:
-        logger.warning("case_closed_unlinked case_id=%s", command.case_id)
-    else:
-        _send(case_contact, settings.case_closed_reply, adapters)
     _notify_sender(request.chat_id, settings.advisor_close_confirmation, adapters)
     _log_command("close", contact.id, "closed")
 
@@ -968,6 +960,60 @@ def reply_to_case(
     return CaseReplyResponse(sent=True)
 
 
+def _raise_authorization_error(
+    exc: AuthorizationDenied, case_id: str, advisor_id: str, adapters: Adapters
+) -> None:
+    if exc.code == "forbidden":
+        _record_forbidden(case_id, advisor_id, adapters)
+        raise AdvisorForbidden(
+            "El asesor no está autorizado para actuar sobre este caso."
+        ) from None
+    if exc.code == "case_closed":
+        raise CaseClosed("El caso está cerrado.") from None
+    raise CaseNotFound("El caso no existe.") from None
+
+
+def assign_case(
+    case_id: str, advisor_id: str, adapters: Adapters
+) -> CaseAssignResponse:
+    """Asigna con la regla de handover; un 403 deja el evento de denegación (R11, R15)."""
+    try:
+        return adapters.handover.try_assign(case_id, advisor_id)
+    except AuthorizationDenied as exc:
+        _raise_authorization_error(exc, case_id, advisor_id, adapters)
+    except ServiceUnavailable:
+        logger.error("assign_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo asignar el caso.") from None
+    raise UpstreamError("No se pudo asignar el caso.")
+
+
+def close_case(
+    case_id: str, advisor_id: str, settings: Settings, adapters: Adapters
+) -> None:
+    """Authorize(close) → close → aviso al cliente; un 403 deja el evento (R12, R15)."""
+    try:
+        adapters.handover.authorize(case_id, advisor_id, "close")
+    except AuthorizationDenied as exc:
+        _raise_authorization_error(exc, case_id, advisor_id, adapters)
+    except ServiceUnavailable:
+        logger.error("authorize_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo autorizar el cierre del caso.") from None
+
+    try:
+        adapters.handover.close(case_id, advisor_id)
+    except AuthorizationDenied as exc:
+        _raise_authorization_error(exc, case_id, advisor_id, adapters)
+    except ServiceUnavailable:
+        logger.error("close_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo cerrar el caso.") from None
+
+    case_contact = adapters.repository.get_case_contact(case_id)
+    if case_contact is None:
+        logger.warning("case_closed_unlinked case_id=%s", case_id)
+    else:
+        _send(case_contact, settings.case_closed_reply, adapters)
+
+
 _FAKE_PASSWORD_SALT = b"\x00" * 16
 _fake_password_hashes: dict[int, str] = {}
 
@@ -983,10 +1029,11 @@ def _fake_password_hash(iterations: int) -> str:
     return cached
 
 
-def authenticate_admin(
+def authenticate_profile(
     username: str,
     password: str,
     client_ip: str,
+    role: str,
     settings: Settings,
     adapters: Adapters,
 ) -> str | None:
@@ -1010,7 +1057,7 @@ def authenticate_admin(
 
     profile, stored_hash = credentials
     password_ok = verify_password(password, stored_hash)
-    if not password_ok or profile.role != "admin":
+    if not password_ok or profile.role != role:
         repo.record_login_failure(normalized, client_ip, now, since)
         return None
 
@@ -1023,6 +1070,19 @@ def authenticate_admin(
         now + timedelta(minutes=settings.admin_session_ttl_minutes),
     )
     return token
+
+
+def authenticate_admin(
+    username: str,
+    password: str,
+    client_ip: str,
+    settings: Settings,
+    adapters: Adapters,
+) -> str | None:
+    """Login del panel admin: rol `admin` y el mismo comportamiento de #21."""
+    return authenticate_profile(
+        username, password, client_ip, "admin", settings, adapters
+    )
 
 
 def change_role(profile_id: str, role: str, adapters: Adapters) -> Profile:

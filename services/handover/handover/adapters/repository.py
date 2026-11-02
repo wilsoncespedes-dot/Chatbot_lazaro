@@ -31,6 +31,10 @@ class CaseRepository(Protocol):
 
     def list_open_cases(self) -> list[Case]: ...
 
+    def list_cases_for_advisor(
+        self, advisor_id: str, registered_ids: list[str], limit: int
+    ) -> list[Case]: ...
+
     def add_notification(
         self, case_id: str, advisor_id: str, reason: str, at: datetime, delivered: bool
     ) -> None: ...
@@ -128,6 +132,22 @@ class FakeCaseRepository:
 
     def list_open_cases(self) -> list[Case]:
         return [c.model_copy(deep=True) for c in self.cases.values() if c.status == "open"]
+
+    def list_cases_for_advisor(
+        self, advisor_id: str, registered_ids: list[str], limit: int
+    ) -> list[Case]:
+        visible = [
+            case
+            for case in self.cases.values()
+            if case.status in ("open", "timed_out")
+            or (case.status == "assigned" and case.advisor_id == advisor_id)
+            or (
+                case.status == "assigned"
+                and (case.advisor_id is None or case.advisor_id not in registered_ids)
+            )
+        ]
+        visible.sort(key=lambda case: (case.created_at, case.case_id))
+        return [case.model_copy(deep=True) for case in visible[:limit]]
 
     def add_notification(
         self, case_id: str, advisor_id: str, reason: str, at: datetime, delivered: bool
@@ -444,6 +464,28 @@ class PostgresCaseRepository:
         rows = self._run(
             f"SELECT {_CASE_COLUMNS} FROM handover_cases WHERE status = %s ORDER BY created_at",
             ("open",),
+            fetch=True,
+        )
+        return [_row_to_case(row) for row in rows]
+
+    def list_cases_for_advisor(
+        self, advisor_id: str, registered_ids: list[str], limit: int
+    ) -> list[Case]:
+        rows = self._run(
+            f"SELECT {_CASE_COLUMNS} FROM handover_cases "
+            "WHERE status IN (%s, %s) "
+            "OR (status = %s AND advisor_id = %s) "
+            "OR (status = %s AND (advisor_id IS NULL OR NOT (advisor_id = ANY(%s)))) "
+            "ORDER BY created_at ASC, case_id ASC LIMIT %s",
+            (
+                "open",
+                "timed_out",
+                "assigned",
+                advisor_id,
+                "assigned",
+                registered_ids,
+                limit,
+            ),
             fetch=True,
         )
         return [_row_to_case(row) for row in rows]

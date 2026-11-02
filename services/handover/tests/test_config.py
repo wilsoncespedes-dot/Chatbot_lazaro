@@ -15,6 +15,7 @@ ENV_VARS = [
     "TELEGRAM_GATEWAY_URL",
     "PRIVACY_RETENTION_DAYS",
     "PRIVACY_ACTIVE_CASE_MAX_DAYS",
+    "CASE_LIST_LIMIT",
 ]
 
 
@@ -179,4 +180,23 @@ def test_active_case_limit_below_retention_is_valid(clean_env):
     settings = Settings()
     assert settings.retention_configured is True
     assert (settings.retention_days, settings.active_case_max_days) == (30, 7)
+
+
+def test_case_list_limit_defaults_to_50(clean_env):
+    """contrato_listar_casos_asesor R22: sin CASE_LIST_LIMIT vale 50."""
+    assert Settings().case_list_limit == 50
+
+
+def test_case_list_limit_reads_env(clean_env):
+    """contrato_listar_casos_asesor R17: CASE_LIST_LIMIT se lee del entorno."""
+    clean_env.setenv("CASE_LIST_LIMIT", "2")
+    assert Settings().case_list_limit == 2
+
+
+@pytest.mark.parametrize("value", ["0", "201", "abc"])
+def test_case_list_limit_rejects_out_of_range(clean_env, value):
+    """contrato_listar_casos_asesor R17: fuera de 1–200 o no entero no construye Settings."""
+    clean_env.setenv("CASE_LIST_LIMIT", value)
+    with pytest.raises(ValidationError):
+        Settings()
 

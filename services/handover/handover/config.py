@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from lazaro_contracts import DEFAULT_CASE_LIST_LIMIT, MAX_CASE_LIST_LIMIT
 from lazaro_contracts.production import (
     ProductionConfigError,
     normalize_service_url,
@@ -61,6 +62,9 @@ class Settings(BaseSettings):
     advisor_chat_ids: str = ""
     handover_timeout_seconds: int = Field(default=300, ge=1)
     handover_timeout_reply: str = DEFAULT_HANDOVER_TIMEOUT_REPLY
+    case_list_limit: int = Field(
+        default=DEFAULT_CASE_LIST_LIMIT, ge=1, le=MAX_CASE_LIST_LIMIT
+    )
     http_timeout_seconds: float = 10
     privacy_retention_days: str = ""
     privacy_active_case_max_days: str = ""

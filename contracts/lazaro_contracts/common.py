@@ -14,6 +14,9 @@ MAX_LAST_MESSAGES = 10
 MAX_TOP_K = 20
 MAX_IDENTIFIER_LENGTH = 64
 MAX_MANUAL_NAME_LENGTH = 200
+# S14: límite por defecto y máximo del listado de casos de un asesor.
+DEFAULT_CASE_LIST_LIMIT = 50
+MAX_CASE_LIST_LIMIT = 200
 
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=MAX_IDENTIFIER_LENGTH)]
 MessageText = Annotated[str, StringConstraints(min_length=1, max_length=MAX_TEXT_LENGTH)]

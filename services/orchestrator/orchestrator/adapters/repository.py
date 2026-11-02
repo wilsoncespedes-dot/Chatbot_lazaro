@@ -67,6 +67,10 @@ class Repository(Protocol):
 
     def get_session(self, token_hash: str, now: datetime) -> "AdminSession | None": ...
 
+    def get_session_for_role(
+        self, token_hash: str, now: datetime, role: str
+    ) -> "AdminSession | None": ...
+
     def delete_session(self, token_hash: str) -> None: ...
 
     def recent_events(self, limit: int) -> list["StoredEvent"]: ...
@@ -363,11 +367,16 @@ class FakeRepository:
         )
 
     def get_session(self, token_hash: str, now: datetime) -> AdminSession | None:
+        return self.get_session_for_role(token_hash, now, "admin")
+
+    def get_session_for_role(
+        self, token_hash: str, now: datetime, role: str
+    ) -> AdminSession | None:
         session = self.sessions.get(token_hash)
         if session is None or session.expires_at <= now:
             return None
         profile = self.profiles.get(session.profile_id)
-        if profile is None or profile.role != "admin":
+        if profile is None or profile.role != role:
             return None
         return session
 
@@ -851,11 +860,16 @@ class PostgresRepository:
         )
 
     def get_session(self, token_hash: str, now: datetime) -> AdminSession | None:
+        return self.get_session_for_role(token_hash, now, "admin")
+
+    def get_session_for_role(
+        self, token_hash: str, now: datetime, role: str
+    ) -> AdminSession | None:
         rows = self._run(
             "SELECT s.token_hash, s.profile_id, s.csrf_token, s.expires_at "
             "FROM admin_sessions s JOIN profiles p ON p.id = s.profile_id "
-            "WHERE s.token_hash = %s AND s.expires_at > %s AND p.role = 'admin'",
-            (token_hash, now),
+            "WHERE s.token_hash = %s AND s.expires_at > %s AND p.role = %s",
+            (token_hash, now, role),
             fetch=True,
         )
         if not rows:
