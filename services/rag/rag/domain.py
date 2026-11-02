@@ -171,6 +171,16 @@ def search_chunks(
     except Exception as exc:
         raise EmbeddingsUnavailable("No se pudo calcular el embedding de la consulta.") from exc
     threshold = settings.rag_similarity_threshold
+    if settings.rag_hybrid_enabled:
+        found = repository.search_hybrid(
+            vectors[0],
+            request.query,
+            request.top_k,
+            threshold,
+            settings.rag_hybrid_candidate_limit,
+        )
+        # El repositorio ya ordena por RRF; aquí solo se defiende el umbral semántico.
+        return [r for r in found if r.score >= threshold][: request.top_k]
     found = repository.search(vectors[0], request.top_k, threshold)
     kept = [r for r in found if r.score >= threshold]
     kept.sort(key=lambda r: r.score, reverse=True)

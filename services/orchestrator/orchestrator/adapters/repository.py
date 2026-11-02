@@ -5,7 +5,7 @@ import json
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 from urllib.parse import unquote, urlparse
 
@@ -33,6 +33,19 @@ class Repository(Protocol):
     def get_case_contact(self, case_id: str) -> Contact | None: ...
 
     def get_contact_last_case(self, contact_id: str) -> str | None: ...
+
+    def record_rag_outcome(
+        self,
+        contact_id: str,
+        update_id: int,
+        outcome: str,
+        threshold: int,
+        failure_reasons: set[str],
+    ) -> bool: ...
+
+    def reset_rag_streak(self, contact_id: str) -> None: ...
+
+    def finish_auto_handover(self, contact_id: str, success: bool) -> None: ...
 
     def create_profile(
         self, username: str, role: str, password_hash: str, now: datetime
@@ -118,6 +131,15 @@ class Repository(Protocol):
     def purge_personal_data(self, cutoff: datetime, ran_at: datetime) -> dict[str, int]: ...
 
 
+RAG_OUTCOMES = frozenset({"no_relevant_chunks", "invalid_answer", "rag_answer"})
+
+
+@dataclass
+class RagStreak:
+    failure_count: int
+    state: str
+
+
 @dataclass
 class StoredMessage:
     contact_id: str
@@ -198,6 +220,9 @@ class FakeRepository:
         self.login_failures: list[StoredLoginFailure] = []
         self.categories: dict[str, Category] = {}
         self.classifier_threshold: float | None = None
+        self.rag_streaks: dict[str, RagStreak] = {}
+        self.rag_outcomes: set[tuple[str, int]] = set()
+        self.rag_outcome_at: dict[tuple[str, int], datetime] = {}
         self.db_query_audits: list[DbQueryAudit] = []
         self.fail_db_query_audit = False
         self.contact_created_at: dict[str, datetime] = {}
@@ -206,6 +231,7 @@ class FakeRepository:
         self.privacy_purge_runs: list[dict[str, Any]] = []
         self.fail_privacy_consent = False
         self._profiles_lock = threading.Lock()
+        self._rag_lock = threading.Lock()
 
     def mark_update_if_new(self, update_id: int) -> bool:
         if update_id in self.processed:
@@ -250,6 +276,56 @@ class FakeRepository:
             if linked_contact_id == contact_id:
                 last = case_id
         return last
+
+    def record_rag_outcome(
+        self,
+        contact_id: str,
+        update_id: int,
+        outcome: str,
+        threshold: int,
+        failure_reasons: set[str],
+    ) -> bool:
+        if outcome not in RAG_OUTCOMES:
+            raise ValueError("outcome de RAG no permitido")
+        with self._rag_lock:
+            key = (contact_id, update_id)
+            if key in self.rag_outcomes:
+                return False
+            self.rag_outcomes.add(key)
+            self.rag_outcome_at[key] = datetime.now(timezone.utc)
+
+            if outcome == "rag_answer":
+                self.rag_streaks[contact_id] = RagStreak(0, "open")
+                return False
+
+            streak = self.rag_streaks.get(contact_id)
+            if streak is not None and streak.state == "retry":
+                if outcome in failure_reasons:
+                    streak.failure_count += 1
+                streak.state = "pending"
+                return True
+            if outcome not in failure_reasons:
+                return False
+
+            streak = self.rag_streaks.setdefault(contact_id, RagStreak(0, "open"))
+            streak.failure_count += 1
+            if streak.state in ("pending", "handed_over"):
+                return False
+            if streak.failure_count >= threshold:
+                streak.state = "pending"
+                return True
+            return False
+
+    def reset_rag_streak(self, contact_id: str) -> None:
+        with self._rag_lock:
+            self.rag_streaks[contact_id] = RagStreak(0, "open")
+
+    def finish_auto_handover(self, contact_id: str, success: bool) -> None:
+        with self._rag_lock:
+            streak = self.rag_streaks.get(contact_id)
+            if streak is None:
+                return
+            streak.state = "handed_over" if success else "retry"
 
     def create_profile(
         self, username: str, role: str, password_hash: str, now: datetime
@@ -550,11 +626,29 @@ class FakeRepository:
         deleted_events = len(self.events) - len(kept_events)
         self.events = kept_events
 
+        expired_outcomes = [
+            key
+            for key in self.rag_outcomes
+            if key[0] in inactive_ids
+            or self.rag_outcome_at.get(key, ran_at) < cutoff
+        ]
+        for key in expired_outcomes:
+            self.rag_outcomes.discard(key)
+            self.rag_outcome_at.pop(key, None)
+
+        expired_streaks = [
+            contact_id for contact_id in self.rag_streaks if contact_id in inactive_ids
+        ]
+        for contact_id in expired_streaks:
+            self.rag_streaks.pop(contact_id, None)
+
         counts = {
             "messages": deleted_messages,
             "events": deleted_events,
             "contacts": len(deleted_contacts),
             "case_links": len(deleted_links),
+            "auto_handover_outcomes": len(expired_outcomes),
+            "auto_handover_streaks": len(expired_streaks),
         }
         self.privacy_purge_runs.append(
             {"ran_at": ran_at, "cutoff": cutoff, "counts": dict(counts)}
@@ -575,6 +669,13 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS processed_updates (update_id BIGINT PRIMARY KEY)",
     "CREATE TABLE IF NOT EXISTS case_links ("
     "case_id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auto_handover_outcomes ("
+    "contact_id TEXT NOT NULL, update_id BIGINT NOT NULL, outcome TEXT NOT NULL, "
+    "at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+    "PRIMARY KEY (contact_id, update_id))",
+    "CREATE TABLE IF NOT EXISTS auto_handover_streaks ("
+    "contact_id TEXT PRIMARY KEY, failure_count INTEGER NOT NULL, "
+    "state TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS profiles ("
     "id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, role TEXT NOT NULL, "
     "password_hash TEXT NOT NULL, "
@@ -744,6 +845,90 @@ class PostgresRepository:
             fetch=True,
         )
         return rows[0][0] if rows else None
+
+    def record_rag_outcome(
+        self,
+        contact_id: str,
+        update_id: int,
+        outcome: str,
+        threshold: int,
+        failure_reasons: set[str],
+    ) -> bool:
+        if outcome not in RAG_OUTCOMES:
+            raise ValueError("outcome de RAG no permitido")
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO auto_handover_outcomes "
+                    "(contact_id, update_id, outcome) VALUES (%s, %s, %s) "
+                    "ON CONFLICT DO NOTHING RETURNING update_id",
+                    (contact_id, update_id, outcome),
+                )
+                if not list(cur.fetchall()):
+                    conn.commit()
+                    return False
+
+                should_attempt = False
+                if outcome == "rag_answer":
+                    failure_count, state = 0, "open"
+                else:
+                    cur.execute(
+                        "SELECT failure_count, state FROM auto_handover_streaks "
+                        "WHERE contact_id = %s",
+                        (contact_id,),
+                    )
+                    rows = list(cur.fetchall())
+                    previous_count = int(rows[0][0]) if rows else 0
+                    previous_state = rows[0][1] if rows else "open"
+                    if previous_state == "retry":
+                        failure_count = previous_count + (
+                            1 if outcome in failure_reasons else 0
+                        )
+                        state = "pending"
+                        should_attempt = True
+                    elif outcome not in failure_reasons:
+                        conn.commit()
+                        return False
+                    else:
+                        failure_count = previous_count + 1
+                        state = previous_state
+                        if (
+                            previous_state not in ("pending", "handed_over")
+                            and failure_count >= threshold
+                        ):
+                            state = "pending"
+                            should_attempt = True
+
+                cur.execute(
+                    "INSERT INTO auto_handover_streaks "
+                    "(contact_id, failure_count, state) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (contact_id) DO UPDATE "
+                    "SET failure_count = EXCLUDED.failure_count, "
+                    "state = EXCLUDED.state",
+                    (contact_id, failure_count, state),
+                )
+                conn.commit()
+                return should_attempt
+            except Exception:
+                conn.rollback()
+                raise
+
+    def reset_rag_streak(self, contact_id: str) -> None:
+        self._run(
+            "INSERT INTO auto_handover_streaks "
+            "(contact_id, failure_count, state) VALUES (%s, %s, %s) "
+            "ON CONFLICT (contact_id) DO UPDATE "
+            "SET failure_count = EXCLUDED.failure_count, state = EXCLUDED.state",
+            (contact_id, 0, "open"),
+        )
+
+    def finish_auto_handover(self, contact_id: str, success: bool) -> None:
+        self._run(
+            "UPDATE auto_handover_streaks SET state = %s WHERE contact_id = %s",
+            ("handed_over" if success else "retry", contact_id),
+        )
 
     def create_profile(
         self, username: str, role: str, password_hash: str, now: datetime
@@ -1065,6 +1250,30 @@ class PostgresRepository:
                     )
                     deleted_contacts = len(cur.fetchall())
 
+                if inactive_ids:
+                    cur.execute(
+                        "DELETE FROM auto_handover_outcomes "
+                        "WHERE at < %s OR contact_id = ANY(%s) "
+                        "RETURNING contact_id, update_id",
+                        (cutoff, inactive_ids),
+                    )
+                else:
+                    cur.execute(
+                        "DELETE FROM auto_handover_outcomes WHERE at < %s "
+                        "RETURNING contact_id, update_id",
+                        (cutoff,),
+                    )
+                deleted_outcomes = len(cur.fetchall())
+
+                deleted_streaks = 0
+                if inactive_ids:
+                    cur.execute(
+                        "DELETE FROM auto_handover_streaks "
+                        "WHERE contact_id = ANY(%s) RETURNING contact_id",
+                        (inactive_ids,),
+                    )
+                    deleted_streaks = len(cur.fetchall())
+
                 cur.execute(
                     "DELETE FROM messages WHERE at < %s RETURNING id", (cutoff,)
                 )
@@ -1079,6 +1288,8 @@ class PostgresRepository:
                     "events": deleted_events,
                     "contacts": deleted_contacts,
                     "case_links": deleted_links,
+                    "auto_handover_outcomes": deleted_outcomes,
+                    "auto_handover_streaks": deleted_streaks,
                 }
                 cur.execute(
                     "INSERT INTO privacy_purge_runs (ran_at, cutoff, counts) "

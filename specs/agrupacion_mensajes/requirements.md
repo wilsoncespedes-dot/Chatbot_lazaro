@@ -6,26 +6,27 @@ Dependencias: #3 `telegram_gateway`, #4 `orquestador_basico`, #7 `traspaso_aseso
 
 Glosario: **buffer** = mensajes de texto pendientes de un `chat_id` en Redis; **grupo** = buffer
 reclamado para enviarse; **mensaje inmediato** = texto que empieza por `/` tras `strip()` o
-que, normalizado (minúsculas, espacios colapsados), es igual a `PRIVACY_ACCEPT_PHRASE` no vacía.
+que, normalizado (minúsculas, espacios colapsados), es igual a `MESSAGE_GROUPING_ACCEPT_PHRASE` no vacía (misma fuente de configuración que `PRIVACY_ACCEPT_PHRASE` del orquestador).
 
 ## Configuración
 
 ## R1
-El gateway DEBE leer de variables de entorno `MESSAGE_GROUPING_ENABLED` (por defecto `true`),
+El gateway DEBE leer de variables de entorno `HTTP_TIMEOUT_SECONDS` y `MESSAGE_GROUPING_ENABLED` (por defecto `true`),
 `MESSAGE_GROUPING_WINDOW_SECONDS` (`2.0`), `MESSAGE_GROUPING_MAX_WAIT_SECONDS` (`8.0`),
 `MESSAGE_GROUPING_MAX_MESSAGES` (`10`), `MESSAGE_GROUPING_BUFFER_TTL_SECONDS` (`300`),
 `MESSAGE_GROUPING_LEASE_SECONDS` (`30`), `MESSAGE_GROUPING_MAX_ATTEMPTS` (`3`),
-`MESSAGE_GROUPING_POLL_SECONDS` (`0.5`) y `PRIVACY_ACCEPT_PHRASE` (por defecto vacía).
+`MESSAGE_GROUPING_POLL_SECONDS` (`0.5`) y `MESSAGE_GROUPING_ACCEPT_PHRASE` (por defecto vacía).
 
 ## R2
 SI `WINDOW_SECONDS <= 0`, `MAX_WAIT_SECONDS < WINDOW_SECONDS`, `MAX_MESSAGES < 1`,
-`MAX_ATTEMPTS < 1`, `POLL_SECONDS <= 0`, `LEASE_SECONDS <= 0` o
+`MAX_ATTEMPTS < 1`, `POLL_SECONDS <= 0`, `LEASE_SECONDS <= HTTP_TIMEOUT_SECONDS` o
 `BUFFER_TTL_SECONDS <= MAX_WAIT_SECONDS + LEASE_SECONDS` ENTONCES `Settings` DEBE fallar al
 construirse con un error de validación.
 
 ## R3
 `.env.example` DEBE listar todas las variables `MESSAGE_GROUPING_*` de R1 con sus valores por
-defecto e indicar que `PRIVACY_ACCEPT_PHRASE` también la lee el gateway.
+defecto e indicar que `MESSAGE_GROUPING_ACCEPT_PHRASE` deriva en Render de la variable
+`PRIVACY_ACCEPT_PHRASE` del orquestador.
 
 ## Agrupación
 
@@ -103,47 +104,55 @@ MIENTRAS un grupo de un chat está reclamado y no confirmado, el gateway NO DEBE
 buffer del mismo chat.
 
 ## R20
-SI el envío de un grupo falla (`OrchestratorError`) ENTONCES el gateway DEBE liberarlo para
-reintento con su contador de intentos incrementado, conservando los mismos mensajes.
+SI el webhook no puede reclamar el buffer porque hay un grupo del mismo chat en vuelo ENTONCES
+el gateway DEBE enviar individualmente el mensaje nuevo que activaría un límite o sea inmediato,
+y registrar `grouping_inflight_race` con su `update_id`.
 
 ## R21
+SI el envío de un grupo falla (`OrchestratorError`) y no se agotó `MAX_ATTEMPTS` ENTONCES el
+gateway DEBE liberarlo conservando el contador de reclamos y los mismos mensajes.
+
+## R22
 SI un grupo alcanza `MAX_ATTEMPTS` intentos fallidos o falla la validación de `MessageRequest`
 ENTONCES el gateway DEBE descartarlo y registrar un error con los `update_id` y el número de
 mensajes.
 
-## R22
-CUANDO el worker arranca o vence la `LEASE_SECONDS` de un grupo reclamado no confirmado, el
-gateway DEBE volver a reclamarlo y reenviarlo hasta `MAX_ATTEMPTS` veces en total.
-
 ## R23
+CUANDO el worker arranca o vence la `LEASE_SECONDS` de un grupo reclamado no confirmado y aún
+no se agotó `MAX_ATTEMPTS`, el gateway DEBE volver a reclamarlo, incrementar el contador de
+intentos y reenviarlo; si se agotó, DEBE descartarlo y registrar el descarte sin reenviarlo.
+
+## R24
 El gateway DEBE crear y renovar cada clave de buffer y de grupo reclamado en Redis con caducidad
 `BUFFER_TTL_SECONDS`.
 
-## R24
+## R25
 SI una iteración del worker lanza una excepción ENTONCES el gateway DEBE registrarla y continuar
 con la siguiente iteración.
 
-## R25
+## R26
 CUANDO la app arranca con agrupación activa y adaptador de buffer, el gateway DEBE iniciar el
-worker; CUANDO la app se detiene, DEBE pararlo.
+worker.
+
+## R27
+CUANDO la app se detiene con el worker iniciado, el gateway DEBE pararlo.
 
 ## Privacidad y adaptadores
 
-## R26
-El gateway NO DEBE incluir texto de mensajes, `PRIVACY_ACCEPT_PHRASE` ni tokens en logs de
+## R28
+El gateway NO DEBE incluir texto de mensajes, `MESSAGE_GROUPING_ACCEPT_PHRASE` ni tokens en logs de
 agrupación, reintento, descarte o fallo.
 
-## R27
+## R29
 El gateway DEBE acceder al buffer únicamente mediante un `Protocol` `MessageBuffer` con versión
-falsa `FakeMessageBuffer`, de modo que los tests no usen Redis real ni hilos reales salvo el
-test de concurrencia.
+falsa `FakeMessageBuffer`, de modo que los tests no usen Redis real ni hilos reales salvo tests de concurrencia y el test de ciclo de vida de app que verifica el worker.
 
 ## Cobertura del acceptance
 
 | Criterio de `feature_list.json` | Requirements |
 |---|---|
 | Agrupa consecutivos del mismo usuario/chat en ventana configurable y con orden | R1, R2, R3, R4, R5, R6, R7, R9, R10 |
-| Otro chat no se mezcla; cada `update_id` como máximo una vez | R8, R11, R12, R18, R19 |
-| Recupera o expira buffers de forma acotada ante reinicios; fallos sin texto personal | R17, R20, R21, R22, R23, R24, R25, R26 |
+| Otro chat no se mezcla; cada `update_id` como máximo una vez | R8, R11, R12, R18, R19, R20 |
+| Recupera o expira buffers de forma acotada ante reinicios; fallos sin texto personal | R17, R21, R22, R23, R24, R25, R26, R27, R28, R29 |
 | Comandos de asesores y estados de traspaso sin cambios | R13, R14, R15, R16 |
-| Pruebas de ventana, orden, dedup, concurrencia, reinicio y errores | R27 + tests de `tasks.md` |
+| Pruebas de ventana, orden, dedup, concurrencia, reinicio y errores | R29 + tests de `tasks.md` |

@@ -37,6 +37,8 @@ REQUIRED_IN_PRODUCTION = (
 
 _DB_QUERY_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
+AUTO_HANDOVER_FAILURE_ALLOWED_REASONS = ("no_relevant_chunks", "invalid_answer")
+
 
 def _parse_db_query_allowlist(
     raw: str, schema: str
@@ -92,6 +94,8 @@ class Settings(BaseSettings):
         "escribiremos en cuanto haya alguien."
     )
     invalid_answer_handover: bool = True
+    auto_handover_failure_threshold: int = Field(default=3, ge=1)
+    auto_handover_failure_reasons: str = "no_relevant_chunks,invalid_answer"
     handover_keywords: str = DEFAULT_HANDOVER_KEYWORDS
     advisor_reply_confirmation: str = "Respuesta enviada al cliente."
     advisor_close_confirmation: str = "Caso cerrado."
@@ -164,6 +168,31 @@ class Settings(BaseSettings):
     privacy_accepted_reply: str = ""
     privacy_retention_days: str = ""
 
+    @field_validator("auto_handover_failure_threshold")
+    @classmethod
+    def _validate_auto_handover_threshold(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(
+                "AUTO_HANDOVER_FAILURE_THRESHOLD debe ser un entero >= 1"
+            )
+        return value
+
+    @field_validator("auto_handover_failure_reasons")
+    @classmethod
+    def _validate_auto_handover_reasons(cls, value: str) -> str:
+        tokens = [token.strip() for token in value.split(",") if token.strip()]
+        invalid = [
+            token
+            for token in tokens
+            if token not in AUTO_HANDOVER_FAILURE_ALLOWED_REASONS
+        ]
+        if invalid:
+            raise ValueError(
+                "AUTO_HANDOVER_FAILURE_REASONS contiene un motivo no permitido; "
+                "usa no_relevant_chunks o invalid_answer"
+            )
+        return ",".join(dict.fromkeys(tokens))
+
     @field_validator("privacy_retention_days")
     @classmethod
     def _validate_retention_days(cls, value: str) -> str:
@@ -220,6 +249,21 @@ class Settings(BaseSettings):
     @property
     def handover_keyword_list(self) -> list[str]:
         return [k.strip() for k in self.handover_keywords.split(",") if k.strip()]
+
+    @property
+    def auto_handover_failure_reason_set(self) -> set[str]:
+        return {
+            reason.strip()
+            for reason in self.auto_handover_failure_reasons.split(",")
+            if reason.strip()
+        }
+
+    @property
+    def effective_auto_handover_failure_reasons(self) -> set[str]:
+        reasons = self.auto_handover_failure_reason_set
+        if not self.invalid_answer_handover:
+            reasons.discard("invalid_answer")
+        return reasons
 
     @property
     def retention_days(self) -> int | None:

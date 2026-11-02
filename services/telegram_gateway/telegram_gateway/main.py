@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +18,9 @@ from lazaro_contracts import (
 from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import grouping
 from .adapters.dedup import RedisDedupStore
+from .adapters.message_buffer import RedisMessageBuffer
 from .adapters.orchestrator import HttpOrchestratorClient
 from .adapters.telegram import HttpTelegramClient
 from .config import Settings
@@ -29,6 +32,7 @@ from .domain import (
     build_message_request,
     extract_incoming,
 )
+from .grouping import GroupingWorker
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +50,18 @@ class TelegramUpdate(BaseModel):
 
 
 def build_default_adapters(settings: Settings) -> Adapters:
+    buffer = (
+        RedisMessageBuffer(settings.redis_url)
+        if settings.message_grouping_enabled
+        else None
+    )
     return Adapters(
         telegram=HttpTelegramClient(settings.telegram_bot_token, settings.http_timeout_seconds),
         dedup=RedisDedupStore(settings.redis_url),
         orchestrator=HttpOrchestratorClient(
             settings.orchestrator_url, settings.service_token, settings.http_timeout_seconds
         ),
+        buffer=buffer,
     )
 
 
@@ -63,7 +73,22 @@ def _error(status_code: int, error: str, message: str) -> JSONResponse:
 def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
     settings = settings or Settings()
     adapters = adapters or build_default_adapters(settings)
-    app = FastAPI(title=SERVICE_NAME)
+    grouping_worker: GroupingWorker | None = None
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        nonlocal grouping_worker
+        if settings.message_grouping_enabled and adapters.buffer is not None:
+            grouping_worker = GroupingWorker(settings, adapters)
+            grouping_worker.start()
+        try:
+            yield
+        finally:
+            if grouping_worker is not None:
+                grouping_worker.stop()
+                grouping_worker = None
+
+    app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):
@@ -139,6 +164,9 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
                 logger.error(
                     "No se pudo enviar NON_TEXT_REPLY (update_id=%s): %s", incoming.update_id, exc
                 )
+            return {"ok": True}
+        if settings.message_grouping_enabled and adapters.buffer is not None:
+            grouping.enqueue_text(incoming, settings, adapters)
             return {"ok": True}
         try:
             message = build_message_request(incoming, adapters.clock())

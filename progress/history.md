@@ -423,3 +423,26 @@
 ## 2026-11-01 — Feature #29 panel_asesores (done)
 - Añadido panel con login separado por rol, vista de casos permitidos, responder/asignar/cerrar mediante autorización de handover y protección CSRF; no expone datos del cliente.
 - Spec y revisión de código Claude APPROVED (progress/specreview_panel_asesores.md, progress/review_panel_asesores.md). Writer OpenCode/DeepSeek Flash. ./init.sh: 1979 tests pasan (1 warning).
+
+
+## 2026-11-02 — Feature #30 agrupacion_mensajes (done)
+- El telegram-gateway agrupa mensajes consecutivos por chat en Redis con ventana/max wait configurables; comandos y frase de aceptación se envían individualmente. Se añadieron leases, reintentos, TTL y worker de ciclo de vida.
+- Claude reviewer aprobó en segunda revisión tras corregir el parseo de `claim_due` y añadir cobertura stub para payloads Lua, ack y release.
+- Writer OpenCode/DeepSeek Flash. `./init.sh`: 2041 passed, 1 skipped.
+
+
+## 2026-11-02 — Feature #31 busqueda_hibrida_rag (done)
+- Añadida búsqueda híbrida Postgres full-text español + pgvector, fusión RRF y umbral/score semánticos originales. `POST /search` y el modo legado se mantienen.
+- Comparador de evaluación para dos endpoints; modo híbrido queda apagado hasta ejecutar evaluación con mismo corpus.
+- Claude reviewer APPROVED; `./init.sh`: 2063 passed, 1 skipped. Writer OpenCode/DeepSeek Flash.
+
+
+## 2026-11-02 — Feature #32 traspaso_automatico_fallos (done)
+- El orquestador ahora cuenta fallos RAG configurables, reinicia la racha con respuesta válida y deriva una sola vez al umbral. La racha es persistente/idempotente por contacto y update; fallos transitorios reintentan y `/handover` reutiliza caso activo.
+- Claude reviewer APPROVED. OpenCode/DeepSeek Flash. `./init.sh`: 2088 passed, 1 skipped.
+- Seguimientos: añadir purga de outcomes/streaks de retención, cubrir excepciones inesperadas al enlazar caso y coordinar si se opera con varias instancias.
+
+
+## 2026-11-02 — Feature #34 robustez_estado_traspaso_automatico (done)
+- La purga de privacidad ahora elimina outcomes vencidos y estado de rachas de contactos purgados, dentro de la transacción y con conteos auditados. Excepciones durante handover automático dejan la racha reintentable.
+- Claude reviewer APPROVED; OpenCode/DeepSeek Flash. Suite final con Redis real temporal: 2093 passed, 0 skipped, 1 warning deprecado Starlette/httpx.

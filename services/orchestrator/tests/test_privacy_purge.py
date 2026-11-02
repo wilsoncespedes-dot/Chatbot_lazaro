@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from orchestrator.adapters.repository import PostgresRepository
 from orchestrator.classifier import Category
 
@@ -140,6 +142,8 @@ def test_response_and_purge_run_are_saved(env):
         "events": 0,
         "contacts": 0,
         "case_links": 0,
+        "auto_handover_outcomes": 0,
+        "auto_handover_streaks": 0,
     }
 
 
@@ -158,6 +162,10 @@ class _Cursor:
         if self.sql.startswith("DELETE FROM case_links"):
             return [("case-1",)]
         if self.sql.startswith("DELETE FROM contacts"):
+            return [("c1",)]
+        if self.sql.startswith("DELETE FROM auto_handover_outcomes"):
+            return [("c1", 7)]
+        if self.sql.startswith("DELETE FROM auto_handover_streaks"):
             return [("c1",)]
         if self.sql.startswith("DELETE FROM messages"):
             return [(1,), (2,)]
@@ -183,14 +191,22 @@ class _Conn:
 
 
 def test_postgres_purge_uses_the_documented_order_and_parameters():
-    """R24, R26: calcula inactivos, borra enlaces y contactos, luego mensajes y eventos."""
+    """R1–R3, R5: calcula inactivos, borra estado de traspaso y luego mensajes y eventos."""
     conn = _Conn()
     repo = PostgresRepository("postgresql://x", connect=lambda: conn, new_id=lambda: "n")
     counts = repo.purge_personal_data(CUTOFF, NOW)
-    assert counts == {"messages": 2, "events": 1, "contacts": 1, "case_links": 1}
+    assert counts == {
+        "messages": 2,
+        "events": 1,
+        "contacts": 1,
+        "case_links": 1,
+        "auto_handover_outcomes": 1,
+        "auto_handover_streaks": 1,
+    }
     assert conn.commits == 2 and conn.rollbacks == 0
     statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]
     starts = ["SELECT id FROM contacts", "DELETE FROM case_links", "DELETE FROM contacts",
+              "DELETE FROM auto_handover_outcomes", "DELETE FROM auto_handover_streaks",
               "DELETE FROM messages", "DELETE FROM events", "INSERT INTO privacy_purge_runs"]
     positions = [next(i for i, (sql, _) in enumerate(statements) if sql.startswith(start))
                  for start in starts]
@@ -200,3 +216,106 @@ def test_postgres_purge_uses_the_documented_order_and_parameters():
         assert sql.count("%s") == len(params)
     insert = statements[-1]
     assert json.loads(insert[1][2]) == counts
+
+
+# --- #34: purga del estado de traspaso automático ------------------------------------------
+
+
+def test_outcomes_before_cutoff_are_purged_and_the_boundary_is_kept(env):
+    """R1, R3: los outcomes vencidos se borran y su cantidad queda en la auditoría."""
+    repo = env.repo
+    reasons = {"no_relevant_chunks"}
+    repo.record_rag_outcome("c1", 1, "no_relevant_chunks", 1, reasons)
+    repo.record_rag_outcome("c1", 2, "no_relevant_chunks", 1, reasons)
+    repo.rag_outcome_at[("c1", 1)] = CUTOFF - timedelta(seconds=1)
+    repo.rag_outcome_at[("c1", 2)] = CUTOFF
+
+    response = _purge(env)
+
+    assert response.status_code == 200
+    assert repo.rag_outcomes == {("c1", 2)}
+    assert response.json()["deleted"]["auto_handover_outcomes"] == 1
+    assert repo.privacy_purge_runs[-1]["counts"]["auto_handover_outcomes"] == 1
+
+
+def test_inactive_contact_outcomes_and_streaks_are_purged(env):
+    """R2, R3: un contacto inactivo se lleva sus outcomes (aunque sean recientes) y su racha."""
+    repo = env.repo
+    reasons = {"no_relevant_chunks"}
+    inactive = repo.get_or_create_contact(10, 100, NOW)
+    repo.contact_created_at[inactive.id] = CUTOFF - timedelta(days=1)
+    repo.record_rag_outcome(inactive.id, 1, "no_relevant_chunks", 1, reasons)
+    repo.rag_outcome_at[(inactive.id, 1)] = NOW
+
+    active = repo.get_or_create_contact(11, 101, NOW)
+    repo.contact_created_at[active.id] = CUTOFF - timedelta(days=1)
+    repo.add_message(active.id, "user", "reciente", CUTOFF)
+    repo.record_rag_outcome(active.id, 2, "no_relevant_chunks", 1, reasons)
+    repo.rag_outcome_at[(active.id, 2)] = NOW
+
+    response = _purge(env)
+
+    assert inactive.id not in repo.rag_streaks
+    assert (inactive.id, 1) not in repo.rag_outcomes
+    assert (inactive.id, 1) not in repo.rag_outcome_at
+    assert active.id in repo.rag_streaks
+    assert (active.id, 2) in repo.rag_outcomes
+    assert response.json()["deleted"]["auto_handover_outcomes"] == 1
+    assert response.json()["deleted"]["auto_handover_streaks"] == 1
+    assert repo.privacy_purge_runs[-1]["counts"]["auto_handover_streaks"] == 1
+
+
+class _FailingCursor:
+    def __init__(self, log: list) -> None:
+        self.log = log
+        self.sql = ""
+
+    def execute(self, sql, params=()):
+        if sql.startswith("DELETE FROM messages"):
+            raise RuntimeError("fallo simulado")
+        self.sql = sql
+        self.log.append((sql, tuple(params)))
+
+    def fetchall(self):
+        if self.sql.startswith("SELECT id FROM contacts"):
+            return [("c1",)]
+        if self.sql.startswith("DELETE FROM case_links"):
+            return [("case-1",)]
+        if self.sql.startswith("DELETE FROM contacts"):
+            return [("c1",)]
+        if self.sql.startswith("DELETE FROM auto_handover_outcomes"):
+            return [("c1", 7)]
+        if self.sql.startswith("DELETE FROM auto_handover_streaks"):
+            return [("c1",)]
+        return []
+
+
+class _FailingConn:
+    def __init__(self) -> None:
+        self.log: list = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def cursor(self):
+        return _FailingCursor(self.log)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def test_purge_rolls_back_atomically_when_a_statement_fails():
+    """R3, R5: un fallo a mitad de la purga hace rollback y no guarda la auditoría."""
+    conn = _FailingConn()
+    repo = PostgresRepository("postgresql://x", connect=lambda: conn, new_id=lambda: "n")
+
+    with pytest.raises(RuntimeError):
+        repo.purge_personal_data(CUTOFF, NOW)
+
+    assert conn.rollbacks == 1
+    assert conn.commits == 1  # solo el commit del esquema
+    assert not any(
+        sql.startswith("INSERT INTO privacy_purge_runs") for sql, _ in conn.log
+    )

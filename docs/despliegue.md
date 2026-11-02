@@ -35,7 +35,7 @@ nunca en el repositorio:
 | `ADVISOR_CHAT_IDS` | handover | Chat ids de Telegram separados por comas. |
 | `PRIVACY_NOTICE_TEXT` | orchestrator | Texto del aviso de privacidad que ve el cliente. |
 | `PRIVACY_NOTICE_VERSION` | orchestrator | Versión del aviso aceptado. |
-| `PRIVACY_ACCEPT_PHRASE` | orchestrator | Frase con la que el cliente acepta el aviso. |
+| `PRIVACY_ACCEPT_PHRASE` | orchestrator | Frase con la que el cliente acepta el aviso; el gateway la hereda por referencia como `MESSAGE_GROUPING_ACCEPT_PHRASE`. |
 | `PRIVACY_ACCEPTED_REPLY` | orchestrator | Respuesta fija tras aceptar el aviso. |
 | `PRIVACY_RETENTION_DAYS` | handover | Plazo de retención de datos personales; única fuente. |
 | `PRIVACY_ACTIVE_CASE_MAX_DAYS` | handover | Antigüedad máxima de un caso activo antes de cerrarlo y borrarlo. |
@@ -70,6 +70,17 @@ desplegar**; esta configuración no fija ningún valor. Mientras falten, el
 La purga no cubre los logs de la plataforma Render, las copias de seguridad de
 Postgres, la tabla `privacy_consents` ni las solicitudes individuales de
 supresión o revocación, que se atienden por un procedimiento aparte.
+
+### 2.2 Agrupación de mensajes (#30)
+
+`telegram-gateway` agrupa mensajes consecutivos del mismo chat antes de
+llamarlos al `orchestrator`. Los valores por defecto están en `.env.example`
+(`MESSAGE_GROUPING_*`); se pueden cambiar sin tocar el código. En el
+Blueprint solo se declara `MESSAGE_GROUPING_ACCEPT_PHRASE`, que se hereda por
+referencia de `PRIVACY_ACCEPT_PHRASE` del `orchestrator`: la frase de
+aceptación debe ser idéntica en ambos servicios para que no se agrupe con otros
+mensajes. Si el `orchestrator` cambia esa frase, hay que redesplegar el
+`telegram-gateway` para que herede el valor nuevo.
 
 ## 3. Verificar `vector` en PostgreSQL
 

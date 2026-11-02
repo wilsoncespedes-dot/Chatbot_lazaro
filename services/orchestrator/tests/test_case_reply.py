@@ -51,6 +51,7 @@ def test_no_advisors_sends_fixed_reply_to_client(env):
 
 def test_no_advisors_after_no_relevant_chunks_also_informs_client(env):
     """R30: el cliente nunca queda sin respuesta, también con motivo no_relevant_chunks."""
+    env.settings.auto_handover_failure_threshold = 1
     env.handover.status = "no_advisors"
     env.rag.results = []
     env.post(update_id=1)

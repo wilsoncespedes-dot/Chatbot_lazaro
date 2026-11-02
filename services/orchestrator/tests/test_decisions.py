@@ -31,13 +31,13 @@ def test_empty_search_sends_no_answer_reply(env):
 
 
 def test_empty_search_requests_handover_no_relevant_chunks(env):
-    """R15"""
+    """R15; #32: con umbral 1 el primer fallo deriva y envía ACK una vez."""
+    env.settings.auto_handover_failure_threshold = 1
     env.rag.results = []
     env.post()
     assert len(env.handover.requests) == 1
     assert env.handover.requests[0].reason == "no_relevant_chunks"
-    # No se manda ACK para no_relevant_chunks.
-    assert env.gateway.sent == [(100, NO_ANSWER)]
+    assert env.gateway.sent == [(100, NO_ANSWER), (100, ACK)]
 
 
 def test_chunks_call_llm_once_with_question_and_fragments(env):

@@ -541,8 +541,13 @@ def _forward_to_advisor(
 
 
 def _handover(
-    contact: Contact, reason: str, settings: Settings, adapters: Adapters
-) -> None:
+    contact: Contact,
+    reason: str,
+    settings: Settings,
+    adapters: Adapters,
+    auto: bool = False,
+) -> bool:
+    """True si handover respondió (`notified` o `no_advisors`); False si no estaba disponible."""
     repo = adapters.repository
     repo.add_event(contact.id, "handover", reason, adapters.clock())
     request = HandoverRequest(
@@ -557,14 +562,15 @@ def _handover(
     except ServiceUnavailable:
         logger.error("handover_failed contact_id=%s code=handover_unavailable", contact.id)
         repo.add_event(contact.id, "handover_failed", "handover_unavailable", adapters.clock())
-        return
+        return False
     repo.link_case(response.case_id, contact.id, adapters.clock())
     if response.status == "no_advisors":
         repo.add_event(contact.id, "handover_failed", "no_advisors", adapters.clock())
         _send(contact, settings.no_advisors_reply, adapters)
-        return
-    if reason == "user_request":
+        return True
+    if reason == "user_request" or auto:
         _send(contact, settings.handover_ack_reply, adapters)
+    return True
 
 
 def _processing_error(contact: Contact, reason: str, settings: Settings, adapters: Adapters) -> None:
@@ -572,14 +578,45 @@ def _processing_error(contact: Contact, reason: str, settings: Settings, adapter
     _send(contact, settings.error_reply, adapters)
 
 
-def _reject_invalid_answer(
+def _record_rag_outcome(
+    contact: Contact,
+    request: MessageRequest,
+    outcome: str,
+    settings: Settings,
+    adapters: Adapters,
+) -> bool:
+    return adapters.repository.record_rag_outcome(
+        contact.id,
+        request.update_id,
+        outcome,
+        settings.auto_handover_failure_threshold,
+        settings.effective_auto_handover_failure_reasons,
+    )
+
+
+def _auto_handover(
     contact: Contact, reason: str, settings: Settings, adapters: Adapters
+) -> None:
+    try:
+        completed = _handover(contact, reason, settings, adapters, auto=True)
+    except Exception:
+        adapters.repository.finish_auto_handover(contact.id, False)
+        raise
+    adapters.repository.finish_auto_handover(contact.id, completed)
+
+
+def _reject_invalid_answer(
+    contact: Contact,
+    request: MessageRequest,
+    reason: str,
+    settings: Settings,
+    adapters: Adapters,
 ) -> None:
     logger.warning("invalid_answer contact_id=%s reason=%s", contact.id, reason)
     adapters.repository.add_event(contact.id, "invalid_answer", reason, adapters.clock())
     _send(contact, settings.no_answer_reply, adapters)
-    if settings.invalid_answer_handover:
-        _handover(contact, "invalid_answer", settings, adapters)
+    if _record_rag_outcome(contact, request, "invalid_answer", settings, adapters):
+        _auto_handover(contact, "invalid_answer", settings, adapters)
 
 
 def classifier_threshold(settings: Settings, adapters: Adapters) -> float:
@@ -870,6 +907,7 @@ def process_message(request: MessageRequest, settings: Settings, adapters: Adapt
         return
 
     if is_handover_request(request.text, settings.handover_keyword_list):
+        repo.reset_rag_streak(contact.id)
         _handover(contact, "user_request", settings, adapters)
         return
 
@@ -885,7 +923,10 @@ def process_message(request: MessageRequest, settings: Settings, adapters: Adapt
     if not chunks:
         repo.add_event(contact.id, "no_results", "no_relevant_chunks", adapters.clock())
         _send(contact, settings.no_answer_reply, adapters)
-        _handover(contact, "no_relevant_chunks", settings, adapters)
+        if _record_rag_outcome(
+            contact, request, "no_relevant_chunks", settings, adapters
+        ):
+            _auto_handover(contact, "no_relevant_chunks", settings, adapters)
         return
 
     system, user = build_llm_prompt(request.text, chunks)
@@ -901,10 +942,11 @@ def process_message(request: MessageRequest, settings: Settings, adapters: Adapt
     try:
         validated = validate_llm_answer(answer, chunks)
     except InvalidAnswer as exc:
-        _reject_invalid_answer(contact, exc.reason, settings, adapters)
+        _reject_invalid_answer(contact, request, exc.reason, settings, adapters)
         return
 
     repo.add_event(contact.id, "rag_answer", "chunks_found", adapters.clock())
+    _record_rag_outcome(contact, request, "rag_answer", settings, adapters)
     _send(contact, validated.answer, adapters)
 
 

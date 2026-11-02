@@ -207,7 +207,7 @@
       "id": 11,
       "name": "registro_solicitudes_traspaso",
       "title": "Registro de cada solicitud de traspaso en handover",
-      "description": "Handover guarda un registro por cada POST /handover, también cuando no hay asesores o se reutiliza un caso, para no depender solo de los eventos del orquestador. Solo toca services/handover; no cambia contratos. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); pendiente revisión nocturna del spec.",
+      "description": "Handover registra cada POST /handover sin texto de mensajes, incluso sin asesores o al reutilizar un caso. Spec y revisión de código aprobados; política de retención de estos registros se atiende en las features de privacidad.",
       "acceptance": [
         "Cada `POST /handover` válido crea un registro en una tabla nueva de handover con: id propio, `case_id` pedido, `case_id` efectivo, `contact_id`, `reason`, fecha de recepción (reloj inyectado), resultado, número de asesores configurados y número de avisos entregados",
         "El registro se crea también cuando no hay asesores configurados (resultado `no_advisors`, 0 avisos) y cuando todos los avisos fallan",
@@ -227,7 +227,7 @@
       "id": 12,
       "name": "vencimiento_automatico",
       "title": "Ejecución periódica de POST /cases/check-timeouts",
-      "description": "Script y worker que llaman periódicamente a la ruta de vencimiento ya existente (CONTRATOS.md: la llama un worker o cron), y vencimiento seguro ante ejecuciones simultáneas. Toca scripts/, docker-compose.yml y services/handover; no cambia contratos. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); pendiente revisión nocturna del spec.",
+      "description": "Script y worker para ejecutar POST /cases/check-timeouts con vencimiento concurrente seguro. Spec y revisión de código aprobados; el método de ejecución en Render sigue pendiente de decisión operativa y costos.",
       "acceptance": [
         "Existe `scripts/vencer_casos.py` que llama a `POST /cases/check-timeouts` de `HANDOVER_URL` con `SERVICE_TOKEN`. Sin opciones hace una sola llamada y termina con código 0 si handover responde 200 y distinto de 0 si no",
         "Con `--intervalo <segundos>` (por defecto `CHECK_TIMEOUTS_INTERVAL_SECONDS`) el script repite la llamada en bucle; un fallo (red, 401, 5xx) se registra en el log con su código y el bucle continúa",
@@ -302,7 +302,7 @@
       "id": 15,
       "name": "contrato_conversacion_caso",
       "title": "Contrato: mensajes del cliente hacia el asesor",
-      "description": "Feature de contrato previa a la #16. Solo toca contracts/. Los nombres son una propuesta. Decisiones del humano incorporadas (progress/propuesta_etapa2.md §6); pendiente revisión nocturna del spec.",
+      "description": "Contrato de conversación cliente-asesor para la #16. Spec y revisión de código aprobados; solo modifica contracts/.",
       "acceptance": [
         "`CONTRATOS.md` documenta `POST /cases/{id}/client-message`: lo expone `handover` y lo llama `orchestrator`. Request `CaseClientMessageRequest {text: MessageText, at: AwareDatetime}`; `200` `CaseClientMessageResponse {status: forwarded | not_assigned, case_id}`; errores `401 unauthorized`, `422 validation_error`, `404 not_found`, `502 upstream_error` (falló el envío al asesor), `500 internal_error`",
         "La línea `- **Llama:**` de `POST /cases/{id}/close` añade `orchestrator` (comandos de asesor desde Telegram, #16). Es el único cambio de texto en una sección existente",
@@ -611,7 +611,8 @@
         7
       ],
       "sdd": true,
-      "status": "spec_ready"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 31,
@@ -630,7 +631,7 @@
         8
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 32,
@@ -651,7 +652,7 @@
         16
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 33,
@@ -673,6 +674,23 @@
       "sdd": true,
       "status": "done",
       "auto_approved": true
+    },
+    {
+      "id": 34,
+      "name": "robustez_estado_traspaso_automatico",
+      "title": "Retención y recuperación del estado de traspaso automático",
+      "description": "Elimina estado de rachas según retención y garantiza reintento tras fallos inesperados del flujo de handover.",
+      "acceptance": [
+        "La purga de retención elimina outcomes vencidos y outcomes/rachas de contactos eliminados, contabilizando filas borradas en la misma transacción.",
+        "Una excepción inesperada mientras se completa un handover automático deja la racha reintentable y no atascada en pending.",
+        "Las pruebas verifican purga, atomicidad, recuperación después de excepción y que los flujos existentes se conservan; ./init.sh pasa y la revisión aprueba."
+      ],
+      "dependencies": [
+        27,
+        32
+      ],
+      "sdd": true,
+      "status": "done"
     }
   ]
 }

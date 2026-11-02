@@ -48,6 +48,12 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      # La frase de aceptación es la misma que valida el orchestrator (#27/#30).
+      - key: MESSAGE_GROUPING_ACCEPT_PHRASE
+        fromService:
+          type: web
+          name: orchestrator
+          envVarKey: PRIVACY_ACCEPT_PHRASE
 
   - type: web
     name: orchestrator

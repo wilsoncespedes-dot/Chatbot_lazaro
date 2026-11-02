@@ -9,13 +9,13 @@ siguen intactos.
 
 | Archivo | Cambio |
 |---|---|
-| `services/telegram_gateway/telegram_gateway/config.py` | Campos `message_grouping_*` y `privacy_accept_phrase`; validador R2. |
+| `services/telegram_gateway/telegram_gateway/config.py` | Campos `message_grouping_*` incluyendo `message_grouping_accept_phrase`; validador R2. |
 | `services/telegram_gateway/telegram_gateway/domain.py` | Dataclasses y funciones puras (abajo); `Adapters.buffer: MessageBuffer \| None = None`. |
 | `services/telegram_gateway/telegram_gateway/adapters/message_buffer.py` (nuevo) | `MessageBuffer` (Protocol), `RedisMessageBuffer`, `FakeMessageBuffer`. |
 | `services/telegram_gateway/telegram_gateway/grouping.py` (nuevo) | Orquestación con IO: `enqueue_text`, `flush_chat`, `flush_due`, `GroupingWorker` (hilo). |
 | `services/telegram_gateway/telegram_gateway/main.py` | Rama de texto del webhook delega en `grouping` si hay buffer; lifespan arranca/para el worker. |
-| `.env.example`, `render.yaml` (servicio gateway) | Variables de R1/R3; `PRIVACY_ACCEPT_PHRASE` también para el gateway. |
-| `services/telegram_gateway/tests/test_grouping.py` (nuevo), `test_message_buffer.py` (nuevo) | Tests de R1–R27. Los tests existentes siguen sin buffer (R16). |
+| `.env.example`, `render.yaml`, `docs/despliegue.md` | Variables de agrupación; `MESSAGE_GROUPING_ACCEPT_PHRASE` en gateway se toma por `fromService` de `PRIVACY_ACCEPT_PHRASE` del orquestador. |
+| `services/telegram_gateway/tests/test_grouping.py` (nuevo), `test_message_buffer.py` (nuevo) | Tests de R1–R29. Los tests existentes siguen sin buffer (R16). |
 
 Sin dependencias nuevas (`redis>=5,<7` ya está). Sin rutas ni contratos nuevos.
 
@@ -42,9 +42,9 @@ class MessageBuffer(Protocol):
     def claim_chat(self, chat_id: int, now: datetime, lease_seconds: float,
                    ttl_seconds: int) -> ClaimedGroup | None         # ignora vencimiento
     def claim_due(self, now: datetime, lease_seconds: float, ttl_seconds: int,
-                  limit: int) -> list[ClaimedGroup]                 # vencidos + leases caducadas
+                  limit: int) -> list[ClaimedGroup]                 # vencidos + leases caducadas, sin política de intentos
     def ack(self, group: ClaimedGroup) -> None
-    def release(self, group: ClaimedGroup, now: datetime) -> None   # attempts += 1, reintento ya
+    def release(self, group: ClaimedGroup, now: datetime) -> None   # conserva attempts; lease vence para reintento
 
 # grouping.py
 def enqueue_text(incoming: IncomingUpdate, settings: Settings, adapters: Adapters) -> None
@@ -65,18 +65,20 @@ Webhook (tras secreto, `extract_incoming` y `dedup.mark_if_new` de #3, R11):
    individual (R17). Siempre `200`.
 
 `flush_chat`/`flush_due` envían cada `ClaimedGroup` con `build_group_request`: éxito → `ack`;
-`OrchestratorError` → `release` si `attempts + 1 < MAX_ATTEMPTS`, si no `ack` + log de descarte
-(R20, R21); `ValidationError` → `ack` + log de descarte. Logs solo con `chat_id`, `update_id`,
-número de mensajes, intentos y tipo de excepción (R26).
+`OrchestratorError` → si `attempts < MAX_ATTEMPTS`, `release` conservando el contador; si no,
+`ack` + log de descarte (R21, R22); `ValidationError` → `ack` + log de descarte. Logs solo con `chat_id`, `update_id`,
+número de mensajes, intentos y tipo de excepción (R28).
+
+`MESSAGE_GROUPING_LEASE_SECONDS` debe ser mayor que `HTTP_TIMEOUT_SECONDS`, para evitar reclamar un envío todavía activo.
 
 `GroupingWorker`: hilo daemon con `threading.Event`; cada `POLL_SECONDS` llama a `flush_due` en
-`try/except Exception` (R24). Arranca/para en el `lifespan` de `create_app` (R25). Al arrancar,
+`try/except Exception` (R25). Arranca y para en el `lifespan` de `create_app` (R26/R27). Al arrancar,
 la primera iteración recoge buffers vencidos y grupos con lease caducada de una ejecución
-anterior (R22).
+anterior (R23).
 
 ## Redis (`RedisMessageBuffer`)
 
-Claves (todas con `EXPIRE BUFFER_TTL_SECONDS`, renovado en cada escritura, R23):
+Claves (todas con `EXPIRE BUFFER_TTL_SECONDS`, renovado en cada escritura, R24):
 
 - `gw:grp:buf:<chat_id>` — hash `update_id → JSON(BufferedMessage)` (orden por `update_id`; la
   clave de hash hace idempotente `append`, R12) + campos `first`/`last`.
@@ -86,12 +88,13 @@ Claves (todas con `EXPIRE BUFFER_TTL_SECONDS`, renovado en cada escritura, R23):
 
 `append`, `claim_*`, `ack` y `release` son scripts Lua (`register_script`): atómicos en Redis, lo
 que da R18 con varias instancias. `claim_*` solo reclama un chat si no existe su `inflight`
-(R19); renombra el buffer a `inflight` y quita el chat de `due`. `release` deja el lease vencido
-para que la siguiente iteración lo reclame. `ack` borra `inflight` y, si quedó un buffer
+(R19); renombra el buffer a `inflight` y quita el chat de `due`; cada reclamo inicial o tras lease vencido incrementa `attempts`. Si el lease venció y el contador ya llegó a `MAX_ATTEMPTS`, `claim_due` devuelve el grupo y `flush_due` lo descarta con `ack` y registra el descarte (R22/R23/R28), sin llamar al orquestador. `release` conserva `attempts` y deja vencer el lease para que la siguiente iteración lo reclame. Al reclamar un grupo en vuelo, un mensaje del webhook que no pueda esperar sin romper límites se envía individualmente y registra `grouping_inflight_race` (R20). `ack` borra `inflight` y, si quedó un buffer
 nuevo del chat, conserva su entrada en `due`.
 
 `FakeMessageBuffer` replica la semántica en memoria con un `threading.Lock`, reloj inyectable y
-caducidad simulada, y admite `fail=True` (lanza `ConnectionError`).
+caducidad simulada, y admite `fail=True` (lanza `ConnectionError`). La prueba de T17 verifica el
+Protocol, append idempotente, bloqueo de doble claim, `release`/`ack`, expiración de lease, TTL y
+`ConnectionError` con `fail=True`.
 
 ## Comportamiento con comandos, traspaso y datos personales
 
@@ -129,7 +132,7 @@ públicas ni códigos HTTP; el webhook sigue respondiendo siempre `200` tras aut
 | Tope de espera para que una ráfaga larga no retrase indefinidamente | `MESSAGE_GROUPING_MAX_WAIT_SECONDS=8.0` |
 | Tamaño máximo de grupo | `MESSAGE_GROUPING_MAX_MESSAGES=10` y 4096 caracteres del contrato |
 | Retención de texto en Redis | `MESSAGE_GROUPING_BUFFER_TTL_SECONDS=300` |
-| Reintentos ante fallo del orquestador; después se descarta con log (antes se perdía al primer fallo) | `MESSAGE_GROUPING_MAX_ATTEMPTS=3`, `MESSAGE_GROUPING_LEASE_SECONDS=30` |
+| Reintentos ante fallo del orquestador; después se descarta con log (antes se perdía al primer fallo) | `MESSAGE_GROUPING_MAX_ATTEMPTS=3`, `MESSAGE_GROUPING_LEASE_SECONDS=30` (mayor que `HTTP_TIMEOUT_SECONDS`) |
 | El grupo usa el menor `update_id`: el reintento con los mismos mensajes lo deduplica el orquestador | — |
-| Si el webhook encuentra un grupo del chat ya en vuelo en otro worker, envía el mensaje inmediato sin esperar (reordenación posible y rara, se registra `grouping_inflight_race`) | — |
+| Si el webhook encuentra un grupo del chat ya en vuelo, envía individualmente cualquier mensaje que no pueda esperar sin violar límites, registrando `grouping_inflight_race` | — |
 | Activable/desactivable sin redeploy de código | `MESSAGE_GROUPING_ENABLED=true` |

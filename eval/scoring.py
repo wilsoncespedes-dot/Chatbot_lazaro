@@ -65,6 +65,11 @@ class Summary:
     def tasa_rechazo(self) -> float | None:
         return _ratio(*self.rechazos)
 
+    @property
+    def resultados_no_responde(self) -> int:
+        """Preguntas no_responde que devolvieron algún resultado (RAG) o respuesta."""
+        return sum(1 for s in self.fallos if s.outcome == "respuesta_inventada")
+
 
 def _ratio(num: int, den: int) -> float | None:
     return None if den == 0 else num / den
@@ -210,4 +215,59 @@ def render_report(summary: Summary, *, url: str, mode: str, date: date) -> str:
     else:
         for s in summary.fallos:
             lines.append(f"- {s.question.id} [{s.outcome}]: {s.detail} — {s.question.pregunta}")
+    return "\n".join(lines) + "\n"
+
+
+def _failure_lines(summary: Summary) -> list[str]:
+    if not summary.fallos:
+        return ["Ninguno"]
+    return [
+        f"- {s.question.id} [{s.outcome}]: {s.detail} — {s.question.pregunta}"
+        for s in summary.fallos
+    ]
+
+
+def render_comparison(
+    left: Summary,
+    right: Summary,
+    *,
+    left_url: str,
+    right_url: str,
+    mode: str,
+    top_k: int,
+    threshold: float,
+    date: date,
+) -> str:
+    """Informe de dos ejecuciones con el mismo corpus, preguntas y parámetros."""
+    lines = [
+        f"# Comparación de evaluación {date.isoformat()}",
+        "",
+        f"- Modo: {mode}",
+        f"- Preguntas: {left.total} (mismas para ambos endpoints)",
+        f"- top_k: {top_k} (igual en ambos)",
+        f"- Umbral semántico: {threshold} (igual en ambos)",
+        "- Corpus: el cargado en ambos endpoints debe ser el mismo",
+        "",
+        "## Métricas",
+        "",
+        f"| Métrica | {left_url} | {right_url} |",
+        "|---|---|---|",
+        f"| Aciertos de recuperación | {left.recuperacion[0]}/{left.recuperacion[1]} "
+        f"({_pct(left.tasa_recuperacion)}) | {right.recuperacion[0]}/{right.recuperacion[1]} "
+        f"({_pct(right.tasa_recuperacion)}) |",
+        f"| Rechazos correctos | {left.rechazos[0]}/{left.rechazos[1]} "
+        f"({_pct(left.tasa_rechazo)}) | {right.rechazos[0]}/{right.rechazos[1]} "
+        f"({_pct(right.tasa_rechazo)}) |",
+        f"| Resultados en preguntas no_responde | {left.resultados_no_responde} "
+        f"| {right.resultados_no_responde} |",
+        f"| Respuestas inventadas detectadas | {left.inventadas} | {right.inventadas} |",
+        "",
+        f"## Fallos — {left_url}",
+        "",
+        *_failure_lines(left),
+        "",
+        f"## Fallos — {right_url}",
+        "",
+        *_failure_lines(right),
+    ]
     return "\n".join(lines) + "\n"

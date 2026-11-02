@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from lazaro_contracts import MessageRequest
+from lazaro_contracts import MAX_TEXT_LENGTH, MessageRequest
 
 if TYPE_CHECKING:
     from .adapters.dedup import DedupStore
+    from .adapters.message_buffer import MessageBuffer
     from .adapters.orchestrator import OrchestratorClient
     from .adapters.telegram import TelegramClient
 
@@ -47,6 +48,69 @@ class Adapters:
     dedup: "DedupStore"
     orchestrator: "OrchestratorClient"
     clock: Callable[[], datetime] = field(default=_utcnow)
+    buffer: "MessageBuffer | None" = None
+
+
+@dataclass(frozen=True)
+class BufferedMessage:
+    update_id: int
+    user_id: int
+    text: str
+    received_at: datetime
+
+
+@dataclass(frozen=True)
+class ClaimedGroup:
+    chat_id: int
+    claim_id: str
+    attempts: int
+    messages: tuple[BufferedMessage, ...]
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def is_immediate(text: str, accept_phrase: str) -> bool:
+    """R13, R14: comandos y la frase de aceptación no se agrupan."""
+    if text.strip().startswith("/"):
+        return True
+    if not accept_phrase.strip():
+        return False
+    return _normalize_text(text) == _normalize_text(accept_phrase)
+
+
+def compute_due(
+    first: datetime, last: datetime, window: float, max_wait: float
+) -> datetime:
+    """R5: vence al cerrar la ventana, sin superar el tope desde el primer mensaje."""
+    return min(last + timedelta(seconds=window), first + timedelta(seconds=max_wait))
+
+
+def must_flush_before(
+    pending: Sequence[BufferedMessage], new: BufferedMessage, max_messages: int
+) -> bool:
+    """R9: otro usuario o desborde de tamaño obliga a enviar el buffer pendiente."""
+    if not pending:
+        return False
+    if any(message.user_id != new.user_id for message in pending):
+        return True
+    if len(pending) >= max_messages:
+        return True
+    texts = [message.text for message in pending] + [new.text]
+    return len("\n".join(texts)) > MAX_TEXT_LENGTH
+
+
+def build_group_request(chat_id: int, messages: Sequence[BufferedMessage]) -> MessageRequest:
+    """R6, R7: un único mensaje con los textos ordenados por update_id."""
+    ordered = sorted(messages, key=lambda message: message.update_id)
+    return MessageRequest(
+        update_id=ordered[0].update_id,
+        telegram_user_id=ordered[0].user_id,
+        chat_id=chat_id,
+        text="\n".join(message.text for message in ordered),
+        received_at=ordered[-1].received_at,
+    )
 
 
 def _as_int(value: Any) -> int | None:

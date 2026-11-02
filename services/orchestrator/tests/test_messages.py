@@ -102,7 +102,8 @@ def test_no_results_event_saved(env):
 
 
 def test_handover_event_saved(env):
-    """R11"""
+    """R11; #32: umbral 1 para conservar la derivación en el primer fallo."""
+    env.settings.auto_handover_failure_threshold = 1
     env.post(text="quiero un asesor")
     assert ("handover", "user_request") in env.events()
     env.rag.results = []

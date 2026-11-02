@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
     rag_similarity_threshold: float = 0.75
+    rag_hybrid_enabled: bool = False
+    rag_hybrid_candidate_limit: int = 50
     http_timeout_seconds: float = 10
 
     @model_validator(mode="after")

@@ -32,6 +32,40 @@ class Settings(BaseSettings):
     dedup_ttl_seconds: int = 86400
     http_timeout_seconds: float = 10
     non_text_reply: str = "Por ahora solo puedo leer mensajes de texto."
+    message_grouping_enabled: bool = True
+    message_grouping_window_seconds: float = 2.0
+    message_grouping_max_wait_seconds: float = 8.0
+    message_grouping_max_messages: int = 10
+    message_grouping_buffer_ttl_seconds: int = 300
+    message_grouping_lease_seconds: float = 30.0
+    message_grouping_max_attempts: int = 3
+    message_grouping_poll_seconds: float = 0.5
+    message_grouping_accept_phrase: str = ""
+
+    @model_validator(mode="after")
+    def _validate_message_grouping(self) -> "Settings":
+        problems: list[str] = []
+        if self.message_grouping_window_seconds <= 0:
+            problems.append("MESSAGE_GROUPING_WINDOW_SECONDS")
+        if self.message_grouping_max_wait_seconds < self.message_grouping_window_seconds:
+            problems.append("MESSAGE_GROUPING_MAX_WAIT_SECONDS")
+        if self.message_grouping_max_messages < 1:
+            problems.append("MESSAGE_GROUPING_MAX_MESSAGES")
+        if self.message_grouping_max_attempts < 1:
+            problems.append("MESSAGE_GROUPING_MAX_ATTEMPTS")
+        if self.message_grouping_poll_seconds <= 0:
+            problems.append("MESSAGE_GROUPING_POLL_SECONDS")
+        if self.message_grouping_lease_seconds <= self.http_timeout_seconds:
+            problems.append("MESSAGE_GROUPING_LEASE_SECONDS")
+        if self.message_grouping_buffer_ttl_seconds <= (
+            self.message_grouping_max_wait_seconds + self.message_grouping_lease_seconds
+        ):
+            problems.append("MESSAGE_GROUPING_BUFFER_TTL_SECONDS")
+        if problems:
+            raise ValueError(
+                "configuración de agrupación inválida: " + ", ".join(problems)
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_production(self) -> "Settings":

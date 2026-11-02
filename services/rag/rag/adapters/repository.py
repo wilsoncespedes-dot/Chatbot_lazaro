@@ -1,6 +1,8 @@
 """Almacenamiento de fragmentos: interfaz, versión en memoria y pgvector (pg8000)."""
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import replace
 from typing import Any, Callable, Protocol
 from urllib.parse import unquote, urlparse
@@ -9,12 +11,47 @@ from lazaro_contracts import ManualSummary, SearchResult
 
 from ..domain import Chunk, ChunkNotFound, cosine_similarity
 
+RRF_K = 60
+
+
+def _lexical_tokens(text: str) -> list[str]:
+    """Tokeniza sin acentos ni mayúsculas; aproxima el analizador español en tests."""
+    normalized = unicodedata.normalize("NFKD", text.casefold())
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def reciprocal_rank_fusion(
+    semantic_ranks: dict[str, int],
+    lexical_ranks: dict[str, int],
+    k: int = RRF_K,
+) -> dict[str, float]:
+    """Combina rangos 1-based. El resultado solo ordena, nunca es el score de respuesta."""
+    fused: dict[str, float] = {}
+    for chunk_id in set(semantic_ranks) | set(lexical_ranks):
+        score = 0.0
+        if chunk_id in semantic_ranks:
+            score += 1.0 / (k + semantic_ranks[chunk_id])
+        if chunk_id in lexical_ranks:
+            score += 1.0 / (k + lexical_ranks[chunk_id])
+        fused[chunk_id] = score
+    return fused
+
 
 class ChunkRepository(Protocol):
     def add_manual(self, manual_id: str, name: str, chunks: list[Chunk]) -> None: ...
 
     def search(
         self, query_vector: list[float], top_k: int, threshold: float
+    ) -> list[SearchResult]: ...
+
+    def search_hybrid(
+        self,
+        query_vector: list[float],
+        query_text: str,
+        top_k: int,
+        threshold: float,
+        candidate_limit: int,
     ) -> list[SearchResult]: ...
 
     def set_active(self, chunk_id: str, active: bool) -> None: ...
@@ -51,6 +88,70 @@ class FakeChunkRepository:
             SearchResult(chunk_id=c.chunk_id, manual=c.manual, text=c.text, score=min(s, 1.0))
             for s, c in scored[:top_k]
         ]
+
+    def search_hybrid(
+        self,
+        query_vector: list[float],
+        query_text: str,
+        top_k: int,
+        threshold: float,
+        candidate_limit: int,
+    ) -> list[SearchResult]:
+        active = [c for c in self.chunks if c.active]
+        semantic = sorted(
+            ((cosine_similarity(query_vector, c.embedding), c) for c in active),
+            key=lambda pair: (-pair[0], pair[1].chunk_id),
+        )
+        semantic_scores = {
+            c.chunk_id: max(-1.0, min(score, 1.0)) for score, c in semantic
+        }
+        semantic_ranks = {
+            c.chunk_id: rank
+            for rank, (_, c) in enumerate(semantic[:candidate_limit], start=1)
+        }
+        lexical_ranks = self._lexical_ranks(query_text, active, candidate_limit)
+        fused = reciprocal_rank_fusion(semantic_ranks, lexical_ranks)
+        accepted = [
+            chunk_id
+            for chunk_id in fused
+            if semantic_scores.get(chunk_id, -1.0) >= threshold
+        ]
+        accepted.sort(
+            key=lambda chunk_id: (
+                -fused[chunk_id],
+                -semantic_scores[chunk_id],
+                chunk_id,
+            )
+        )
+        by_id = {c.chunk_id: c for c in active}
+        return [
+            SearchResult(
+                chunk_id=chunk_id,
+                manual=by_id[chunk_id].manual,
+                text=by_id[chunk_id].text,
+                score=semantic_scores[chunk_id],
+            )
+            for chunk_id in accepted[:top_k]
+        ]
+
+    @staticmethod
+    def _lexical_ranks(
+        query_text: str, active: list[Chunk], candidate_limit: int
+    ) -> dict[str, int]:
+        terms = set(_lexical_tokens(query_text))
+        if not terms:
+            return {}
+        scored = []
+        for chunk in active:
+            tokens = _lexical_tokens(chunk.text)
+            matches = sum(tokens.count(term) for term in terms)
+            if matches:
+                scored.append((matches, chunk))
+        scored.sort(key=lambda pair: (-pair[0], pair[1].chunk_id))
+        return {
+            chunk.chunk_id: rank
+            for rank, (_, chunk) in enumerate(scored[:candidate_limit], start=1)
+        }
 
     def set_active(self, chunk_id: str, active: bool) -> None:
         for i, c in enumerate(self.chunks):
@@ -137,6 +238,8 @@ class PgVectorChunkRepository:
             "chunk_id TEXT PRIMARY KEY, manual_id TEXT REFERENCES manuals(manual_id), "
             f"ord INT, text TEXT, embedding vector({self._dim}), "
             "active BOOLEAN DEFAULT TRUE)",
+            "CREATE INDEX IF NOT EXISTS chunks_text_spanish_gin ON chunks "
+            "USING GIN (to_tsvector('spanish', text)) WHERE active",
         )
 
     def _connection(self) -> Any:
@@ -181,6 +284,73 @@ class PgVectorChunkRepository:
                 "WHERE c.active) s "
                 "WHERE score >= %s ORDER BY score DESC LIMIT %s",
                 (_vector_literal(query_vector), threshold, top_k),
+            )
+            rows = list(cur.fetchall())
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return [
+            SearchResult(chunk_id=r[0], manual=r[1], text=r[2], score=max(-1.0, min(1.0, float(r[3]))))
+            for r in rows
+        ]
+
+    def search_hybrid(
+        self,
+        query_vector: list[float],
+        query_text: str,
+        top_k: int,
+        threshold: float,
+        candidate_limit: int,
+    ) -> list[SearchResult]:
+        """Semántica + full-text español, unidas por chunk_id y ordenadas por RRF.
+
+        El score que se devuelve es siempre la similitud semántica original
+        (`1 - distancia coseno`); el RRF solo decide el orden de los candidatos.
+        """
+        conn = self._connection()
+        cur = conn.cursor()
+        vector = _vector_literal(query_vector)
+        try:
+            cur.execute(
+                "WITH semantic AS ("
+                "SELECT c.chunk_id AS chunk_id, "
+                "1 - (c.embedding <=> CAST(%s AS vector)) AS score, "
+                "ROW_NUMBER() OVER ("
+                "ORDER BY c.embedding <=> CAST(%s AS vector), c.chunk_id) AS rank "
+                "FROM chunks c WHERE c.active ORDER BY rank LIMIT %s), "
+                "lexical AS ("
+                "SELECT c.chunk_id AS chunk_id, "
+                "1 - (c.embedding <=> CAST(%s AS vector)) AS score, "
+                "ROW_NUMBER() OVER ("
+                "ORDER BY ts_rank_cd(to_tsvector('spanish', c.text), "
+                "websearch_to_tsquery('spanish', %s)) DESC, c.chunk_id) AS rank "
+                "FROM chunks c WHERE c.active "
+                "AND to_tsvector('spanish', c.text) @@ websearch_to_tsquery('spanish', %s) "
+                "ORDER BY rank LIMIT %s), "
+                "fused AS ("
+                "SELECT COALESCE(s.chunk_id, l.chunk_id) AS chunk_id, "
+                "COALESCE(s.score, l.score) AS score, "
+                "COALESCE(1.0 / (60 + s.rank), 0) + COALESCE(1.0 / (60 + l.rank), 0) AS rrf "
+                "FROM semantic s FULL OUTER JOIN lexical l ON s.chunk_id = l.chunk_id) "
+                "SELECT c.chunk_id, m.name AS manual, c.text, f.score "
+                "FROM fused f "
+                "JOIN chunks c ON c.chunk_id = f.chunk_id "
+                "JOIN manuals m ON m.manual_id = c.manual_id "
+                "WHERE f.score >= %s "
+                "ORDER BY f.rrf DESC, f.score DESC, f.chunk_id "
+                "LIMIT %s",
+                (
+                    vector,
+                    vector,
+                    candidate_limit,
+                    vector,
+                    query_text,
+                    query_text,
+                    candidate_limit,
+                    threshold,
+                    top_k,
+                ),
             )
             rows = list(cur.fetchall())
             conn.commit()

@@ -160,7 +160,8 @@ def test_invalid_answer_sends_fixed_reply_and_event(env, reply, reason):
 
 
 def test_invalid_answer_triggers_handover_when_enabled(env):
-    """R16"""
+    """R16; #32: con umbral 1 el primer fallo deriva."""
+    env.settings.auto_handover_failure_threshold = 1
     env.rag.results = CHUNKS
     env.llm.reply = "no json"
     env.post()

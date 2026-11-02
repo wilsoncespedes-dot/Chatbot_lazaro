@@ -7,6 +7,10 @@ Antes de evaluar hay que cargar el manual de ejemplo en RAG, por ejemplo:
 Uso:
     python eval/run_eval.py --url http://localhost:8001 --modo rag
     python eval/run_eval.py --url http://localhost:8000 --modo orquestador
+    python eval/run_eval.py --url http://rag-a:8000 --comparar-url http://rag-b:8000
+
+La comparación escribe `eval/comparacion_<fecha>.md` y usa las mismas
+preguntas, `top_k` y `RAG_SIMILARITY_THRESHOLD` para ambos endpoints.
 
 En modo orquestador se levanta un receptor local (EVAL_SINK_PORT, 8099 por
 defecto) que hace de gateway; el orquestador debe tener TELEGRAM_GATEWAY_URL
@@ -35,6 +39,7 @@ from scoring import (  # noqa: E402
     Question,
     Scored,
     load_questions,
+    render_comparison,
     render_report,
     score,
     summarize,
@@ -159,6 +164,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "Carga antes el manual: python scripts/cargar_manual.py eval/manual_ejemplo/manual_ejemplo.md"
     )
     p.add_argument("--url", required=True, help="URL base de RAG o del orquestador")
+    p.add_argument(
+        "--comparar-url",
+        "--url-b",
+        dest="comparar_url",
+        default=None,
+        help="segunda URL de RAG para comparar con el mismo corpus, preguntas y parámetros",
+    )
     p.add_argument("--modo", choices=["rag", "orquestador"], default="rag")
     p.add_argument("--top-k", type=int, default=None, help="por defecto RAG_TOP_K o 5 (1 a 20)")
     p.add_argument("--espera", type=float, default=30.0, help="segundos de espera por respuesta")
@@ -168,6 +180,47 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--umbral-minimo-aciertos", type=float, default=None,
                    help="proporción mínima (0 a 1) de aciertos de recuperación")
     return p
+
+
+def _collect(
+    client,
+    url: str,
+    token: str,
+    questions: list[Question],
+    *,
+    mode: str,
+    top_k: int,
+    sink,
+    wait: float,
+    refusal: str,
+) -> list[Scored]:
+    scored: list[Scored] = []
+    for i, q in enumerate(questions):
+        if mode == "rag":
+            obs = query_rag(client, url, token, q, top_k)
+        else:
+            obs = query_orchestrator(client, url, token, q, sink, wait, BASE_CHAT_ID + i)
+        scored.append(score(q, obs, mode=mode, refusal_text=refusal))
+    return scored
+
+
+def _comparison_threshold() -> float:
+    """Umbral semántico compartido que se registra en la comparación."""
+    raw = os.environ.get("RAG_SIMILARITY_THRESHOLD", "0.75")
+    try:
+        threshold = float(raw)
+    except ValueError as exc:
+        raise ValueError("RAG_SIMILARITY_THRESHOLD no es un número") from exc
+    if not -1 <= threshold <= 1:
+        raise ValueError("RAG_SIMILARITY_THRESHOLD debe estar entre -1 y 1")
+    return threshold
+
+
+def _below_minimum(summary, umbral: float | None) -> bool:
+    if umbral is None:
+        return False
+    rate = summary.tasa_recuperacion
+    return rate is not None and rate < umbral
 
 
 def main(
@@ -199,6 +252,19 @@ def main(
         print("Error: --umbral-minimo-aciertos debe estar entre 0 y 1.", file=sys.stderr)
         return 2
 
+    url = args.url.rstrip("/")
+    comparar_url = args.comparar_url.rstrip("/") if args.comparar_url else None
+    if comparar_url and args.modo != "rag":
+        print("Error: --comparar-url solo se admite con --modo rag.", file=sys.stderr)
+        return 2
+    threshold: float | None = None
+    if comparar_url:
+        try:
+            threshold = _comparison_threshold()
+        except ValueError as exc:
+            print(f"Error: {exc}.", file=sys.stderr)
+            return 2
+
     refusal = args.rechazo or os.environ.get("NO_ANSWER_REPLY") or DEFAULT_REFUSAL
     try:
         questions: list[Question] = []
@@ -208,7 +274,6 @@ def main(
         print(f"Error en las preguntas: {exc}", file=sys.stderr)
         return 2
 
-    url = args.url.rstrip("/")
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=10.0)
@@ -218,22 +283,57 @@ def main(
         sink.start()
         own_sink = True
 
-    scored: list[Scored] = []
+    left_scored: list[Scored] = []
+    right_scored: list[Scored] = []
     try:
-        for i, q in enumerate(questions):
-            if args.modo == "rag":
-                obs = query_rag(client, url, token, q, top_k)
-            else:
-                obs = query_orchestrator(client, url, token, q, sink, args.espera, BASE_CHAT_ID + i)
-            scored.append(score(q, obs, mode=args.modo, refusal_text=refusal))
+        left_scored = _collect(
+            client, url, token, questions, mode=args.modo, top_k=top_k,
+            sink=sink, wait=args.espera, refusal=refusal,
+        )
+        if comparar_url:
+            right_scored = _collect(
+                client, comparar_url, token, questions, mode=args.modo, top_k=top_k,
+                sink=sink, wait=args.espera, refusal=refusal,
+            )
     finally:
         if own_client:
             client.close()
         if own_sink:
             sink.stop()
 
-    summary = summarize(scored)
     day = today or date.today()
+    if comparar_url:
+        left = summarize(left_scored)
+        right = summarize(right_scored)
+        report = render_comparison(
+            left,
+            right,
+            left_url=url,
+            right_url=comparar_url,
+            mode=args.modo,
+            top_k=top_k,
+            threshold=threshold if threshold is not None else 0.75,
+            date=day,
+        )
+        target = (out_dir or EVAL_DIR) / f"comparacion_{day.isoformat()}.md"
+        target.write_text(report, encoding="utf-8")
+        print(f"Comparación escrita en {target}")
+        print(
+            f"{url}: recuperación {left.recuperacion[0]}/{left.recuperacion[1]}, "
+            f"rechazos {left.rechazos[0]}/{left.rechazos[1]}, "
+            f"inventadas {left.inventadas}; "
+            f"{comparar_url}: recuperación {right.recuperacion[0]}/{right.recuperacion[1]}, "
+            f"rechazos {right.rechazos[0]}/{right.rechazos[1]}, "
+            f"inventadas {right.inventadas}"
+        )
+        code = 0
+        if any(s.outcome == "error" for s in left_scored + right_scored):
+            code = 1
+        if _below_minimum(left, umbral) or _below_minimum(right, umbral):
+            code = 1
+        return code
+
+    summary = summarize(left_scored)
     report = render_report(summary, url=url, mode=args.modo, date=day)
     target = (out_dir or EVAL_DIR) / f"resultados_{day.isoformat()}.md"
     target.write_text(report, encoding="utf-8")
@@ -245,10 +345,9 @@ def main(
     )
 
     code = 0
-    if any(s.outcome == "error" for s in scored):
+    if any(s.outcome == "error" for s in left_scored):
         code = 1
-    rate = summary.tasa_recuperacion
-    if umbral is not None and rate is not None and rate < umbral:
+    if _below_minimum(summary, umbral):
         code = 1
     return code
 
