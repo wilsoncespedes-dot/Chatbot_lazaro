@@ -111,6 +111,10 @@ el manejador de errores existente.
 El orchestrator DEBE procesar las rutas de personal igual que antes de esta feature, con o sin
 configuración de privacidad completa y con o sin consentimiento del remitente.
 
+> Reemplazado por #35 (consentimiento_antes_de_datos) R6–R10: solo el personal vinculado queda
+> exento; quien no es personal pasa por la puerta de consentimiento también en `/start` y en los
+> comandos de personal.
+
 ## Orchestrator — retención (`POST /privacy/purge`)
 
 ### R20

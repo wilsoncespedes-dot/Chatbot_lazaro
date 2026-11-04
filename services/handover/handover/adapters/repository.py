@@ -43,6 +43,10 @@ class CaseRepository(Protocol):
 
     def assign_if_unassigned(self, case_id: str, advisor_id: str, at: datetime) -> bool: ...
 
+    def transfer_if_assigned_to(
+        self, case_id: str, from_id: str, to_id: str, at: datetime
+    ) -> bool: ...
+
     def close_if_still_allowed(
         self, case_id: str, advisor_id: str, allowed_assignee: str | None, at: datetime
     ) -> bool: ...
@@ -167,6 +171,17 @@ class FakeCaseRepository:
             return False
         self.cases[case_id] = case.model_copy(
             update={"status": "assigned", "advisor_id": advisor_id, "assigned_at": at}
+        )
+        return True
+
+    def transfer_if_assigned_to(
+        self, case_id: str, from_id: str, to_id: str, at: datetime
+    ) -> bool:
+        case = self.cases.get(case_id)
+        if case is None or case.status != "assigned" or case.advisor_id != from_id:
+            return False
+        self.cases[case_id] = case.model_copy(
+            update={"advisor_id": to_id, "assigned_at": at}
         )
         return True
 
@@ -511,6 +526,17 @@ class PostgresCaseRepository:
             "UPDATE handover_cases SET status = %s, advisor_id = %s, assigned_at = %s "
             "WHERE case_id = %s AND status IN (%s, %s) RETURNING case_id",
             ("assigned", advisor_id, at, case_id, "open", "timed_out"),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def transfer_if_assigned_to(
+        self, case_id: str, from_id: str, to_id: str, at: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE handover_cases SET advisor_id = %s, assigned_at = %s "
+            "WHERE case_id = %s AND status = %s AND advisor_id = %s RETURNING case_id",
+            (to_id, at, case_id, "assigned", from_id),
             fetch=True,
         )
         return bool(rows)

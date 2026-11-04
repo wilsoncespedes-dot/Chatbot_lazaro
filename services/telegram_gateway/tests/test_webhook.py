@@ -33,6 +33,24 @@ def text_update(update_id=10, text="hola", chat_id=77, user_id=55):
     }
 
 
+def callback_update(
+    update_id=50,
+    data="privacy.accept:" + "a" * 32,
+    callback_id="cb-1",
+    chat_id=77,
+    user_id=55,
+):
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": callback_id,
+            "from": {"id": user_id},
+            "message": {"message_id": 90, "chat": {"id": chat_id}},
+            "data": data,
+        },
+    }
+
+
 def test_webhook_without_secret_returns_401(env):
     """R1"""
     r = env.client.post(URL, json=text_update())
@@ -133,6 +151,9 @@ def test_redis_adapter_uses_set_nx_ex():
         def __init__(self):
             self.calls = []
 
+        def exists(self, key):
+            return False
+
         def set(self, key, value, nx=False, ex=None):
             self.calls.append((key, nx, ex))
             return True
@@ -140,7 +161,10 @@ def test_redis_adapter_uses_set_nx_ex():
     store = RedisDedupStore("redis://localhost:6379/0")
     store._client = FakeRedis()
     assert store.mark_if_new(9, 60) is True
-    assert store._client.calls == [("gw:update:9", True, 60)]
+    assert store._client.calls == [
+        ("gw:message:telegram:9", True, 60),
+        ("gw:update:9", True, 60),
+    ]
 
 
 def test_dedup_store_failure_still_forwards(env, caplog):
@@ -202,12 +226,197 @@ def test_update_without_message_is_ignored(env):
     assert env.orchestrator.received == [] and env.telegram.sent == []
 
 
+# ── R38: callback_query de botones de consentimiento ──────────────────────────
+
+
+def test_callback_query_is_normalized_and_forwarded_as_button(env):
+    """R38: el callback se convierte en el botón canónico y no se trata como texto."""
+    r = env.client.post(URL, json=callback_update(), headers=HOOK)
+
+    assert r.status_code == 200
+    [message] = env.orchestrator.received
+    assert message.channel == "telegram"
+    assert message.kind == "button"
+    assert message.button_id == "privacy.accept"
+    assert message.button_proof == "a" * 32
+    assert message.external_user_id == "55"
+    assert message.external_chat_id == "77"
+    assert message.external_message_id == "cb-1"
+    assert env.telegram.sent == []
+    assert ("telegram", "cb-1") in env.dedup.message_keys
+
+
+def test_duplicate_callback_is_not_forwarded_twice(env):
+    """R38: el id del callback deduplica igual que un mensaje."""
+    env.client.post(URL, json=callback_update(), headers=HOOK)
+    env.client.post(URL, json=callback_update(), headers=HOOK)
+
+    assert len(env.orchestrator.received) == 1
+
+
+def test_callback_without_data_is_ignored(env):
+    """R38: un callback sin `data` no se reenvía ni envía nada al usuario."""
+    update = callback_update()
+    del update["callback_query"]["data"]
+    r = env.client.post(URL, json=update, headers=HOOK)
+
+    assert r.status_code == 200
+    assert env.orchestrator.received == [] and env.telegram.sent == []
+
+
+def test_callback_without_proof_is_still_forwarded_for_the_orchestrator_to_reject(env):
+    """R38: el gateway no inventa prueba; el orquestador decide y falla cerrado."""
+    env.client.post(
+        URL, json=callback_update(data="privacy.accept"), headers=HOOK
+    )
+
+    [message] = env.orchestrator.received
+    assert message.button_id == "privacy.accept"
+    assert message.button_proof is None
+
+
 @pytest.mark.parametrize("body", [{"message": {}}, {"update_id": "1"}, {"update_id": 1.5}])
 def test_webhook_invalid_body_returns_422(env, body):
     """R17"""
     r = env.client.post(URL, json=body, headers=HOOK)
     assert r.status_code == 422
     assert r.json()["error"] == "validation_error"
+
+
+def _build_consent_flow():
+    """R38: gateway real + orquestador falso comparten el aviso presentado."""
+    from orchestrator.adapters.db_query import FakeDbQuery
+    from orchestrator.adapters.gateway import FakeGatewayClient
+    from orchestrator.adapters.handover import FakeHandoverClient
+    from orchestrator.adapters.llm import FakeLLM
+    from orchestrator.adapters.rag import FakeRagClient
+    from orchestrator.adapters.repository import FakeRepository
+    from orchestrator.config import Settings as OrchestratorSettings
+    from lazaro_contracts import NormalizedMessage
+    from orchestrator.domain import Adapters as OrchestratorAdapters
+    from orchestrator.domain import process_channel_message
+    from orchestrator.privacy import ConversationTexts
+
+    texts = ConversationTexts(
+        notice_text="Aviso e2e",
+        notice_version="v1",
+        greeting="Hola",
+        accepted_reply="Gracias",
+        rejected_reply="Cerrado",
+        login_reminder="Inicia sesión",
+        suspended_reply="Suspendido",
+        unsupported_reply="Solo texto",
+        confirm_button_reply="Pulsa el botón",
+    )
+    repo = FakeRepository()
+    repo.save_conversation_texts(texts, "admin-1", FIXED_NOW)
+    orchestrator_settings = OrchestratorSettings(
+        service_token=SERVICE_TOKEN, privacy_retention_days="30"
+    )
+    orchestrator_gateway = FakeGatewayClient()
+    orchestrator_adapters = OrchestratorAdapters(
+        repository=repo,
+        rag=FakeRagClient(),
+        llm=FakeLLM(),
+        gateway=orchestrator_gateway,
+        handover=FakeHandoverClient(),
+        db_query=FakeDbQuery(),
+        clock=lambda: FIXED_NOW,
+        new_id=lambda: "case-1",
+    )
+
+    class OrchestratorClient:
+        def post_message(self, request):
+            process_channel_message(request, orchestrator_settings, orchestrator_adapters)
+
+    gateway_settings = Settings(
+        service_token=SERVICE_TOKEN,
+        telegram_webhook_secret=WEBHOOK_SECRET,
+        telegram_bot_token=BOT_TOKEN,
+        dedup_ttl_seconds=123,
+    )
+    client = TestClient(
+        create_app(
+            gateway_settings,
+            Adapters(
+                FakeTelegramClient(),
+                FakeDedupStore(),
+                OrchestratorClient(),
+                clock=lambda: FIXED_NOW,
+            ),
+        )
+    )
+    process_channel_message(
+        NormalizedMessage(
+            channel="telegram",
+            external_user_id="55",
+            external_chat_id="77",
+            external_message_id="present-1",
+            kind="text",
+            text="Hola",
+            received_at=FIXED_NOW,
+        ),
+        orchestrator_settings,
+        orchestrator_adapters,
+    )
+    options = orchestrator_gateway.blocks_sent[-1][2][-1]
+    proof = dict(zip(options.option_ids, options.option_proofs))["privacy.accept"]
+    return client, repo, texts, proof, orchestrator_adapters
+
+
+def test_webhook_callback_reaches_orchestrator_and_persists_the_decision():
+    """R38: webhook real → botón canónico → consentimiento persistido con prueba."""
+    from orchestrator.domain import ConversationState
+    from orchestrator.privacy import notice_sha256
+
+    client, repo, texts, proof, _adapters = _build_consent_flow()
+
+    response = client.post(
+        URL,
+        json=callback_update(data=f"privacy.accept:{proof}", callback_id="cb-e2e"),
+        headers=HOOK,
+    )
+
+    assert response.status_code == 200
+    [consent] = repo.privacy_consents
+    assert consent.result == "accepted"
+    assert consent.button_id == "privacy.accept"
+    assert consent.external_message_id == "cb-e2e"
+    assert consent.notice_version == "v1"
+    assert consent.notice_sha256 == notice_sha256(texts.notice_text)
+    [contact] = repo.contacts.values()
+    assert repo.conversation_states[contact.id][0] == ConversationState.AWAITING_LOGIN
+
+
+def test_webhook_callback_from_another_chat_does_not_consume_the_challenge():
+    """R38, R40: el mismo usuario desde otro chat no registra ni consume el desafío."""
+    client, repo, _texts, proof, adapters = _build_consent_flow()
+
+    wrong_chat = client.post(
+        URL,
+        json=callback_update(
+            data=f"privacy.accept:{proof}", callback_id="cb-wrong", chat_id=88
+        ),
+        headers=HOOK,
+    )
+
+    assert wrong_chat.status_code == 200
+    assert repo.privacy_consents == []
+    assert adapters.consent_challenges.get("telegram", "55") is not None
+
+    right_chat = client.post(
+        URL,
+        json=callback_update(
+            data=f"privacy.accept:{proof}", callback_id="cb-right", chat_id=77
+        ),
+        headers=HOOK,
+    )
+
+    assert right_chat.status_code == 200
+    [consent] = repo.privacy_consents
+    assert consent.result == "accepted"
+    assert consent.external_message_id == "cb-right"
+    assert adapters.consent_challenges.get("telegram", "55") is None
 
 
 def test_settings_defaults(monkeypatch):

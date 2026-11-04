@@ -154,10 +154,15 @@ def test_valid_answer_resets_the_streak(env):
 
 
 def test_valid_answer_after_handover_opens_a_new_streak(env):
-    """R6, R8: tras una derivación, una respuesta válida permite una racha nueva."""
+    """R6, R8; #37 R13: el asesor devuelve el caso y una respuesta válida abre racha."""
+    from orchestrator.domain import ConversationEvent, apply_conversation_event
+
     env.settings.auto_handover_failure_threshold = 1
     _fail(env, 1)
     assert len(env.handover.requests) == 1
+    apply_conversation_event(
+        _contact(env).id, ConversationEvent.ADVISOR_RESOLVED, env.adapters
+    )
     env.rag.results = _chunks()
     env.llm.reply = _valid_reply()
     env.post(update_id=2)

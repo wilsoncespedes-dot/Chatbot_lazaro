@@ -1,0 +1,8 @@
+{
+  "free_text_allowed": false,
+  "max_options": 3,
+  "min_list_options": 4,
+  "max_list_options": 10,
+  "supports_links": true,
+  "requires_template": true
+}

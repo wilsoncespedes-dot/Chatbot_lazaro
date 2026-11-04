@@ -1,0 +1,10 @@
+[
+  {
+    "type": "text",
+    "text": "Elige una opción:"
+  },
+  {
+    "type": "options",
+    "options": ["Pedidos", "Pagos", "Devoluciones"]
+  }
+]

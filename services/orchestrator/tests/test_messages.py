@@ -102,10 +102,15 @@ def test_no_results_event_saved(env):
 
 
 def test_handover_event_saved(env):
-    """R11; #32: umbral 1 para conservar la derivación en el primer fallo."""
+    """R11; #32; #37 R13: tras la derivación, el asesor devuelve y vuelve el flujo."""
+    from orchestrator.domain import ConversationEvent, apply_conversation_event
+
     env.settings.auto_handover_failure_threshold = 1
     env.post(text="quiero un asesor")
     assert ("handover", "user_request") in env.events()
+    apply_conversation_event(
+        env.repo.contacts[10].id, ConversationEvent.ADVISOR_RESOLVED, env.adapters
+    )
     env.rag.results = []
     env.post(text="algo raro", update_id=2)
     assert ("handover", "no_relevant_chunks") in env.events()

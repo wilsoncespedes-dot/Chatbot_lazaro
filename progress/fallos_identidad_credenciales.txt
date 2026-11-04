@@ -1,0 +1,83 @@
+FFF                                                                      [100%]
+================================== FAILURES ===================================
+______________ test_identity_texts_do_not_gate_the_consent_flow _______________
+
+env = Env(client=<starlette.testclient.TestClient object at 0x000001710A10C050>, repo=<orchestrator.adapters.repository.Fake...ewayClient object at 0x000001710A10C440>, clock=[datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)])
+
+    def test_identity_texts_do_not_gate_the_consent_flow(env):
+        """R9: `login_link_label` y `session_closed_reply` no entran en `consent_configured`."""
+        env.repo.save_conversation_texts(
+            replace(
+                env.repo.get_conversation_texts(),
+                login_link_label="",
+                session_closed_reply="",
+            ),
+            "admin-1",
+            FIXED_NOW,
+        )
+
+>       assert consent_configured(env.settings, env.adapters) is True
+E       AssertionError: assert False is True
+E        +  where False = consent_configured(Settings(app_env='development', service_token='svc-token-centinela', database_url='', rag_url='', handover_url='', tel...redential_expiry_notice_days=5, identity_logout_commands='/salir,cerrar sesion,cerrar sesión', password_scrypt_n=32768), Adapters(repository=<orchestrator.adapters.repository.FakeRepository object at 0x000001710A013620>, rag=<orchestrator....10>, consent_shown=set(), consent_challenges=<orchestrator.privacy.ConsentChallengeStore object at 0x000001710A0AE350>))
+E        +    where Settings(app_env='development', service_token='svc-token-centinela', database_url='', rag_url='', handover_url='', tel...redential_expiry_notice_days=5, identity_logout_commands='/salir,cerrar sesion,cerrar sesión', password_scrypt_n=32768) = Env(client=<starlette.testclient.TestClient object at 0x000001710A10C050>, repo=<orchestrator.adapters.repository.Fake...ewayClient object at 0x000001710A10C440>, clock=[datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)]).settings
+E        +    and   Adapters(repository=<orchestrator.adapters.repository.FakeRepository object at 0x000001710A013620>, rag=<orchestrator....10>, consent_shown=set(), consent_challenges=<orchestrator.privacy.ConsentChallengeStore object at 0x000001710A0AE350>) = Env(client=<starlette.testclient.TestClient object at 0x000001710A10C050>, repo=<orchestrator.adapters.repository.Fake...ewayClient object at 0x000001710A10C440>, clock=[datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)]).adapters
+
+services\orchestrator\tests\test_conversation_texts.py:168: AssertionError
+_______ test_accept_button_sends_text_and_link_to_same_channel_and_chat _______
+
+env_factory = <function make_env at 0x000001710A068EB0>
+
+    def test_accept_button_sends_text_and_link_to_same_channel_and_chat(env_factory):
+        """R1: tras Acepto, `LinkBlock` al mismo canal/chat y mismo contacto."""
+        env = _env(env_factory)
+        env.present(user=10, chat=100)
+        response = env.post_button(PRIVACY_ACCEPT_BUTTON, user=10, chat=100)
+>       assert response.status_code == 200
+E       assert 202 == 200
+E        +  where 202 = <Response [202 Accepted]>.status_code
+
+services\orchestrator\tests\test_identity_link.py:98: AssertionError
+_________________ test_two_concurrent_sessions_only_one_wins __________________
+
+    def test_two_concurrent_sessions_only_one_wins():
+        """R27: dos tokens del mismo perfil en hilos \u2192 un `ok` y un `conflict`."""
+        repo = FakeRepository()
+        profile = _credential(repo)
+        one = _contact(repo, "10")
+        two = _contact(repo, "11")
+        repo.add_login_link("h1", one.id, "telegram", "chat-10", NOW, NOW + timedelta(minutes=15))
+        repo.add_login_link("h2", two.id, "telegram", "chat-11", NOW, NOW + timedelta(minutes=15))
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+
+        def worker(token_hash: str, session_id: str) -> None:
+            barrier.wait(timeout=5)
+            results.append(repo.start_client_session(token_hash, profile.id, session_id, NOW))
+
+        threads = [
+            threading.Thread(target=worker, args=("h1", "s1")),
+            threading.Thread(target=worker, args=("h2", "s2")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert sorted(results) == ["conflict", "ok"]
+        unused = "h1" if results[0] == "conflict" else "h2"
+>       assert repo.get_login_link(unused, NOW) is not None
+E       AssertionError: assert None is not None
+E        +  where None = get_login_link('h2', datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc))
+E        +    where get_login_link = <orchestrator.adapters.repository.FakeRepository object at 0x000001710A10FB60>.get_login_link
+
+services\orchestrator\tests\test_identity_repository.py:154: AssertionError
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\Wilso\proyectos\chatbot-lazaro\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED services/orchestrator/tests/test_conversation_texts.py::test_identity_texts_do_not_gate_the_consent_flow
+FAILED services/orchestrator/tests/test_identity_link.py::test_accept_button_sends_text_and_link_to_same_channel_and_chat
+FAILED services/orchestrator/tests/test_identity_repository.py::test_two_concurrent_sessions_only_one_wins

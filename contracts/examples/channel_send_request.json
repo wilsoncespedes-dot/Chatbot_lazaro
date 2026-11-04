@@ -1,0 +1,10 @@
+{
+  "channel": "whatsapp",
+  "destination": "573001112233",
+  "blocks": [
+    {
+      "type": "text",
+      "text": "Tu pedido está en camino."
+    }
+  ]
+}

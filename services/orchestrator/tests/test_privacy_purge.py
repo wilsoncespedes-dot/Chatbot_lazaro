@@ -144,6 +144,8 @@ def test_response_and_purge_run_are_saved(env):
         "case_links": 0,
         "auto_handover_outcomes": 0,
         "auto_handover_streaks": 0,
+        "tool_calls": 0,
+        "conversation_summaries": 0,
     }
 
 
@@ -202,12 +204,15 @@ def test_postgres_purge_uses_the_documented_order_and_parameters():
         "case_links": 1,
         "auto_handover_outcomes": 1,
         "auto_handover_streaks": 1,
+        "tool_calls": 0,
+        "conversation_summaries": 0,
     }
     assert conn.commits == 2 and conn.rollbacks == 0
     statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]
     starts = ["SELECT id FROM contacts", "DELETE FROM case_links", "DELETE FROM contacts",
               "DELETE FROM auto_handover_outcomes", "DELETE FROM auto_handover_streaks",
-              "DELETE FROM messages", "DELETE FROM events", "INSERT INTO privacy_purge_runs"]
+              "DELETE FROM messages", "DELETE FROM events", "DELETE FROM tool_calls",
+              "DELETE FROM conversation_summaries", "INSERT INTO privacy_purge_runs"]
     positions = [next(i for i, (sql, _) in enumerate(statements) if sql.startswith(start))
                  for start in starts]
     assert positions == sorted(positions)
@@ -304,6 +309,55 @@ class _FailingConn:
 
     def rollback(self):
         self.rollbacks += 1
+
+
+def test_r9_r42_purge_deletes_old_tool_calls_and_keeps_suppressions(env):
+    """R9, R42: la retención purga `tool_calls` y nunca las solicitudes de supresión."""
+    env.repo.add_tool_call(
+        "c1", None, "active", "buscar_base_conocimiento", "rule", "allowed",
+        "ok", "sha", "", CUTOFF - timedelta(seconds=1),
+    )
+    env.repo.add_tool_call(
+        "c1", None, "active", "buscar_base_conocimiento", "rule", "allowed",
+        "ok", "sha", "", CUTOFF,
+    )
+    env.repo.create_or_get_pending_suppression(
+        "s1", "p1", "c1", "telegram", CUTOFF - timedelta(seconds=1)
+    )
+
+    response = _purge(env)
+
+    assert response.json()["deleted"]["tool_calls"] == 1
+    assert "s1" in env.repo.suppression_requests
+
+
+def test_tool_calls_of_an_inactive_contact_are_purged(env):
+    """R9: los `tool_calls` de un contacto inactivo se borran aunque sean recientes."""
+    contact = env.repo.get_or_create_contact(10, 100, NOW)
+    env.repo.contact_created_at[contact.id] = CUTOFF - timedelta(days=1)
+    env.repo.add_tool_call(
+        contact.id, None, "active", "buscar_base_conocimiento", "rule", "allowed",
+        "ok", "sha", "", NOW,
+    )
+
+    response = _purge(env)
+
+    assert env.repo.tool_calls == []
+    assert response.json()["deleted"]["tool_calls"] == 1
+
+
+def test_postgres_purge_deletes_tool_calls_but_not_suppression_requests():
+    """R9, R42: el SQL de purga incluye `tool_calls` y no toca `suppression_requests`."""
+    conn = _Conn()
+    repo = PostgresRepository("postgresql://x", connect=lambda: conn, new_id=lambda: "n")
+
+    repo.purge_personal_data(CUTOFF, NOW)
+
+    statements = [sql for sql, _ in conn.log]
+    assert any(sql.startswith("DELETE FROM tool_calls") for sql in statements)
+    assert not any(
+        sql.startswith("DELETE FROM suppression_requests") for sql in statements
+    )
 
 
 def test_purge_rolls_back_atomically_when_a_statement_fails():

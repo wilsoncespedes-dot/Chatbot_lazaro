@@ -676,3 +676,18 @@ def test_admin_settings_validate_ranges(name, value):
     """R1, R10, R11: los valores fuera de rango se rechazan."""
     with pytest.raises(ValidationError):
         Settings(**{name: value})
+
+
+def test_navigation_links_to_new_admin_sections(env):
+    """R70: la navegación incluye clientes, plantillas, ajustes y métricas."""
+    _create_profile(env)
+    _login_ok(env)
+    page = env.client.get("/admin")
+    assert page.status_code == 200
+    for href in (
+        "/admin/clientes",
+        "/admin/plantillas",
+        "/admin/ajustes",
+        "/admin/metricas",
+    ):
+        assert f'href="{href}"' in page.text

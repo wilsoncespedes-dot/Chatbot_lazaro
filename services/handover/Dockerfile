@@ -8,6 +8,7 @@ COPY contracts/lazaro_contracts ./lazaro_contracts
 COPY services/handover/handover ./handover
 COPY scripts/vencer_casos.py ./vencer_casos.py
 COPY scripts/purgar_datos.py ./purgar_datos.py
+COPY scripts/avisar_vencimientos.py ./avisar_vencimientos.py
 RUN useradd --create-home --uid 10001 app
 USER app
 EXPOSE 8000

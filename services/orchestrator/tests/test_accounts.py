@@ -354,3 +354,64 @@ def test_postgres_consume_link_token_is_atomic_single_statement():
     assert "used_at IS NULL" in consumed[0]
     assert "expires_at >" in consumed[0]
     assert "UPDATE profiles SET telegram_user_id" in consumed[0]
+
+
+# --- R4, R5 (#35): rol del token de solo lectura -----------------------------------------
+
+
+def test_get_link_token_role_returns_role_only_for_valid_tokens(env):
+    """R4, R5: solo un token vigente devuelve el rol y la lectura no muta nada."""
+    profile = env.repo.create_profile("asesor1", "asesor", "hash", FIXED_NOW)
+    env.repo.add_link_token(
+        "valid", profile.id, FIXED_NOW + timedelta(minutes=15)
+    )
+    env.repo.add_link_token("expired", profile.id, FIXED_NOW)
+    env.repo.add_link_token(
+        "used", profile.id, FIXED_NOW + timedelta(minutes=15)
+    )
+    env.repo.link_tokens["used"].used_at = FIXED_NOW
+
+    assert env.repo.get_link_token_role("valid", FIXED_NOW) == "asesor"
+    assert env.repo.get_link_token_role("expired", FIXED_NOW) is None
+    assert env.repo.get_link_token_role("used", FIXED_NOW) is None
+    assert env.repo.get_link_token_role("unknown", FIXED_NOW) is None
+
+    assert env.repo.link_tokens["valid"].used_at is None
+    assert env.repo.link_tokens["valid"].expires_at == FIXED_NOW + timedelta(minutes=15)
+    assert env.repo.profiles[profile.id].telegram_user_id is None
+
+
+def test_postgres_get_link_token_role_is_single_select():
+    """R4, R5: Postgres resuelve el rol con un único SELECT y sin escrituras."""
+    statements: list[str] = []
+
+    class Cursor:
+        def execute(self, sql, params=()):
+            statements.append(sql)
+
+        def fetchall(self):
+            return [("asesor",)]
+
+    class Conn:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    repo = PostgresRepository(
+        "postgresql://x", connect=lambda: Conn(), new_id=lambda: "p1"
+    )
+    assert repo.get_link_token_role("hash", FIXED_NOW) == "asesor"
+
+    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 1
+    assert "used_at IS NULL" in selects[0]
+    assert "expires_at >" in selects[0]
+    joined = " ".join(statements).upper()
+    assert "UPDATE " not in joined
+    assert "INSERT " not in joined
+    assert "DELETE " not in joined

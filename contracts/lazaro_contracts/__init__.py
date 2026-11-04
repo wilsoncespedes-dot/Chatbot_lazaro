@@ -18,12 +18,33 @@ from .cases import (
     CaseListStatus,
     CaseReplyRequest,
     CaseReplyResponse,
+    CaseTransferRequest,
+    CaseTransferResponse,
     CheckTimeoutsRequest,
     CheckTimeoutsResponse,
     HandoverReason,
     HandoverRequest,
     HandoverResponse,
     LastMessage,
+)
+from .channels import (
+    MAX_LIST_OPTIONS,
+    MAX_OPTION_COUNT,
+    MAX_OPTION_LENGTH,
+    MIN_LIST_OPTIONS,
+    Channel,
+    ChannelCapabilities,
+    ChannelSendRequest,
+    DeliveryStatus,
+    LinkBlock,
+    ListBlock,
+    MessageKind,
+    NormalizedMessage,
+    OptionsBlock,
+    ResponseBlock,
+    ResponseBlocks,
+    TemplateBlock,
+    TextBlock,
 )
 from .chunks import (
     ChunkActiveRequest,
@@ -32,6 +53,7 @@ from .chunks import (
     ChunkUpdateRequest,
     ChunkUpdateResponse,
 )
+from .credentials import ExpiryNoticeRunRequest, ExpiryNoticeRunResponse
 from .common import (
     DEFAULT_CASE_LIST_LIMIT,
     MAX_CASE_LIST_LIMIT,
@@ -53,7 +75,13 @@ from .manuals import (
     ManualUploadRequest,
     ManualUploadResponse,
 )
-from .messages import MessageRequest, MessageResponse, SendRequest, SendResponse
+from .messages import (
+    MessageRequest,
+    MessageResponse,
+    SendRequest,
+    SendResponse,
+    normalize_legacy_message,
+)
 from .privacy import PrivacyPurgeRequest, PrivacyPurgeResponse
 from .search import SearchRequest, SearchResponse, SearchResult
 
@@ -62,6 +90,24 @@ __all__ = [
     "MessageResponse",
     "SendRequest",
     "SendResponse",
+    "NormalizedMessage",
+    "Channel",
+    "MessageKind",
+    "DeliveryStatus",
+    "TextBlock",
+    "OptionsBlock",
+    "ListBlock",
+    "LinkBlock",
+    "TemplateBlock",
+    "ResponseBlock",
+    "ResponseBlocks",
+    "ChannelCapabilities",
+    "ChannelSendRequest",
+    "MAX_OPTION_COUNT",
+    "MAX_OPTION_LENGTH",
+    "MIN_LIST_OPTIONS",
+    "MAX_LIST_OPTIONS",
+    "normalize_legacy_message",
     "SearchRequest",
     "SearchResult",
     "SearchResponse",
@@ -85,6 +131,8 @@ __all__ = [
     "CaseAssignResponse",
     "CaseAuthorizeRequest",
     "CaseAuthorizeResponse",
+    "CaseTransferRequest",
+    "CaseTransferResponse",
     "CaseClientMessageRequest",
     "CaseClientMessageResponse",
     "CaseListAction",
@@ -96,6 +144,8 @@ __all__ = [
     "CheckTimeoutsResponse",
     "PrivacyPurgeRequest",
     "PrivacyPurgeResponse",
+    "ExpiryNoticeRunRequest",
+    "ExpiryNoticeRunResponse",
     "ErrorResponse",
     "HealthResponse",
     "SERVICE_TOKEN_HEADER",

@@ -39,22 +39,29 @@ Todo error tiene la forma `{"error": "<codigo>", "message": "<texto>"}` (modelo
 |------|----------------------|-------|--------|
 | 401  | `unauthorized`       | todas las rutas del contrato | falta `X-Service-Token` o no coincide con `SERVICE_TOKEN` |
 | 422  | `validation_error`   | todas | el cuerpo no valida contra el modelo (el servicio sustituye la respuesta 422 por defecto de FastAPI por `{error, message}`) |
-| 403  | `forbidden`          | `/cases/{id}/authorize`, `/cases/{id}/reply`, `/cases/{id}/close`, `/cases/{id}/assign` | el asesor no está autorizado para esa acción sobre el caso (S12) |
+| 403  | `forbidden`          | `/cases/{id}/authorize`, `/cases/{id}/reply`, `/cases/{id}/close`, `/cases/{id}/assign`, `/cases/{id}/transfer` | el asesor no está autorizado para esa acción sobre el caso (S12) |
 | 404  | `not_found`          | `/cases/{id}/reply`, `/cases/{id}/close` | el caso no existe |
 | 409  | `case_closed`        | `/cases/{id}/assign`, `/cases/{id}/reply` | el caso está cerrado (S11) |
 | 415  | `unsupported_format` | `/manuals` | el archivo no es PDF ni DOCX |
 | 422  | `empty_document`     | `/manuals` | archivo vacío o sin texto extraíble |
 | 502  | `telegram_error`     | `/send` | la API de Telegram falla |
-| 502  | `upstream_error`     | `/cases/{id}/reply` | la llamada a `POST /send` del gateway falla |
+| 502  | `upstream_error`     | `/send` (variante canónica), `/cases/{id}/reply` | falla el adaptador del canal o la llamada a `POST /send` del gateway |
 | 503  | `privacy_not_configured` | `/privacy/purge` | falta `PRIVACY_RETENTION_DAYS` (o, en handover, `PRIVACY_ACTIVE_CASE_MAX_DAYS`); no se borra nada |
 | 500  | `internal_error`     | todas | error inesperado; nunca se devuelve el stack trace |
 
 ### Mensajes repetidos
 
 `update_id` (el id que Telegram asigna a cada actualización) es el
-identificador único por mensaje. El orquestador guarda los `update_id` ya
-vistos; ante un `update_id` ya visto responde `202` con `status` = `duplicate`
-sin reprocesar el mensaje (no busca, no responde, no crea casos).
+identificador único por mensaje en el payload Telegram histórico. El
+orquestador guarda los `update_id` ya vistos; ante un `update_id` ya visto
+responde `202` con `status` = `duplicate` sin reprocesar el mensaje (no busca,
+no responde, no crea casos).
+
+En el vocabulario multicanal la clave de idempotencia es la pareja no ambigua
+`(channel, external_message_id)`, tanto en Redis como en el orquestador. El
+mismo `external_message_id` en dos canales distintos son dos mensajes
+distintos. El payload Telegram histórico se traduce a `channel = telegram` y
+`external_message_id = str(update_id)`.
 
 ### Salud
 
@@ -63,6 +70,66 @@ Los 4 servicios (`telegram_gateway`, `orchestrator`, `rag`, `handover`) exponen
 `{"status": "ok", "service": "<nombre>"}` (modelo `HealthResponse`), donde
 `<nombre>` es el nombre del servicio.
 
+## Mensaje normalizado y respuesta abstracta
+
+El núcleo no interpreta protocolos de canal. Los adaptadores traducen la
+entrada a `NormalizedMessage` y la salida a una lista de bloques
+(`ResponseBlocks`). Telegram conserva su payload histórico; WhatsApp usa el
+adaptador falso hasta que exista el proveedor real (#43).
+
+### NormalizedMessage
+
+`POST /messages` acepta el payload legacy `MessageRequest` o un
+`NormalizedMessage` canónico. La unión se decide por los campos presentes.
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `channel` | `telegram` \| `whatsapp` | sí | canal de origen |
+| `external_user_id` | texto (1–128) | sí | id de usuario del canal |
+| `external_chat_id` | texto (1–128) | sí | chat del canal |
+| `external_message_id` | texto (1–128) | sí | id del mensaje del proveedor; en Telegram es `update_id` |
+| `kind` | `text` \| `button` \| `unsupported` | sí | tipo de contenido |
+| `text` | texto (1–4096) | si `kind = text` | contenido de texto |
+| `button_id` | texto (1–128) | si `kind = button` | id canónico del botón pulsado |
+| `button_proof` | texto (1–128) | no | prueba HMAC truncada de la versión/hash del aviso que originó el botón (S15) |
+| `received_at` | fecha ISO 8601 con zona | sí | momento de recepción en UTC |
+
+En Telegram, un `callback_query` se normaliza con el id del callback como
+`external_message_id` y con el id canónico del botón (no el texto visible) como
+`button_id`. La prueba `button_proof` viaja junto al botón y permite al
+orquestador descartar clics de avisos obsoletos o manipulados (S15).
+
+`client_id` no viaja desde los adaptadores: lo resuelve el flujo de identidad
+posterior. Un campo no declarado se rechaza con `422 validation_error`.
+
+### ResponseBlocks
+
+La respuesta abstracta es una lista no vacía de bloques con discriminador
+`type`; como máximo un bloque de enlace por respuesta.
+
+| Bloque | Campo `type` | Regla |
+|--------|--------------|-------|
+| `TextBlock` | `text` | texto de 1 a 4096 caracteres |
+| `OptionsBlock` | `options` | máximo 3 opciones y 20 caracteres por opción; `option_ids` y `option_proofs` opcionales, alineados con `options`, para pintar botones interactivos (S15) |
+| `ListBlock` | `list` | de 4 a 10 opciones |
+| `LinkBlock` | `link` | un texto y una URL; máximo un enlace por respuesta |
+| `TemplateBlock` | `template` | nombre y variables de una plantilla aprobada |
+
+### ChannelCapabilities
+
+Antes de enviar texto libre, el núcleo consulta las capacidades del adaptador.
+Fuera de la ventana de 24 horas de WhatsApp (`free_text_allowed = false`,
+`requires_template = true`) solo se envía una plantilla aprobada. Los estados de
+entrega se normalizan al vocabulario `sent`, `delivered`, `read` o `failed`.
+
+### Variante canónica de POST /send
+
+Además del `SendRequest` legacy, `POST /send` acepta `ChannelSendRequest` con
+`channel`, `destination` y `blocks` (lista de `ResponseBlock`). El `telegram_gateway`
+elige el adaptador y aplica el control de capacidad antes de enviar. Si el canal
+no puede enviar texto libre responde `422 validation_error`; si el adaptador
+falla o no está configurado, `502 upstream_error`.
+
 ## Rutas
 
 ### POST /messages
@@ -70,6 +137,9 @@ Los 4 servicios (`telegram_gateway`, `orchestrator`, `rag`, `handover`) exponen
 - **Expone:** orchestrator
 - **Llama:** telegram_gateway (por cada mensaje de texto recibido en el webhook)
 - **Modelos:** `MessageRequest` → `MessageResponse`
+
+También acepta el request canónico `NormalizedMessage` (ver «Mensaje
+normalizado y respuesta abstracta»). La respuesta y los errores no cambian.
 
 #### Request
 
@@ -103,6 +173,9 @@ Los 4 servicios (`telegram_gateway`, `orchestrator`, `rag`, `handover`) exponen
 - **Llama:** orchestrator, handover (avisos a asesores y aviso de vencimiento al cliente)
 - **Modelos:** `SendRequest` → `SendResponse`
 
+También acepta la variante canónica `ChannelSendRequest` (canal, destino y
+bloques abstractos), descrita en «Mensaje normalizado y respuesta abstracta».
+
 #### Request
 
 | Campo | Tipo | Obligatorio | Descripción |
@@ -123,8 +196,9 @@ Los 4 servicios (`telegram_gateway`, `orchestrator`, `rag`, `handover`) exponen
 | HTTP | error | Cuándo |
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
-| 422 | validation_error | el cuerpo no valida contra `SendRequest` |
+| 422 | validation_error | el cuerpo no valida contra `SendRequest` o `ChannelSendRequest`; el canal no puede enviar texto libre |
 | 502 | telegram_error | la API de Telegram falla |
+| 502 | upstream_error | el adaptador del canal falla o no está configurado |
 | 500 | internal_error | error inesperado |
 
 ### POST /search
@@ -521,6 +595,46 @@ asignado; asignar un caso `closed` responde `409` con `error` = `case_closed`
 | 409 | case_closed | el caso está cerrado (S11) |
 | 500 | internal_error | error inesperado |
 
+### POST /cases/{id}/transfer
+
+- **Expone:** handover
+- **Llama:** orchestrator (panel de asesores, #41)
+- **Modelos:** `CaseTransferRequest` → `CaseTransferResponse`
+
+`{id}` es el `case_id` (identificador, 1–64 caracteres). Reasigna un caso
+`assigned` del asesor que lo tiene al asesor destino. Solo el asesor asignado
+puede transferirlo y ambos deben estar en `ADVISOR_CHAT_IDS`; el caso no cambia
+de estado y no se envía aviso por Telegram al destino (S6). Asignar a uno mismo
+o a un asesor no registrado responde `422` sin modificar el caso.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `advisor_id` | identificador | sí | asesor actual del caso (S6) |
+| `target_advisor_id` | identificador | sí | asesor registrado que recibe el caso |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `assigned` | sí | siempre `assigned` |
+| `case_id` | identificador | sí | caso transferido |
+| `advisor_id` | identificador | sí | nuevo asesor asignado (`target_advisor_id`) |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida o el destino no es un asesor registrado distinto del actor |
+| 403 | forbidden | el asesor no está registrado o el caso no está asignado a él; el caso no cambia |
+| 404 | not_found | el caso no existe |
+| 409 | case_closed | el caso está cerrado |
+| 500 | internal_error | error inesperado |
+
 ### POST /cases/{id}/authorize
 
 - **Expone:** handover
@@ -595,6 +709,44 @@ handover envía el texto al asesor asignado y responde `200` con `status` =
 | 422 | validation_error | el cuerpo no valida contra `CaseClientMessageRequest` |
 | 404 | not_found | el caso no existe |
 | 502 | upstream_error | falló el envío al asesor (la llamada a `POST /send` del gateway falla) |
+| 500 | internal_error | error inesperado |
+
+### POST /credentials/expiry-notices
+
+- **Expone:** orchestrator
+- **Llama:** `scripts/avisar_vencimientos.py` (worker `expiry_notice_worker`)
+- **Modelos:** `ExpiryNoticeRunRequest` → `ExpiryNoticeRunResponse`
+
+Ejecuta una pasada de avisos de vencimiento de credenciales de clientes. No
+envía datos personales en el cuerpo ni en la respuesta.
+
+#### Request
+
+El cuerpo es el objeto vacío `{}`.
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| (sin campos) | — | — | — |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `enabled` | booleano | sí | `false` si `expiry_notice.enabled` está desactivado; no se envía nada |
+| `candidates` | entero ≥ 0 | sí | credenciales candidatas consideradas en la pasada |
+| `sent_text` | entero ≥ 0 | sí | avisos enviados como texto libre |
+| `sent_template` | entero ≥ 0 | sí | avisos enviados con plantilla |
+| `failed` | entero ≥ 0 | sí | envíos fallidos |
+| `skipped` | objeto `{motivo: entero}` | sí | motivos: `out_of_hours`, `no_chat`, `no_text`, `no_template`, `already_notified` |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no es `{}` |
 | 500 | internal_error | error inesperado |
 
 ### POST /privacy/purge
@@ -700,3 +852,4 @@ contrato.
 | S12 | Autorización de asesores (`POST /cases/{id}/authorize`). Solo son asesores los chat_id de `ADVISOR_CHAT_IDS` (hasta que existan el panel y la verificación de cuentas); un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `403` con `error` = `forbidden`. Responder (`reply`): un caso `open` o `timed_out` lo responde cualquier asesor registrado y la primera respuesta lo asigna; un caso `assigned` solo lo responde el asesor asignado. Cerrar (`close`): un caso `open` o `timed_out` lo cierra cualquier asesor registrado; un caso `assigned` solo lo cierra el asesor asignado, salvo un caso huérfano. Caso huérfano: un caso `assigned` cuyo `advisor_id` es nulo o ya no está en `ADVISOR_CHAT_IDS`. Un caso huérfano lo cierra cualquier asesor registrado: `POST /cases/{id}/close` lo pasa a `closed` y `authorize` con `action` = `close` responde `200` con `allowed` = `true`; cerrarlo no es reasignarlo. Un caso huérfano no lo responde ni lo asigna ningún otro asesor: `POST /cases/{id}/reply` y `authorize` con `action` = `reply` responden `403` con `error` = `forbidden`, y `POST /cases/{id}/assign` responde `403` con `error` = `forbidden` sin modificar el caso, como con cualquier caso asignado a otro asesor. Sin reasignación y sin rol supervisor. Las mismas reglas se aplican en `POST /cases/{id}/reply` (el orquestador responde `403` sin enviar nada al cliente), `POST /cases/{id}/close` y `POST /cases/{id}/assign` (handover responde `403` sin modificar el caso); asignar un caso ya `assigned` (S11) solo responde `200` al asesor asignado y otro asesor recibe `403`. Esto cambia el `200` sin cambios que S11 daba en la #9 a cualquier asesor: el asesor asignado sigue recibiendo `200` sin cambios. Precedencia de errores en `POST /cases/{id}/authorize`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`: `403` (asesor no registrado) → `404` (caso inexistente) → `409` (caso `closed`; en `POST /cases/{id}/close`, `200` sin cambios por S8) → `403` (caso asignado a otro asesor), escalón que no se aplica a `POST /cases/{id}/close` ni a `authorize` con `action` = `close` sobre un caso huérfano (para ellos, superados los tres primeros escalones, el cierre está permitido). En `POST /cases/{id}/reply` el orquestador autoriza antes de comprobar si el caso existe: un `advisor_id` no registrado recibe `403` con `error` = `forbidden` aunque el caso no exista. `POST /cases/{id}/close` sobre un caso `closed` sigue S8: `200` sin cambios para cualquier asesor registrado, aunque no sea el asignado; `authorize` con `action` = `close` sobre un caso `closed` responde `409`. `POST /cases/{id}/reply` sobre un caso `closed` responde `409` con `error` = `case_closed`, sin enviar nada al cliente (el orquestador propaga el `409` de `authorize`). Si handover no está disponible para autorizar, el orquestador falla cerrado: no envía la respuesta y responde `502` con `upstream_error` (la fila `502 upstream_error` ya publicada de `POST /cases/{id}/reply`). La autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado; la identidad por persona llega con la #16 (remitente del webhook validado) o con el panel y la verificación de cuentas. Retirada de un asesor: antes de quitar su chat_id de `ADVISOR_CHAT_IDS`, el asesor cierra sus casos; al arrancar, handover registra cuántos casos huérfanos hay, sin sus ids. | — |
 | S13 | Solo se reenvían al asesor, con `POST /cases/{id}/client-message`, los mensajes de un cliente cuyo caso está `assigned`; con un caso `open`, con `not_assigned` o con `404` sigue el flujo actual (RAG, rechazo o traspaso). Si el reenvío falla (`502`), el cliente recibe un texto fijo y no se vuelve al RAG. Los comandos de asesor `/responder <case_id> <texto>` y `/cerrar <case_id>` llegan por `POST /messages`, cuyo contrato no cambia; un mensaje de un asesor que no es `/responder` ni `/cerrar` sigue el flujo actual, como el de cualquier cliente. Los comandos se autorizan con las reglas de S12; en ellos el `advisor_id` es el `telegram_user_id` del update validado con `TELEGRAM_WEBHOOK_SECRET`, nunca un id escrito en el texto del mensaje, y la pertenencia a `ADVISOR_CHAT_IDS` se comprueba con ese `telegram_user_id`, no con el `chat_id`; por eso un id de grupo (negativo) de `ADVISOR_CHAT_IDS` no puede usar los comandos. | — |
 | S14 | `GET /cases` lista solo los casos que el asesor puede gestionar según S12: `open` y `timed_out` con `actions` = `reply`, `assign`, `close`; `assigned` al solicitante con `actions` = `reply`, `close`; huérfanos (`assigned` con `advisor_id` nulo o fuera de `ADVISOR_CHAT_IDS`) con `actions` = `close`. Nunca incluye casos `closed` ni `assigned` a otro asesor registrado. Orden por `created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Límite `CASE_LIST_LIMIT` (default 50, máximo 200) aplicado después de filtrar; sin cursor en v1. Un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `200` con la lista vacía, sin registrar denegación. | `CASE_LIST_LIMIT = 50` |
+| S15 | Los botones de consentimiento viajan como `OptionsBlock` con `options`, `option_ids` y `option_proofs` alineados. Cada `option_proof` es `HMAC-SHA256(service_token, "<channel>:<external_user_id>:<external_chat_id>:<button_id>:<notice_version>:<notice_sha256>:<nonce>")` truncado a 32 hex. El nonce es aleatorio por presentación y el orquestador conserva en memoria los proofs pendientes por identidad/canal/chat; compara identidad, canal, chat y política vigentes, exige ausencia de consentimiento vigente y consume atómicamente el proof aceptado/rechazado. Repeticiones, pruebas viejas o ajenas se descartan sin registrar consentimiento, borrar contenido ni cambiar estado. El gateway pinta teclado inline con `callback_data = "<button_id>:<option_proof>"` y normaliza `callback_query` a `kind=button`, `button_id` canónico y `button_proof`. La prueba no contiene datos personales en claro, mide 32 caracteres y cabe en el límite de 64 bytes de `callback_data` de Telegram. | — |

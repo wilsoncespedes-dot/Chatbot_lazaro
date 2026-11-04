@@ -16,6 +16,12 @@ ERROR_MESSAGES = {
     "validation_error": "Los datos enviados no son válidos.",
     "empty_document": "El archivo está vacío o no contiene texto.",
     "upstream_error": "El servicio de manuales no está disponible.",
+    "client_not_found": "El cliente no existe.",
+    "credential_revoked": "La credencial está revocada.",
+    "template_exists": "Ya existe una plantilla con ese nombre.",
+    "template_not_found": "La plantilla no existe.",
+    "invalid_transition": "La transición de estado no está permitida.",
+    "notice_version_required": "Debes indicar una versión nueva al cambiar el texto legal.",
 }
 
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+")
@@ -92,6 +98,12 @@ def render_page(title: str, body_html: str, csrf: str | None = None) -> str:
             '<li><a href="/admin/events">Eventos recientes</a></li>'
             '<li><a href="/admin/manuals">Manuales</a></li>'
             '<li><a href="/admin/categories">Categorías</a></li>'
+            '<li><a href="/admin/texts">Textos del flujo</a></li>'
+            '<li><a href="/admin/clientes">Clientes</a></li>'
+            '<li><a href="/admin/plantillas">Plantillas</a></li>'
+            '<li><a href="/admin/ajustes">Ajustes</a></li>'
+            '<li><a href="/admin/metricas">Métricas</a></li>'
+            '<li><a href="/admin/supresiones">Supresiones</a></li>'
             "</ul></nav>\n"
         )
     return (
@@ -340,6 +352,265 @@ def render_categories(categories, threshold: float, csrf: str, error: str | None
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
     return render_page("Categorías", body, csrf)
+
+
+TEXT_FIELD_LABELS = {
+    "notice_text": "Texto legal de tratamiento de datos",
+    "notice_version": "Versión del texto legal",
+    "greeting": "Saludo",
+    "accepted_reply": "Confirmación al aceptar",
+    "rejected_reply": "Mensaje de cierre al rechazar",
+    "login_reminder": "Recordatorio de inicio de sesión",
+    "suspended_reply": "Aviso de servicio suspendido",
+    "unsupported_reply": "Respuesta a contenido no textual",
+    "active_welcome": "Bienvenida y temas",
+    "confirm_button_reply": "Petición de confirmar con el botón",
+    "login_link_label": "Texto del enlace de inicio de sesión",
+    "session_closed_reply": "Aviso al cerrar la sesión",
+    "expiry_notice": "Aviso de vencimiento de credencial",
+    "out_of_hours_reply": "Respuesta de traspaso fuera de horario",
+    "closing_reply": "Aviso al cerrar un caso",
+    "topics_list": "Lista de temas de la bienvenida",
+}
+
+
+def render_conversation_texts(
+    texts,
+    csrf: str,
+    error: str | None = None,
+    versions: dict[str, int] | None = None,
+) -> str:
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    for field, label in TEXT_FIELD_LABELS.items():
+        value = getattr(texts, field)
+        version = (versions or {}).get(field)
+        version_text = str(version) if version is not None else "sin historial"
+        rows.append(
+            f'<label>{_esc(label)} '
+            f'<textarea name="{_esc(field)}" maxlength="4096" required>'
+            f"{_esc(value)}</textarea></label>"
+            f'<p>Versión vigente: <code>{_esc(version_text)}</code> '
+            f'<a href="/admin/texts/{quote(field, safe="")}/historial">Historial</a></p>'
+        )
+    fields_html = "".join(rows)
+    body = (
+        f"{error_html}"
+        '<form method="post" action="/admin/texts">'
+        f"{csrf_field(csrf)}"
+        f"{fields_html}"
+        '<button type="submit">Guardar textos</button>'
+        "</form>"
+        '<p>La versión legal se guarda junto al texto; al cambiarla, los '
+        "clientes deberán aceptar de nuevo antes de continuar.</p>"
+    )
+    return render_page("Textos del flujo", body, csrf)
+
+
+def render_text_history(field: str, versions, csrf: str) -> str:
+    rows = "".join(
+        "<tr>"
+        f"<td>{_esc(item.version)}</td>"
+        f"<td>{_esc(item.created_by)}</td>"
+        f"<td>{_esc(item.created_at.isoformat())}</td>"
+        f"<td>{_esc(item.value)}</td>"
+        "</tr>"
+        for item in versions
+    )
+    body = (
+        f'<p><a href="/admin/texts">Volver a textos</a></p>'
+        "<table><thead><tr><th>Versión</th><th>Autor</th><th>Fecha</th>"
+        f"<th>Valor</th></tr></thead><tbody>{rows}</tbody></table>"
+    )
+    return render_page(f"Historial de {field}", body, csrf)
+
+
+def render_clients(clients, csrf: str, error: str | None = None) -> str:
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    for client in clients:
+        path = quote(client.profile_id, safe="")
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(client.username)}</td>"
+            f"<td>{_esc(client.status)}</td>"
+            f"<td>{_esc(client.valid_from.isoformat())}</td>"
+            f"<td>{_esc(client.valid_until.isoformat())}</td>"
+            f"<td>{_esc(client.days_remaining)}</td>"
+            f"<td>{'Sí' if client.has_active_session else 'No'}</td>"
+            f"<td>{_esc(client.expiry_notice_status or '')}</td>"
+            "<td>"
+            f'<form method="post" action="/admin/clientes/{path}/renovar">'
+            f"{csrf_field(csrf)}"
+            '<button type="submit">Renovar</button>'
+            "</form>"
+            f'<form method="post" action="/admin/clientes/{path}/revocar">'
+            f"{csrf_field(csrf)}"
+            '<button type="submit">Revocar</button>'
+            "</form>"
+            f'<form method="post" action="/admin/clientes/{path}/cerrar-sesion">'
+            f"{csrf_field(csrf)}"
+            '<button type="submit">Cerrar sesión</button>'
+            "</form>"
+            "</td>"
+            "</tr>"
+        )
+    body = (
+        f"{error_html}"
+        '<form method="post" action="/admin/clientes">'
+        f"{csrf_field(csrf)}"
+        '<label>Usuario <input name="username" autocomplete="off" required></label>'
+        '<label>Contraseña <input type="password" name="password" '
+        'autocomplete="new-password" required></label>'
+        '<label>Válida desde <input type="date" name="valid_from"></label>'
+        '<label>Válida hasta <input type="date" name="valid_until"></label>'
+        '<button type="submit">Crear cliente</button>'
+        "</form>"
+        "<table><thead><tr><th>Usuario</th><th>Estado</th><th>Desde</th>"
+        "<th>Hasta</th><th>Días</th><th>Sesión</th><th>Aviso</th>"
+        f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    )
+    return render_page("Clientes", body, csrf)
+
+
+def render_templates(templates, csrf: str, error: str | None = None) -> str:
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    for template in templates:
+        path = quote(template.name, safe="")
+        approved = (
+            f"{template.approved_by} {template.approved_at.isoformat()}"
+            if template.approved_by is not None and template.approved_at is not None
+            else "—"
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(template.name)}</td>"
+            f"<td>{_esc(template.purpose)}</td>"
+            f"<td>{_esc(template.language)}</td>"
+            f"<td>{_esc(template.variables)}</td>"
+            f"<td>{_esc(template.body)}</td>"
+            f"<td>{_esc(template.status)}</td>"
+            f"<td>{_esc(approved)}</td>"
+            "<td>"
+            f'<form method="post" action="/admin/plantillas/{path}">'
+            f"{csrf_field(csrf)}"
+            f'<label>Idioma <input name="language" value="{_esc(template.language)}" required></label>'
+            f'<label>Variables <input name="variables" value="{_esc(template.variables)}" required></label>'
+            f'<label>Texto <textarea name="body" maxlength="1024" required>{_esc(template.body)}</textarea></label>'
+            '<button type="submit">Guardar</button>'
+            "</form>"
+            f'<form method="post" action="/admin/plantillas/{path}/estado">'
+            f"{csrf_field(csrf)}"
+            '<select name="status">'
+            + "".join(
+                f'<option value="{_esc(status)}">{_esc(status)}</option>'
+                for status in ("pending", "approved", "rejected", "paused", "draft")
+            )
+            + "</select>"
+            '<button type="submit">Cambiar estado</button>'
+            "</form>"
+            "</td>"
+            "</tr>"
+        )
+    create = (
+        '<form method="post" action="/admin/plantillas">'
+        f"{csrf_field(csrf)}"
+        '<label>Nombre <input name="name" required></label>'
+        '<label>Propósito <select name="purpose">'
+        '<option value="advisor_reply">advisor_reply</option>'
+        '<option value="suppression_result">suppression_result</option>'
+        '<option value="expiry_notice">expiry_notice</option>'
+        "</select></label>"
+        '<label>Idioma <input name="language" value="es" required></label>'
+        '<label>Variables <input name="variables" value="0" required></label>'
+        '<label>Texto de referencia <textarea name="body" maxlength="1024" required></textarea></label>'
+        '<button type="submit">Crear plantilla</button>'
+        "</form>"
+    )
+    body = (
+        f"{error_html}{create}\n"
+        "<table><thead><tr><th>Nombre</th><th>Propósito</th><th>Idioma</th>"
+        "<th>Variables</th><th>Texto</th><th>Estado</th><th>Aprobación</th>"
+        f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    )
+    return render_page("Plantillas de WhatsApp", body, csrf)
+
+
+def render_settings(settings_rows, csrf: str, error: str | None = None) -> str:
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    inputs = []
+    for row in settings_rows:
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(row['key'])}</td>"
+            f"<td>{_esc(row['effective'])}</td>"
+            f"<td>{_esc(row['default'])}</td>"
+            f"<td>{_esc(row['origin'])}</td>"
+            f"<td>{_esc(row['range'])}</td>"
+            "</tr>"
+        )
+        inputs.append(
+            f'<label>{_esc(row["key"])} '
+            f'<input name="{_esc(row["key"])}" value="{_esc(row["effective"])}" '
+            f'placeholder="{_esc(row["default"])}"></label>'
+        )
+    body = (
+        f"{error_html}"
+        "<table><thead><tr><th>Clave</th><th>Efectivo</th><th>Por defecto</th>"
+        f"<th>Origen</th><th>Rango</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        '<form method="post" action="/admin/ajustes">'
+        f"{csrf_field(csrf)}"
+        f"{''.join(inputs)}"
+        '<button type="submit">Guardar ajustes</button>'
+        "</form>"
+        "<p>Deja un campo vacío para volver al valor de entorno.</p>"
+    )
+    return render_page("Ajustes operativos", body, csrf)
+
+
+def render_metrics(metrics, csrf: str) -> str:
+    first = metrics.first_response
+    average = f"{first.avg_minutes:.1f}" if first.avg_minutes is not None else "—"
+    median = (
+        f"{first.median_minutes:.1f}" if first.median_minutes is not None else "—"
+    )
+    advisors = "".join(
+        f"<tr><td>{_esc(label)}</td><td>{_esc(count)}</td></tr>"
+        for label, count in metrics.per_advisor
+    ) or '<tr><td colspan="2">Sin datos</td></tr>'
+    reasons = "".join(
+        f"<tr><td>{_esc(reason)}</td><td>{_esc(count)}</td></tr>"
+        for reason, count in metrics.escalation_reasons
+    ) or '<tr><td colspan="2">Sin datos</td></tr>'
+    samples = "".join(
+        f"<li>{_esc(at.isoformat())}: {_esc(text)}</li>"
+        for at, text in metrics.unanswered_samples
+    ) or "<li>Sin muestras</li>"
+    body = (
+        f'<p>Intervalo: {_esc(metrics.since.isoformat())} — '
+        f"{_esc(metrics.until.isoformat())}</p>"
+        "<h3>Primera respuesta</h3>"
+        f"<p>Casos: {_esc(first.cases)} · Respondidos: {_esc(first.answered)} · "
+        f"Sin respuesta: {_esc(first.unanswered)} · Promedio: {_esc(average)} min · "
+        f"Mediana: {_esc(median)} min</p>"
+        "<h3>Conversaciones por asesor</h3>"
+        f"<table><tbody>{advisors}</tbody></table>"
+        "<h3>Motivos de escalamiento</h3>"
+        f"<table><tbody>{reasons}</tbody></table>"
+        f"<h3>Preguntas sin respuesta: {_esc(metrics.unanswered_total)}</h3>"
+        f"<ul>{samples}</ul>"
+    )
+    return render_page("Métricas", body, csrf)
 
 
 def render_error(status: int, code: str, csrf: str | None = None) -> str:

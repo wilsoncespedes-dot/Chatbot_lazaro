@@ -691,6 +691,183 @@
       ],
       "sdd": true,
       "status": "done"
+    },
+    {
+      "id": 35,
+      "name": "consentimiento_antes_de_datos",
+      "title": "No guardar datos personales antes del consentimiento",
+      "description": "Corrige un riesgo legal actual (docs/especificacion.md, contradicción 2 del análisis de brechas): en orchestrator/domain.py process_message, las rutas /start <token>, /consultar y los comandos de asesor (/responder, /cerrar) llaman a get_or_create_contact y escriben eventos o auditoría ANTES de _privacy_gate. El Decreto 1377 de 2013 exige pedir la autorización a más tardar al recoger los datos.",
+      "acceptance": [
+        "Regla: mientras un remitente no tenga consentimiento para la versión vigente de la política (`has_privacy_consent`), el orquestador no persiste ningún dato ligado a esa persona: ni `contacts`, ni `messages`, ni `events`, ni `db_query_audit`, ni `case_links`, ni `auto_handover_*`, ni escribe `telegram_user_id` en `profiles`. La única escritura permitida es el propio registro de consentimiento en `privacy_consents`.",
+        "Excepción de personal: un remitente cuyo `telegram_user_id` ya está vinculado a un perfil con rol `asesor` o `admin` puede usar `/consultar`, `/responder` y `/cerrar` sin pasar por la compuerta de privacidad, como hoy. La comprobación del perfil es de solo lectura y ocurre antes de cualquier escritura.",
+        "Un remitente sin perfil de personal que envía `/consultar`, `/responder`, `/cerrar` o un comando de asesor mal formado pasa por `_privacy_gate` como cualquier texto: recibe el aviso de privacidad (o la confirmación si el texto es la frase de aceptación) y no se crea ningún dato; tras aceptar, esos textos no le dan permisos de personal (la autorización existente se mantiene).",
+        "`/start <token>`: la búsqueda del token es de solo lectura. Si el token pertenece a un perfil con rol `asesor` o `admin`, el vínculo se hace como hoy. Si pertenece a un perfil `cliente` y el remitente no tiene consentimiento vigente, no se consume el token ni se escribe nada: el remitente recibe el aviso de privacidad y el token sigue usable hasta su vencimiento; tras aceptar, el mismo `/start <token>` funciona.",
+        "Los almacenamientos transitorios del gateway (deduplicación por `update_id` en Redis con `DEDUP_TTL_SECONDS` y el búfer de agrupación con TTL) y `processed_updates` (solo `update_id`, sin datos de la persona) se mantienen; el spec lo deja documentado como tratamiento técnico mínimo necesario para responder, y `docs/proyecto.md` lo refleja.",
+        "Prueba de seguridad obligatoria: para cada ruta (texto libre, `/consultar`, `/responder`, `/cerrar`, comando mal formado, `/start` con token de cliente) enviada por un remitente sin consentimiento, el repositorio falso queda sin ninguna fila ligada a ese `telegram_user_id` salvo, si aceptó, la de `privacy_consents`.",
+        "Pruebas de no regresión: el personal vinculado sigue usando sus comandos sin consentimiento; un cliente con consentimiento vigente sigue el flujo actual sin cambios; un cambio de `PRIVACY_NOTICE_VERSION` vuelve a exigir aceptación antes de guardar datos nuevos.",
+        "Fuera de alcance: botones Acepto/No acepto, registro de rechazo y máquina de estados (fase 2 de docs/especificacion.md). Cambio sin contratos nuevos. `./init.sh` queda verde."
+      ],
+      "dependencies": [
+        20,
+        26,
+        27
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 36,
+      "name": "nucleo_multicanal",
+      "title": "Núcleo multicanal Telegram y WhatsApp",
+      "description": "Normaliza mensajes entrantes y respuestas abstractas; conserva Telegram e incorpora un adaptador WhatsApp detrás de una interfaz de proveedor.",
+      "acceptance": [
+        "El núcleo recibe el mismo modelo normalizado desde Telegram y WhatsApp y produce bloques de respuesta independientes del canal.",
+        "El adaptador Telegram existente conserva su comportamiento y hay una interfaz de proveedor WhatsApp con FakeWhatsAppAdapter inyectable; el proveedor real queda para la feature posterior #43.",
+        "La identidad técnica previa al login y el consentimiento se guardan/consultan con clave (channel, external_user_id); un ID WhatsApp nunca se usa como telegram_user_id y las cuentas de distintos canales no se vinculan hasta login verificado en #38.",
+        "La deduplicación usa (canal, mensaje_externo_id): repetidos del mismo canal se descartan y el mismo ID en canales distintos no colisiona.",
+        "Antes de enviar texto libre, el núcleo consulta la capacidad del adaptador; WhatsApp fuera de su ventana de 24 horas solo permite plantillas aprobadas.",
+        "Las pruebas cubren normalización, equivalencia de respuesta, aislamiento de identidades y consentimientos aunque IDs numéricos coincidan, duplicados, ventana y comportamiento falso de proveedor; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        35
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 37,
+      "name": "estados_y_consentimiento",
+      "title": "Estados de conversación y consentimiento versionado",
+      "description": "Implementa los siete estados de cliente, consentimiento verificable por botón, cierre/reinicio y tratamiento de contenido no textual, integrado con los canales multicanal.",
+      "acceptance": [
+        "La máquina implementa y prueba las transiciones definidas en docs/especificacion.md, con las transiciones dependientes de identidad cubiertas por #38.",
+        "El consentimiento guarda texto/versión y evidencia del mensaje y botón; un cambio de versión exige nueva aceptación antes de habilitar conversación.",
+        "Rechazar cierra la conversación y reiniciar desde Cerrada comienza en Nuevo; audio, imagen, documento y sticker reciben respuesta fija sin cambiar el estado.",
+        "Los textos legales y mensajes fijos se leen de configuración administrada por el panel, no se redactan con IA ni se fijan como constantes de código.",
+        "Telegram envía Aceptar/Rechazar como botones interactivos y convierte callback_query en el botón canónico; los tests cubren el camino webhook → decisión persistida.",
+        "Cada botón queda ligado de forma autenticada a versión/hash, canal, id_externo y chat receptor, con desafío aleatorio de un solo uso; un clic antiguo, repetido, manipulado o reenviado a otro chat no registra otra decisión, borra contenido ni cambia estado.",
+        "No se duplican ni relajan las garantías preconsentimiento de #35; pruebas de transición y seguridad pasan con ./init.sh."
+      ],
+      "dependencies": [
+        36
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 38,
+      "name": "identidad_credenciales",
+      "title": "Identidad web, credenciales y sesiones",
+      "description": "Añade login web externo al chat, enlace firmado de un solo uso y asociación automática del chat actual tras validar credenciales; no requiere enlace manual del número. Incluye vigencia, estados de credencial, sesiones únicas y límites de intentos.",
+      "acceptance": [
+        "El bot envía al chat actual un enlace firmado, de un solo uso y con caducidad configurable; al validar usuario y contraseña, el token asocia automáticamente ese chat/canal con el cliente autenticado.",
+        "La verificación no requiere una vinculación manual ni comparar el número/ID del canal con un dato de perfil; ese ID solo enruta el chat y el token enlaza la sesión que inició el login.",
+        "Las credenciales se almacenan con hash seguro; el inicio de sesión aplica vigencia, revocación, bloqueo temporal configurable y no filtra contraseñas al chat.",
+        "Una credencial no puede tener dos sesiones activas; cierre manual o inactividad configurable finaliza la sesión y permite un nuevo enlace.",
+        "Credencial vencida deja al cliente en Sin acceso; la renovación administrativa reactiva acceso y la revocación lo deniega.",
+        "Pruebas cubren token vencido/reutilizado, credencial válida/vencida/revocada, sesión simultánea, cierre e intentos; ./init.sh queda verde."
+      ],
+      "dependencies": [
+        20,
+        37
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 39,
+      "name": "harness_ia_por_estado",
+      "title": "Harness de IA con herramientas y datos por estado",
+      "description": "Limita herramientas por estado, conecta RAG y consultas propias del cliente con vistas RLS, y aplica guardrails y escalamiento.",
+      "acceptance": [
+        "Una matriz explícita determina qué herramientas puede invocar cada estado y la autorización se aplica en código antes de ejecutar cualquier herramienta.",
+        "La identidad de cliente proviene de la sesión autenticada; las consultas personales leen únicamente vistas permitidas con RLS y no pueden seleccionar tablas directamente.",
+        "Las herramientas de supresión solo crean una solicitud/caso; ninguna herramienta de IA borra datos.",
+        "La respuesta RAG conserva validación de fuentes y citas; las reglas de escalamiento incluyen solicitud del cliente, fallo repetido y frustración según configuración.",
+        "Evaluación cubre acceso entre clientes, inyección, herramienta prohibida, consentimiento y fuentes inválidas; ./init.sh y reviewer pasan."
+      ],
+      "dependencies": [
+        38
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 40,
+      "name": "memoria_por_cliente",
+      "title": "Historial resumido y memoria permanente por cliente",
+      "description": "Añade resumen del historial por conversación y memoria relevante persistente por cliente, disponible entre sesiones y canales y visible al asesor.",
+      "acceptance": [
+        "Al cerrar o resumir una conversación, el sistema conserva un resumen de historial y memoria permanente asociada al cliente autenticado, sin mezclar chats ni clientes.",
+        "La memoria nunca contiene contraseñas ni datos sensibles y se entrega a la IA solo para el cliente autenticado.",
+        "El asesor puede consultar la memoria del cliente dentro de sus permisos de caso.",
+        "La supresión ejecutada por persona elimina la memoria y los historiales comprendidos en la solicitud; la retención automática no elimina memoria permanente.",
+        "Pruebas demuestran continuidad entre sesiones/canales, aislamiento y borrado; ./init.sh queda verde."
+      ],
+      "dependencies": [
+        39
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 41,
+      "name": "panel_asesores_multicanal",
+      "title": "Panel de asesores multicanal y solicitudes de supresión",
+      "description": "Evoluciona el panel de asesores existente para operar conversaciones Telegram/WhatsApp, presencia y ventanas de canal, auditoría y cola de supresión.",
+      "acceptance": [
+        "Conversaciones escaladas desde ambos canales aparecen en bandeja con canal, estado, espera y asignación, respetando roles y autorización por caso.",
+        "El asesor puede responder, transferir, resolver y devolver el caso; cada envío usa el adaptador del canal y respeta la ventana/plantilla de WhatsApp.",
+        "El panel muestra historial, resumen, datos permitidos del cliente y memoria, y registra auditoría de acciones sin exponer otros clientes.",
+        "Las solicitudes de supresión aparecen en una cola con prioridad y fecha límite; una persona autorizada ejecuta la acción y registra su resultado.",
+        "Pruebas cubren los dos canales, permisos, auditoría, respuesta y supresión; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        40
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 42,
+      "name": "administracion_y_avisos",
+      "title": "Administración de clientes, textos y avisos",
+      "description": "Amplía el panel administrativo existente con clientes/credenciales, textos versionados, plantillas, horarios, parámetros operativos y avisos de vencimiento.",
+      "acceptance": [
+        "El administrador crea clientes y credenciales, renueva por el periodo configurado, revoca y cierra sesiones; días restantes se calculan desde fechas, no con contador decremental.",
+        "El panel administra textos legales/fijos versionados, plantillas y su aprobación, horarios y plazos/tiempos de producto sin redeploy.",
+        "El sistema envía un aviso de vencimiento según el plazo configurable y usa plantilla aprobada si WhatsApp está fuera de ventana; no duplica avisos.",
+        "Las métricas requeridas incluyen tiempo de primera respuesta, conversaciones por asesor, motivos de escalamiento y preguntas sin respuesta.",
+        "Pruebas cubren permisos, cambios efectivos de configuración, renovación y aviso único; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
+    },
+    {
+      "id": 43,
+      "name": "proveedor_whatsapp_real",
+      "title": "Integración del proveedor real de WhatsApp",
+      "description": "Implementa el adaptador de producción del proveedor WhatsApp que el dueño elija, detrás de la interfaz definida en #36.",
+      "acceptance": [
+        "El dueño selecciona Cloud API de Meta, Twilio o 360dialog antes de redactar el spec; no se incorpora un proveedor por suposición.",
+        "El adaptador valida la firma de webhooks, normaliza mensajes entrantes, envía texto/plantillas según ventana, y traduce estados y errores del proveedor.",
+        "Los secretos y parámetros del proveedor se configuran por entorno; no se leen ni almacenan en el repositorio.",
+        "Pruebas con cliente falso cubren firma válida/inválida, webhook duplicado, envío dentro/fuera de ventana, plantillas, fallos y estados de entrega; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        42
+      ],
+      "sdd": true,
+      "status": "done",
+      "auto_approved": true
     }
   ]
 }

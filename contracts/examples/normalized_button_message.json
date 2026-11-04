@@ -1,0 +1,10 @@
+{
+  "channel": "telegram",
+  "external_user_id": "55",
+  "external_chat_id": "77",
+  "external_message_id": "10",
+  "kind": "button",
+  "button_id": "privacy.accept",
+  "button_proof": "0123456789abcdef0123456789abcdef",
+  "received_at": "2026-11-03T16:05:12Z"
+}

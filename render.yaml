@@ -48,6 +48,25 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      # WhatsApp Cloud API (#43): proveedor de producción de Meta.
+      - key: WHATSAPP_ENABLED
+        value: "false"
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: "v21.0"
+      - key: WHATSAPP_TEMPLATE_LANGUAGE
+        value: "es"
+      - key: WHATSAPP_INTERACTIVE_BODY_TEXT
+        value: "Elige una opción:"
+      - key: WHATSAPP_WINDOW_HOURS
+        value: "24"
       # La frase de aceptación es la misma que valida el orchestrator (#27/#30).
       - key: MESSAGE_GROUPING_ACCEPT_PHRASE
         fromService:
@@ -104,6 +123,63 @@ services:
           type: pserv
           name: handover
           envVarKey: PRIVACY_RETENTION_DAYS
+      # identidad de clientes (#38)
+      - key: IDENTITY_PUBLIC_BASE_URL
+        sync: false
+      - key: IDENTITY_LINK_SIGNING_KEY
+        sync: false
+      # harness de IA por estado (#39): apagado hasta configurar vistas de clientes
+      - key: HARNESS_ROUTER_ENABLED
+        value: "false"
+      - key: CLIENT_DATA_ENABLED
+        value: "false"
+      # memoria por cliente (#40): apagada hasta la validación legal
+      - key: MEMORY_ENABLED
+        value: "false"
+      # panel de asesores multicanal (#41)
+      - key: WHATSAPP_WINDOW_HOURS
+        value: "24"
+      - key: ADVISOR_WHATSAPP_TEMPLATES
+        value: "respuesta_asesor"
+      - key: ADVISOR_RETURN_REPLY
+        value: "Te devolvemos al asistente virtual. Puedes seguir escribiendo aquí."
+      - key: ADVISOR_HISTORY_LOOKBACK_MINUTES
+        value: "60"
+      - key: ADVISOR_HISTORY_MAX_MESSAGES
+        value: "100"
+      - key: ADVISOR_PRESENCE_TTL_MINUTES
+        value: "15"
+      - key: ADVISOR_INBOX_REFRESH_SECONDS
+        value: "30"
+      - key: SUPPRESSION_DEADLINE_BUSINESS_DAYS
+        value: "15"
+      - key: SUPPRESSION_DUE_SOON_BUSINESS_DAYS
+        value: "3"
+      - key: SUPPRESSION_QUEUE_EXECUTED_LIMIT
+        value: "20"
+      - key: SUPPRESSION_DONE_REPLY
+        value: "Tu solicitud de supresión de datos fue atendida."
+      - key: SUPPRESSION_RESULT_TEMPLATE
+        value: "resultado_supresion"
+      # administración y avisos (#42)
+      - key: BUSINESS_HOURS_ENABLED
+        value: "false"
+      - key: BUSINESS_HOURS_START
+        value: "06:00"
+      - key: BUSINESS_HOURS_END
+        value: "21:00"
+      - key: BUSINESS_HOURS_DAYS
+        value: "1,2,3,4,5,6,7"
+      - key: BUSINESS_HOURS_UTC_OFFSET_MINUTES
+        value: "-300"
+      - key: EXPIRY_NOTICE_ENABLED
+        value: "true"
+      - key: EXPIRY_NOTICE_MAX_ATTEMPTS
+        value: "3"
+      - key: ADMIN_TEXT_HISTORY_LIMIT
+        value: "20"
+      - key: ADMIN_METRICS_UNANSWERED_LIMIT
+        value: "20"
 
   - type: pserv
     name: rag
@@ -160,6 +236,25 @@ services:
           type: pserv
           name: handover
           property: hostport
+
+  - type: worker
+    name: expiry-notice-worker
+    runtime: docker
+    region: virginia
+    dockerContext: .
+    dockerfilePath: services/handover/Dockerfile
+    dockerCommand: python avisar_vencimientos.py --intervalo
+    envVars:
+      - fromGroup: lazaro-compartido
+      - key: ORCHESTRATOR_URL
+        fromService:
+          type: web
+          name: orchestrator
+          property: hostport
+      - key: EXPIRY_NOTICE_INTERVAL_SECONDS
+        value: "3600"
+      - key: EXPIRY_NOTICE_HTTP_TIMEOUT_SECONDS
+        value: "120"
 
   - type: worker
     name: retention-worker

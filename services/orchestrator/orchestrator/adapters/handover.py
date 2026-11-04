@@ -20,6 +20,8 @@ from lazaro_contracts import (
     CaseCloseResponse,
     CaseListItem,
     CaseListResponse,
+    CaseTransferRequest,
+    CaseTransferResponse,
     ErrorResponse,
     HandoverRequest,
     HandoverResponse,
@@ -31,6 +33,7 @@ from ..domain import AuthorizationDenied, ForwardRejected, ServiceUnavailable
 logger = logging.getLogger(__name__)
 
 _DENIAL_CODES = {403: "forbidden", 404: "not_found", 409: "case_closed"}
+_TRANSFER_DENIAL_CODES = {**_DENIAL_CODES, 422: "validation_error"}
 _FORWARD_REJECTION_CODES = {404: "not_found", 502: "upstream_error"}
 
 
@@ -46,6 +49,10 @@ class HandoverClient(Protocol):
     ) -> CaseAuthorizeResponse: ...
 
     def list_cases(self, advisor_id: str) -> CaseListResponse: ...
+
+    def transfer(
+        self, case_id: str, advisor_id: str, target_advisor_id: str
+    ) -> CaseTransferResponse: ...
 
     def forward_client_message(
         self, case_id: str, text: str, at: datetime
@@ -158,6 +165,52 @@ class HttpHandoverClient:
                 raise ServiceUnavailable("Handover no disponible.") from None
 
         logger.error("handover_list_cases_error code=%s", response.status_code)
+        raise ServiceUnavailable("Handover no disponible.")
+
+    def transfer(
+        self, case_id: str, advisor_id: str, target_advisor_id: str
+    ) -> CaseTransferResponse:
+        try:
+            body = CaseTransferRequest(
+                advisor_id=advisor_id, target_advisor_id=target_advisor_id
+            )
+            response = httpx.post(
+                f"{self._base_url}/cases/{quote(case_id, safe='')}/transfer",
+                content=body.model_dump_json(),
+                headers={
+                    SERVICE_TOKEN_HEADER: self._service_token,
+                    "Content-Type": "application/json",
+                },
+                timeout=self._timeout,
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.error("handover_transfer_error code=%s", type(exc).__name__)
+            raise ServiceUnavailable("Handover no disponible.") from None
+
+        if response.status_code in _TRANSFER_DENIAL_CODES:
+            expected = _TRANSFER_DENIAL_CODES[response.status_code]
+            try:
+                error = ErrorResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_transfer_error code=%s", response.status_code)
+                raise ServiceUnavailable("Handover no disponible.") from None
+            if error.error != expected:
+                logger.error("handover_transfer_error code=%s", response.status_code)
+                raise ServiceUnavailable("Handover no disponible.") from None
+            raise AuthorizationDenied(error.error)
+
+        if response.status_code == 200:
+            try:
+                parsed = CaseTransferResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_transfer_error code=invalid_response")
+                raise ServiceUnavailable("Handover no disponible.") from None
+            if parsed.case_id != case_id or parsed.advisor_id != target_advisor_id:
+                logger.error("handover_transfer_error code=case_mismatch")
+                raise ServiceUnavailable("Handover no disponible.") from None
+            return parsed
+
+        logger.error("handover_transfer_error code=%s", response.status_code)
         raise ServiceUnavailable("Handover no disponible.")
 
     def authorize(
@@ -303,6 +356,8 @@ class FakeHandoverClient:
         client_message_status: str = "not_assigned",
         client_message_error: str | None = None,
         fail_client_message: bool = False,
+        transfer_error: str | None = None,
+        fail_transfer: bool = False,
         close_error: str | None = None,
         fail_close: bool = False,
         assign_error: str | None = None,
@@ -315,6 +370,7 @@ class FakeHandoverClient:
         self.try_assigned: list[tuple[str, str]] = []
         self.authorized: list[tuple[str, str, str]] = []
         self.listed: list[str] = []
+        self.transferred: list[tuple[str, str, str]] = []
         self.client_messages: list[tuple[str, str, datetime]] = []
         self.closed: list[tuple[str, str]] = []
         self.status = status
@@ -326,6 +382,8 @@ class FakeHandoverClient:
         self.client_message_status = client_message_status
         self.client_message_error = client_message_error
         self.fail_client_message = fail_client_message
+        self.transfer_error = transfer_error
+        self.fail_transfer = fail_transfer
         self.close_error = close_error
         self.fail_close = fail_close
         self.assign_error = assign_error
@@ -358,6 +416,18 @@ class FakeHandoverClient:
         if self.fail_list_cases:
             raise ServiceUnavailable("Handover caído")
         return CaseListResponse(self.case_list)
+
+    def transfer(
+        self, case_id: str, advisor_id: str, target_advisor_id: str
+    ) -> CaseTransferResponse:
+        self.transferred.append((case_id, advisor_id, target_advisor_id))
+        if self.fail_transfer:
+            raise ServiceUnavailable("Handover caído")
+        if self.transfer_error:
+            raise AuthorizationDenied(self.transfer_error)
+        return CaseTransferResponse(
+            status="assigned", case_id=case_id, advisor_id=target_advisor_id
+        )
 
     def authorize(
         self, case_id: str, advisor_id: str, action: CaseAuthorizeAction

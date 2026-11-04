@@ -58,3 +58,21 @@ class FakeLLM:
         if self.fail:
             raise ServiceUnavailable("LLM caído")
         return self.reply
+
+
+class ScriptedLLM:
+    """Devuelve en orden las respuestas de una cola; útil para router + RAG/SQL."""
+
+    def __init__(self, replies: list[str] | None = None) -> None:
+        self.replies = list(replies or [])
+        self.calls: list[tuple[str, str]] = []
+        self.fail = False
+        self.default_reply = ""
+
+    def complete(self, system: str, user: str) -> str:
+        self.calls.append((system, user))
+        if self.fail:
+            raise ServiceUnavailable("LLM caído")
+        if self.replies:
+            return self.replies.pop(0)
+        return self.default_reply

@@ -5,13 +5,22 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from lazaro_contracts import MAX_TEXT_LENGTH, MessageRequest
+from lazaro_contracts import (
+    MAX_TEXT_LENGTH,
+    DeliveryStatus,
+    MessageRequest,
+    NormalizedMessage,
+    ResponseBlock,
+    TemplateBlock,
+)
 
 if TYPE_CHECKING:
     from .adapters.dedup import DedupStore
     from .adapters.message_buffer import MessageBuffer
     from .adapters.orchestrator import OrchestratorClient
     from .adapters.telegram import TelegramClient
+    from .adapters.whatsapp import ChannelAdapter
+    from .adapters.whatsapp_window import WhatsAppWindowStore
 
 
 class DomainError(Exception):
@@ -26,6 +35,31 @@ class TelegramError(DomainError):
     status_code = 502
 
 
+class ChannelWindowClosed(DomainError):
+    code = "validation_error"
+    status_code = 422
+
+
+class TemplateNotApproved(DomainError):
+    code = "validation_error"
+    status_code = 422
+
+
+class ChannelSendFailed(DomainError):
+    code = "upstream_error"
+    status_code = 502
+
+
+class ChannelNotConfigured(DomainError):
+    code = "upstream_error"
+    status_code = 502
+
+
+class WebhookForbidden(DomainError):
+    code = "forbidden"
+    status_code = 403
+
+
 class OrchestratorError(Exception):
     """Fallo al llamar al orquestador; el webhook la captura y no llega al cliente."""
 
@@ -36,6 +70,18 @@ class IncomingUpdate:
     chat_id: int
     user_id: int
     text: str | None
+
+
+@dataclass(frozen=True)
+class IncomingCallback:
+    """`callback_query` de Telegram ya extraído, sin IO (R38)."""
+
+    update_id: int
+    chat_id: int
+    user_id: int
+    callback_id: str
+    button_id: str
+    button_proof: str | None
 
 
 def _utcnow() -> datetime:
@@ -49,6 +95,8 @@ class Adapters:
     orchestrator: "OrchestratorClient"
     clock: Callable[[], datetime] = field(default=_utcnow)
     buffer: "MessageBuffer | None" = None
+    whatsapp: "ChannelAdapter | None" = None
+    whatsapp_window: "WhatsAppWindowStore | None" = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +189,61 @@ def extract_incoming(update: dict) -> IncomingUpdate | None:
     )
 
 
+def extract_callback(update: dict) -> IncomingCallback | None:
+    """R38: acepta `callback_query` con datos canónicos y prueba del aviso.
+
+    Devuelve None para cualquier callback sin `data`, sin chat o sin receptor;
+    el webhook responde 200 sin reenviarlo.
+    """
+    callback = update.get("callback_query")
+    if not isinstance(callback, dict):
+        return None
+    data = callback.get("data")
+    if not isinstance(data, str) or not data.strip():
+        return None
+    button_id, separator, proof = data.partition(":")
+    if not button_id.strip():
+        return None
+    message = callback.get("message") if isinstance(callback.get("message"), dict) else {}
+    chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+    sender = callback.get("from") if isinstance(callback.get("from"), dict) else {}
+    chat_id = _as_int(chat.get("id"))
+    user_id = _as_int(sender.get("id"))
+    if chat_id is None and user_id is None:
+        return None
+    if chat_id is None:
+        chat_id = user_id
+    if user_id is None:
+        user_id = chat_id
+    callback_id = callback.get("id")
+    if not isinstance(callback_id, str) or not callback_id.strip():
+        callback_id = str(update["update_id"])
+    return IncomingCallback(
+        update_id=update["update_id"],
+        chat_id=chat_id,
+        user_id=user_id,
+        callback_id=callback_id,
+        button_id=button_id.strip(),
+        button_proof=proof.strip() if separator and proof.strip() else None,
+    )
+
+
+def normalize_callback(
+    callback: IncomingCallback, received_at: datetime
+) -> NormalizedMessage:
+    """R38: convierte el callback en el botón canónico del modelo común."""
+    return NormalizedMessage(
+        channel="telegram",
+        external_user_id=str(callback.user_id),
+        external_chat_id=str(callback.chat_id),
+        external_message_id=callback.callback_id,
+        kind="button",
+        button_id=callback.button_id,
+        button_proof=callback.button_proof,
+        received_at=received_at,
+    )
+
+
 def build_message_request(incoming: IncomingUpdate, now: datetime) -> MessageRequest:
     return MessageRequest(
         update_id=incoming.update_id,
@@ -149,3 +252,45 @@ def build_message_request(incoming: IncomingUpdate, now: datetime) -> MessageReq
         text=incoming.text or "",
         received_at=now,
     )
+
+
+def normalize_incoming(
+    incoming: IncomingUpdate, received_at: datetime
+) -> NormalizedMessage:
+    """R1, R3: traduce el update Telegram al mensaje común sin perder el payload legacy."""
+    return NormalizedMessage(
+        channel="telegram",
+        external_user_id=str(incoming.user_id),
+        external_chat_id=str(incoming.chat_id),
+        external_message_id=str(incoming.update_id),
+        kind="text" if incoming.text is not None else "unsupported",
+        text=incoming.text,
+        received_at=received_at,
+    )
+
+
+def send_response(
+    adapter: "ChannelAdapter",
+    destination: str,
+    blocks: Sequence[ResponseBlock],
+) -> DeliveryStatus:
+    """R7-R9: consulta las capacidades del canal antes de enviar y falla cerrado."""
+    block_list = list(blocks)
+    if not block_list:
+        raise ValueError("la respuesta no tiene bloques")
+    capabilities_for = getattr(adapter, "capabilities_for", None)
+    capabilities = (
+        capabilities_for(destination)
+        if callable(capabilities_for)
+        else adapter.capabilities()
+    )
+    has_free_text = any(not isinstance(block, TemplateBlock) for block in block_list)
+    if has_free_text and not capabilities.free_text_allowed:
+        raise ChannelWindowClosed(
+            "La ventana de atención está cerrada; solo se pueden enviar plantillas."
+        )
+    if capabilities.requires_template and has_free_text:
+        raise ChannelWindowClosed(
+            "Este canal exige una plantilla y la respuesta usa texto libre."
+        )
+    return adapter.send(destination, block_list)

@@ -15,13 +15,25 @@
           "name": "DeepSeek Flash"
         }
       }
+    },
+    "opencode-go": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenCode Go",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/go/v1"
+      },
+      "models": {
+        "deepseek-v4.1-flash": {
+          "name": "DeepSeek V4.1 Flash (OpenCode Go)"
+        }
+      }
     }
   },
   "agent": {
     "implementer": {
       "description": "Implementa una feature SDD aprobada; Claude coordina y revisa.",
       "mode": "primary",
-      "model": "deepseek/deepseek-flash",
+      "model": "opencode-go/deepseek-v4.1-flash",
       "prompt": "{file:./.opencode/agents/implementer.md}",
       "permission": {
         "*": "deny",

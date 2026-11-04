@@ -23,12 +23,18 @@ SECRET_KEYS = {
     "EMBEDDINGS_API_KEY",
     "DATABASE_URL",
     "REDIS_URL",
+    "WHATSAPP_ACCESS_TOKEN",
+    "WHATSAPP_APP_SECRET",
+    "WHATSAPP_VERIFY_TOKEN",
 }
 THIRD_PARTY_SECRETS = {
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "LLM_API_KEY",
     "EMBEDDINGS_API_KEY",
+    "WHATSAPP_ACCESS_TOKEN",
+    "WHATSAPP_APP_SECRET",
+    "WHATSAPP_VERIFY_TOKEN",
 }
 
 
@@ -196,6 +202,17 @@ def test_r32_orchestrator_trusts_proxy_headers_and_shared_group_does_not():
         assert all(
             var.get("key") != "ADMIN_TRUST_PROXY_HEADERS" for var in group["envVars"]
         )
+
+
+def test_expiry_notice_worker_uses_handover_image_and_loop():
+    """R60: el worker de avisos usa la imagen de handover y el bucle."""
+    worker = _service("expiry-notice-worker")
+    assert worker["type"] == "worker"
+    assert worker["dockerfilePath"] == "services/handover/Dockerfile"
+    assert worker["dockerCommand"] == "python avisar_vencimientos.py --intervalo"
+    assert _env_var(worker, "ORCHESTRATOR_URL")["fromService"]["type"] == "web"
+    assert _env_var(worker, "EXPIRY_NOTICE_INTERVAL_SECONDS")["value"] == "3600"
+    assert _env_var(worker, "EXPIRY_NOTICE_HTTP_TIMEOUT_SECONDS")["value"] == "120"
 
 
 def test_r28_deployment_procedure_documents_every_step():

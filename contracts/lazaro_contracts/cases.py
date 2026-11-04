@@ -86,6 +86,22 @@ class CaseAssignResponse(ContractModel):
     case_id: Identifier
 
 
+class CaseTransferRequest(ContractModel):
+    """Transferencia de un caso de un asesor a otro (#41 R26)."""
+
+    # S6: en la versión mínima, el chat_id del asesor en decimal.
+    advisor_id: Identifier
+    target_advisor_id: Identifier
+
+
+class CaseTransferResponse(ContractModel):
+    """Respuesta 200 de POST /cases/{id}/transfer (#41 R26)."""
+
+    status: Literal["assigned"]
+    case_id: Identifier
+    advisor_id: Identifier
+
+
 # S12: acciones que se autorizan.
 CaseAuthorizeAction = Literal["reply", "close"]
 

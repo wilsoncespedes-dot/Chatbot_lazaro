@@ -36,6 +36,7 @@ REQUIRED_IN_PRODUCTION = (
 )
 
 _DB_QUERY_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+_RLS_SETTING = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 
 AUTO_HANDOVER_FAILURE_ALLOWED_REASONS = ("no_relevant_chunks", "invalid_answer")
 
@@ -162,11 +163,181 @@ class Settings(BaseSettings):
     db_query_truncated_note: str = (
         "Mostrando solo las primeras filas; hay más resultados."
     )
+    # harness de IA por estado (#39)
+    harness_router_enabled: bool = False
+    harness_max_input_chars: int = Field(default=2000, ge=100, le=4096)
+    harness_injection_patterns: str = (
+        "ignora tus instrucciones,ignora tus reglas,ignora las instrucciones,"
+        "olvida tus reglas,ignore previous instructions,system prompt,"
+        "prompt de sistema,actua como administrador,modo desarrollador,jailbreak"
+    )
+    harness_frustration_escalation: bool = True
+    harness_frustration_keywords: str = (
+        "no me sirves,no me estas ayudando,esto no sirve,estoy harto,estoy harta,"
+        "pesimo servicio,que mal servicio"
+    )
+    harness_suppression_keywords: str = (
+        "borrar mis datos,borren mis datos,suprimir mis datos,eliminar mis datos,"
+        "eliminen mis datos"
+    )
+    harness_input_too_long_reply: str = (
+        "Tu mensaje es muy largo. Escríbelo en un mensaje más corto, por favor."
+    )
+    harness_tool_denied_reply: str = (
+        "No puedo hacer eso en este momento. Si necesitas ayuda, puedo pasarte con "
+        "un asesor."
+    )
+    suppression_request_reply: str = (
+        "Registramos tu solicitud de supresión de datos con el número {request_id}. "
+        "Una persona autorizada la atenderá y te informará el resultado."
+    )
+    # datos propios del cliente (#39)
+    client_data_enabled: bool = False
+    client_data_database_url: str = ""
+    client_data_views_schema: str = "mis_datos"
+    client_data_allowlist: str = ""
+    client_data_rls_setting: str = "lazaro.cliente_id"
+    client_data_max_rows: int = Field(default=20, ge=1, le=200)
+    client_data_timeout_ms: int = Field(default=5000, ge=100, le=30000)
+    client_data_max_joins: int = Field(default=1, ge=0, le=3)
+    client_data_max_reply_chars: int = Field(default=3500, ge=200, le=4000)
+    client_data_truncated_note: str = (
+        "Mostrando solo las primeras filas; hay más resultados."
+    )
+    client_data_disabled_reply: str = (
+        "La consulta de tus datos no está disponible por ahora."
+    )
+    client_data_rejected_reply: str = (
+        "No pude construir una consulta segura para esa pregunta. Intenta formularla "
+        "de otra forma."
+    )
+    client_data_unavailable_reply: str = (
+        "No se pudo consultar tus datos. Inténtalo de nuevo más tarde."
+    )
+    # memoria por cliente (#40)
+    memory_enabled: bool = False
+    memory_max_items: int = Field(default=20, ge=1, le=100)
+    memory_item_max_chars: int = Field(default=300, ge=50, le=1000)
+    memory_summary_max_chars: int = Field(default=1500, ge=200, le=4000)
+    memory_input_max_messages: int = Field(default=200, ge=10, le=1000)
+    memory_context_messages: int = Field(default=6, ge=0, le=20)
+    memory_panel_summaries: int = Field(default=5, ge=1, le=50)
+    memory_sensitive_min_digits: int = Field(default=6, ge=4, le=20)
+    memory_sensitive_keywords: str = (
+        "contraseña,contrasena,password,clave,pin,token,codigo de verificacion,cvv,"
+        "tarjeta,cuenta bancaria,cedula,pasaporte,diagnostico,enfermedad,salud,"
+        "medicamento,embarazo,discapacidad,religion,orientacion sexual,vida sexual,"
+        "partido politico,afiliacion politica,sindicato,origen etnico,raza,biometric,"
+        "huella"
+    )
+    suppression_executor_roles: str = "admin"
     privacy_notice_text: str = ""
     privacy_notice_version: str = ""
     privacy_accept_phrase: str = ""
     privacy_accepted_reply: str = ""
     privacy_retention_days: str = ""
+    conversation_greeting: str = (
+        "Hola. Antes de continuar necesitamos tu consentimiento para tratar tus datos."
+    )
+    conversation_rejected_reply: str = (
+        "Entendido. No trataremos tus datos. Si quieres empezar de nuevo, escríbenos."
+    )
+    conversation_login_reminder: str = (
+        "Para continuar, inicia sesión con el enlace que te enviamos desde el chat."
+    )
+    conversation_suspended_reply: str = (
+        "El servicio está suspendido por falta de pago. Puedes hablar con un asesor "
+        "o pedir que borren tus datos."
+    )
+    conversation_unsupported_reply: str = "Por ahora solo puedo leer mensajes de texto."
+    conversation_active_welcome: str = (
+        "Bienvenido. Puedes preguntarme sobre los temas disponibles."
+    )
+    conversation_confirm_button_reply: str = (
+        "Para aceptar el tratamiento de tus datos, pulsa el botón Acepto."
+    )
+    identity_public_base_url: str = ""
+    identity_link_signing_key: str = ""
+    identity_login_required: bool = True
+    identity_link_ttl_minutes: int = Field(default=15, ge=1, le=1440)
+    identity_session_idle_minutes: int = Field(default=60, ge=5, le=1440)
+    identity_login_max_attempts: int = Field(default=5, ge=1, le=100)
+    identity_lockout_minutes: int = Field(default=15, ge=1, le=1440)
+    credential_validity_days: int = Field(default=30, ge=1, le=366)
+    credential_expiry_notice_days: int = Field(default=5, ge=0, le=60)
+    identity_logout_commands: str = "/salir,cerrar sesion,cerrar sesión"
+    password_scrypt_n: int = Field(default=32768, ge=16384)
+    # panel de asesores multicanal (#41)
+    whatsapp_window_hours: int = Field(default=24, ge=1, le=24)
+    advisor_whatsapp_templates: str = "respuesta_asesor"
+    advisor_return_reply: str = Field(
+        default=(
+            "Te devolvemos al asistente virtual. Puedes seguir escribiendo aquí."
+        ),
+        min_length=1,
+        max_length=4096,
+    )
+    advisor_history_lookback_minutes: int = Field(default=60, ge=0, le=1440)
+    advisor_history_max_messages: int = Field(default=100, ge=10, le=500)
+    advisor_presence_ttl_minutes: int = Field(default=15, ge=1, le=240)
+    advisor_inbox_refresh_seconds: int = Field(default=30, ge=0, le=600)
+    suppression_deadline_business_days: int = Field(default=15, ge=1, le=60)
+    suppression_due_soon_business_days: int = Field(default=3, ge=0, le=30)
+    suppression_queue_executed_limit: int = Field(default=20, ge=0, le=200)
+    suppression_done_reply: str = Field(
+        default="Tu solicitud de supresión de datos fue atendida.",
+        min_length=1,
+        max_length=4096,
+    )
+    suppression_result_template: str = Field(
+        default="resultado_supresion", pattern=r"^[a-z0-9_]{1,64}$"
+    )
+    # administración y avisos (#42)
+    business_hours_enabled: bool = False
+    business_hours_start: str = "06:00"
+    business_hours_end: str = "21:00"
+    business_hours_days: str = "1,2,3,4,5,6,7"
+    business_hours_utc_offset_minutes: int = Field(default=-300, ge=-720, le=840)
+    expiry_notice_enabled: bool = True
+    expiry_notice_max_attempts: int = Field(default=3, ge=1, le=10)
+    expiry_notice_interval_seconds: int = Field(default=3600, ge=1)
+    expiry_notice_http_timeout_seconds: int = Field(default=120, ge=1)
+    admin_text_history_limit: int = Field(default=20, ge=1, le=200)
+    admin_metrics_unanswered_limit: int = Field(default=20, ge=0, le=200)
+
+    @field_validator("business_hours_start", "business_hours_end")
+    @classmethod
+    def _validate_business_time(cls, value: str) -> str:
+        if not re.fullmatch(r"^([01]\d|2[0-3]):[0-5]\d$", value):
+            raise ValueError("BUSINESS_HOURS_START/END deben tener formato HH:MM")
+        return value
+
+    @field_validator("business_hours_days")
+    @classmethod
+    def _validate_business_days(cls, value: str) -> str:
+        tokens = [token.strip() for token in value.split(",") if token.strip()]
+        try:
+            numbers = [int(token) for token in tokens]
+        except ValueError:
+            raise ValueError("BUSINESS_HOURS_DAYS debe ser una lista de enteros 1-7") from None
+        if not numbers or any(number < 1 or number > 7 for number in numbers):
+            raise ValueError("BUSINESS_HOURS_DAYS debe contener valores 1-7")
+        if len(set(numbers)) != len(numbers):
+            raise ValueError("BUSINESS_HOURS_DAYS no admite duplicados")
+        return ",".join(str(number) for number in numbers)
+
+    @model_validator(mode="after")
+    def _validate_business_range(self) -> "Settings":
+        if self.business_hours_start == self.business_hours_end:
+            raise ValueError("BUSINESS_HOURS_START y BUSINESS_HOURS_END deben ser distintos")
+        return self
+
+    @field_validator("password_scrypt_n")
+    @classmethod
+    def _validate_scrypt_n(cls, value: int) -> int:
+        if value & (value - 1):
+            raise ValueError("PASSWORD_SCRYPT_N debe ser una potencia de 2")
+        return value
 
     @field_validator("auto_handover_failure_threshold")
     @classmethod
@@ -193,6 +364,15 @@ class Settings(BaseSettings):
             )
         return ",".join(dict.fromkeys(tokens))
 
+    @field_validator("suppression_request_reply")
+    @classmethod
+    def _validate_suppression_reply(cls, value: str) -> str:
+        if "{request_id}" not in value:
+            raise ValueError(
+                "SUPPRESSION_REQUEST_REPLY debe contener {request_id}"
+            )
+        return value
+
     @field_validator("privacy_retention_days")
     @classmethod
     def _validate_retention_days(cls, value: str) -> str:
@@ -207,6 +387,41 @@ class Settings(BaseSettings):
             raise ValueError("PRIVACY_RETENTION_DAYS debe ser un entero >= 1")
         return text
 
+    @field_validator("memory_sensitive_keywords")
+    @classmethod
+    def _validate_memory_keywords(cls, value: str) -> str:
+        tokens = [token.strip() for token in value.split(",") if token.strip()]
+        if not tokens:
+            raise ValueError("MEMORY_SENSITIVE_KEYWORDS no puede estar vacío")
+        return ",".join(dict.fromkeys(tokens))
+
+    @field_validator("advisor_whatsapp_templates")
+    @classmethod
+    def _validate_advisor_templates(cls, value: str) -> str:
+        tokens = [token.strip() for token in value.split(",") if token.strip()]
+        if not tokens:
+            raise ValueError("ADVISOR_WHATSAPP_TEMPLATES no puede estar vacío")
+        pattern = re.compile(r"^[a-z0-9_]{1,64}$")
+        invalid = [token for token in tokens if not pattern.fullmatch(token)]
+        if invalid:
+            raise ValueError(
+                "ADVISOR_WHATSAPP_TEMPLATES contiene un nombre de plantilla inválido"
+            )
+        return ",".join(dict.fromkeys(tokens))
+
+    @field_validator("suppression_executor_roles")
+    @classmethod
+    def _validate_suppression_roles(cls, value: str) -> str:
+        tokens = [token.strip() for token in value.split(",") if token.strip()]
+        if not tokens:
+            raise ValueError("SUPPRESSION_EXECUTOR_ROLES no puede estar vacío")
+        invalid = [token for token in tokens if token not in ("admin", "asesor")]
+        if invalid:
+            raise ValueError(
+                "SUPPRESSION_EXECUTOR_ROLES solo admite admin o asesor"
+            )
+        return ",".join(dict.fromkeys(tokens))
+
     @model_validator(mode="after")
     def _validate_notice_phrase(self) -> "Settings":
         if self.privacy_notice_text.strip() and self.privacy_accept_phrase.strip():
@@ -216,6 +431,26 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "PRIVACY_ACCEPT_PHRASE debe aparecer en PRIVACY_NOTICE_TEXT"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_client_data(self) -> "Settings":
+        if not self.client_data_enabled:
+            return self
+        dsn = self.client_data_database_url.strip()
+        forbidden = {self.database_url.strip(), self.db_query_database_url.strip()}
+        if not dsn or dsn in forbidden:
+            raise ValueError(
+                "CLIENT_DATA_DATABASE_URL debe ser una conexión de solo lectura "
+                "distinta de DATABASE_URL y DB_QUERY_DATABASE_URL"
+            )
+        if not _DB_QUERY_IDENTIFIER.fullmatch(self.client_data_views_schema):
+            raise ValueError("CLIENT_DATA_VIEWS_SCHEMA debe ser un identificador válido")
+        if not _RLS_SETTING.fullmatch(self.client_data_rls_setting):
+            raise ValueError("CLIENT_DATA_RLS_SETTING debe tener forma esquema.clave")
+        _parse_db_query_allowlist(
+            self.client_data_allowlist, self.client_data_views_schema
+        )
         return self
 
     @model_validator(mode="after")
@@ -231,6 +466,12 @@ class Settings(BaseSettings):
         problems = production_problems(self.model_dump(), REQUIRED_IN_PRODUCTION)
         if not self.admin_cookie_secure and "ADMIN_COOKIE_SECURE" not in problems:
             problems.append("ADMIN_COOKIE_SECURE")
+        if not self.identity_public_base_url.strip().startswith("https://"):
+            problems.append("IDENTITY_PUBLIC_BASE_URL")
+        if len(self.identity_link_signing_key) < 32:
+            problems.append("IDENTITY_LINK_SIGNING_KEY")
+        if not self.identity_login_required:
+            problems.append("IDENTITY_LOGIN_REQUIRED")
         if problems:
             raise ProductionConfigError(problems)
         return self
@@ -249,6 +490,14 @@ class Settings(BaseSettings):
     @property
     def handover_keyword_list(self) -> list[str]:
         return [k.strip() for k in self.handover_keywords.split(",") if k.strip()]
+
+    @property
+    def identity_logout_command_list(self) -> tuple[str, ...]:
+        return tuple(
+            command.strip()
+            for command in self.identity_logout_commands.split(",")
+            if command.strip()
+        )
 
     @property
     def auto_handover_failure_reason_set(self) -> set[str]:
@@ -287,4 +536,51 @@ class Settings(BaseSettings):
             return {}
         return _parse_db_query_allowlist(
             self.db_query_allowlist, self.db_query_views_schema
+        )
+
+    @property
+    def harness_injection_pattern_list(self) -> list[str]:
+        return [item.strip() for item in self.harness_injection_patterns.split(",")
+                if item.strip()]
+
+    @property
+    def harness_frustration_keyword_list(self) -> list[str]:
+        return [item.strip() for item in self.harness_frustration_keywords.split(",")
+                if item.strip()]
+
+    @property
+    def harness_suppression_keyword_list(self) -> list[str]:
+        return [item.strip() for item in self.harness_suppression_keywords.split(",")
+                if item.strip()]
+
+    @property
+    def memory_sensitive_keyword_list(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.memory_sensitive_keywords.split(",")
+            if token.strip()
+        )
+
+    @property
+    def advisor_whatsapp_template_list(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.advisor_whatsapp_templates.split(",")
+            if token.strip()
+        )
+
+    @property
+    def suppression_executor_role_set(self) -> frozenset[str]:
+        return frozenset(
+            token.strip()
+            for token in self.suppression_executor_roles.split(",")
+            if token.strip()
+        )
+
+    @property
+    def client_data_allowlist_map(self) -> dict[str, tuple[str, ...]]:
+        if not self.client_data_allowlist.strip():
+            return {}
+        return _parse_db_query_allowlist(
+            self.client_data_allowlist, self.client_data_views_schema
         )

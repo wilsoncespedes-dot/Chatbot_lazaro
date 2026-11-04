@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash 'C:\\Users\\Wilso\\proyectos\\chatbot-lazaro\\.codex\\hooks\\run_tests.sh'",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && bash 'C:\\Users\\Wilso\\proyectos\\chatbot-lazaro\\.codex\\hooks\\stop_check.sh'",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}

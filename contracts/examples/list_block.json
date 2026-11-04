@@ -1,0 +1,4 @@
+{
+  "type": "list",
+  "options": ["Pedidos", "Pagos", "Devoluciones", "Horarios"]
+}

@@ -222,7 +222,7 @@ class _Cursor:
         self.log.append((sql, tuple(params)))
 
     def fetchall(self):
-        return [("c1", 10, 100)]
+        return [("c1", "telegram", "", "", 10, 100)]
 
 
 class _Conn:

@@ -1,6 +1,6 @@
 {
   "permissions": {
-    "defaultMode": "dontAsk",
+    "defaultMode": "acceptEdits",
     "allow": [
       "Bash",
       "Edit",
@@ -12,7 +12,7 @@
       "WebFetch",
       "NotebookEdit"
     ],
-    "deny": [
+    "ask": [
       "Bash(sudo *)",
       "Bash(rm -rf *)",
       "Bash(rm -fr *)",
@@ -29,18 +29,9 @@
       "Bash(shutdown *)",
       "Bash(reboot *)",
       "Bash(gh pr merge *)",
-      "Bash(gh repo delete *)",
-      "Edit(/docs/**)",
-      "Edit(/AGENTS.md)",
-      "Edit(/CLAUDE.md)",
-      "Edit(/CHECKPOINTS.md)",
-      "Edit(/init.sh)",
-      "Edit(/modo.sh)",
-      "Edit(/nocturno.sh)",
-      "Edit(/.claude/**)",
-      "Edit(/pytest.ini)",
-      "Edit(/conftest.py)",
-      "Edit(/referencias/**)",
+      "Bash(gh repo delete *)"
+    ],
+    "deny": [
       "Read(.env)",
       "Read(.env.*)",
       "Read(!.env.example)",
@@ -58,7 +49,8 @@
       "Bash(. .env*)",
       "Bash(env)",
       "Bash(printenv *)",
-      "Bash(printenv)"
+      "Bash(printenv)",
+      "Edit(/referencias/**)"
     ]
   }
 }

@@ -446,3 +446,80 @@
 ## 2026-11-02 — Feature #34 robustez_estado_traspaso_automatico (done)
 - La purga de privacidad ahora elimina outcomes vencidos y estado de rachas de contactos purgados, dentro de la transacción y con conteos auditados. Excepciones durante handover automático dejan la racha reintentable.
 - Claude reviewer APPROVED; OpenCode/DeepSeek Flash. Suite final con Redis real temporal: 2093 passed, 0 skipped, 1 warning deprecado Starlette/httpx.
+
+
+## 2026-11-03 — Feature #35 consentimiento_antes_de_datos (done)
+- El orquestador ya no persiste datos de la persona (contacts, messages, events, db_query_audit, case_links, auto_handover_*, telegram_user_id en profiles) antes del consentimiento vigente; la única escritura previa es `privacy_consents`. El personal vinculado (asesor/admin) conserva `/consultar`, `/responder`, `/cerrar` y `/start` sin compuerta; `/start <token>` de cliente no consume el token hasta aceptar.
+- Archivos principales: `services/orchestrator/orchestrator/domain.py` (`_is_linked_staff`, `process_message` reordenado: lecturas → compuerta → escrituras), `services/orchestrator/orchestrator/adapters/repository.py` (`get_link_token_role` de solo lectura), `docs/proyecto.md` §11 (tratamiento técnico mínimo: Redis dedup, búfer, `processed_updates`), R19 de `specs/privacidad_y_retencion_datos/requirements.md` marcado como reemplazado.
+- Tests: nuevo `services/orchestrator/tests/test_consent_before_data.py`; ajustes en `test_accounts.py`, `test_privacy.py`, `test_security.py` (nuevo `test_security_unconsented_client_responder_reaches_no_other_client`) y fixture autouse en `conftest.py` que aísla `Settings` del entorno del shell. `./init.sh`: 2143 passed, 1 skipped.
+- Revisión: spec y código Claude reviewer APPROVED (`progress/specreview_consentimiento_antes_de_datos.md`, `progress/review_consentimiento_antes_de_datos.md`). Writer OpenCode/DeepSeek: la primera ejecución terminó sin hacer cambios; una ejecución concurrente sí escribió el código. Un intento de corrección por 3 fallos de `init.sh` (2 por fuga de entorno en tests, 1 expectativa cambiada a propósito por R10/R11/R18).
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+## 2026-11-03 — Feature #36 nucleo_multicanal (done)
+- Mensaje y respuesta normalizados, compatibilidad Telegram legacy, `FakeWhatsAppAdapter`, bloques abstractos y reglas de ventana/plantillas. Deduplicación compuesta preserva las claves legacy.
+- Identidad y consentimiento prelogin aislados por `(channel, external_user_id)`; backfill idempotente de contactos/consentimientos Telegram conserva IDs, mensajes, relaciones y evidencia. La compuerta preconsentimiento evita persistir contactos/datos y nuevas claves de dedup; solo Telegram legacy conserva `processed_updates(update_id)` según #35.
+- Writer OpenCode/DeepSeek; spec y revisión final aprobados. T1–T14 completas; trazabilidad en `progress/impl_nucleo_multicanal.md`.
+- `./init.sh`: 2243 passed, 1 skipped, 1 warning de deprecación Starlette/httpx.
+- La integración real de WhatsApp queda para #43; login y vínculo de identidad entre canales para #38.
+
+
+## 2026-11-03 — Feature #37 estados_y_consentimiento (done)
+- Implementada la máquina de estados de conversación, consentimiento versionado mediante botones, rechazo/cierre/reinicio, textos dinámicos desde el panel y respuestas fuera del LLM para estados no activos.
+- Telegram presenta botones inline y normaliza `callback_query`. La prueba HMAC se vincula a canal, usuario, chat, botón y aviso; un nonce aleatorio por presentación se consume de forma atómica en memoria. Clics viejos, repetidos, manipulados o de otro chat no registran decisión ni borran contenido.
+- El panel admin edita texto y versión legal en `app_settings`; si faltan textos requeridos, el orquestador falla cerrado. La evidencia de consentimiento conserva versión, hash, resultado, mensaje/botón y fecha; rechazar borra el contenido personal asociado.
+- Requisitos R1–R40 trazados en `progress/impl_estados_y_consentimiento.md`. Spec aprobado; revisión de código final `APPROVED` en `progress/review_estados_y_consentimiento.md`.
+- `./init.sh`: 2298 passed, 1 skipped, 2 warnings (deprecación Starlette/httpx y acceso Pydantic a `model_fields`).
+- Writer OpenCode Go / DeepSeek V4.1 Flash. #38 implementará login/credenciales; proveedor real WhatsApp queda en #43.
+
+
+## 2026-11-03 — Feature #38 identidad_credenciales (done)
+- Spec aprobado tras 1 corrección (R25: log de acceso); revisión en `progress/review_spec_identidad_credenciales.md`.
+- Implementación por el writer OpenCode/DeepSeek; 3 fallos de tests corregidos (`progress/fallos_identidad_credenciales.txt`).
+- 1 ciclo de revisión de código: R28, R30 y detección de SQLSTATE 23505 con pg8000; re-revisión `APPROVED` en `progress/review_identidad_credenciales.md`.
+- Trazabilidad e informe en `progress/impl_identidad_credenciales.md`.
+- `./init.sh`: 2405 passed, 1 skipped.
+- Decisión abierta (default seguro): renovar una credencial revocada responde 409; la reactivación queda para #42.
+
+
+## 2026-11-04 — Feature #39 harness_ia_por_estado (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- Matriz explícita estado → herramientas (`orchestrator/harness.py`) aplicada en código antes de ejecutar; máquina de estados extraída a `orchestrator/states.py`. Router LLM opcional con parser estricto y fallback seguro; guardrails de longitud e inyección.
+- Datos propios del cliente vía `PostgresClientDataQuery` (READ ONLY, `cliente_id` de la sesión solo como parámetro, catálogo de vistas, rol sin superuser/BYPASSRLS y sonda RLS; falla cerrado). Las filas nunca vuelven al LLM.
+- Supresión solo crea `suppression_requests` y caso; ninguna herramienta borra datos. Auditoría `tool_calls` con hashes (sin texto/SQL/filas), purgada por retención. Escalamiento por solicitud, fallo repetido y frustración configurable; RAG conserva validación de fuentes y citas.
+- Writer OpenCode/DeepSeek; 3 intentos de corrección de tests (import `LinkBlock`, `Profile.id`, aserciones sobre el `ScriptedLLM` instalado; evento `escalation:user_request` en re-traspaso). Trazabilidad R1–R63 en `progress/impl_harness_ia_por_estado.md`; revisión `APPROVED` en `progress/review_harness_ia_por_estado.md`.
+- `./init.sh`: 2573 passed, 1 skipped, 2 warnings.
+
+
+## 2026-11-04 — Feature #40 memoria_por_cliente (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- Nuevo `orchestrator/memory.py` (puro): ventana de sesión, filtro de datos sensibles, depuración de resumen/memoria, prompt del resumidor y parser estricto. Resumen al cerrar sesión y al escalar; contexto `<memoria>`/`<historial>` solo para el RAG del cliente autenticado (router y SQL no la reciben).
+- Repositorio: tablas `client_memory` y `conversation_summaries`, `profile_id` en `case_links`, columnas de ejecución en `suppression_requests` (`removed_counts`). La purga por retención borra resúmenes, nunca memoria permanente; `execute_suppression` (roles `SUPPRESSION_EXECUTOR_ROLES`) borra solo lo del cliente solicitado, de forma atómica.
+- Panel asesor: `GET /asesor/cases/{case_id}/memoria` con autorización por caso antes de leer, plantilla escapada y enlace desde la lista de casos.
+- Config `MEMORY_*` validada al arrancar; `MEMORY_ENABLED=false` por defecto (prompt RAG idéntico byte a byte). `.env.example`, `render.yaml` y `docs/architecture.md` actualizados.
+- Writer OpenCode/DeepSeek; 1 intento de corrección (aserción del test R9 sobre `</historial>`; columna renombrada `deleted_counts` → `removed_counts` para no romper la prueba de migraciones de #37). Trazabilidad R1–R56 en `progress/impl_memoria_por_cliente.md`; revisión `APPROVED` en `progress/review_memoria_por_cliente.md`.
+- `./init.sh`: 2663 passed, 1 skipped, 0 failed.
+
+
+## 2026-11-04 — Feature #41 panel_asesores_multicanal (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- Panel de asesores multicanal: bandeja con conversaciones Telegram/WhatsApp (canal, estado, espera, asignación, ventana WhatsApp), filtros validados y refresco configurable, respetando roles y autorización por caso.
+- Respuesta por el adaptador del canal con control de ventana/plantilla WhatsApp (409 si la ventana está cerrada; plantillas validadas), transferencia, resolución y devolución de casos; historial, resumen, datos permitidos y memoria; auditoría de acciones sin exponer otros clientes; cola de supresión con prioridad y fecha límite.
+- Writer OpenCode/DeepSeek; 4 correcciones de tests (la última: ventana WhatsApp de la bandeja calculada con `last_user_message_at`). Spec revisado en `progress/specreview_panel_asesores_multicanal.md`; trazabilidad R1–R74 en `progress/impl_panel_asesores_multicanal.md`; revisión `APPROVED` en `progress/review_panel_asesores_multicanal.md`.
+- `./init.sh`: 2789 passed, 1 skipped.
+
+
+## 2026-11-04 — Feature #42 administracion_y_avisos (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- Panel administrativo ampliado: clientes y credenciales (crear, renovar por periodo configurado, revocar, cerrar sesión; días restantes calculados desde fechas), textos fijos/legales versionados con historial, plantillas con flujo de aprobación, horarios de atención y parámetros operativos en `app_settings` efectivos sin redeploy; auditoría de acciones sin contraseñas ni valores.
+- Avisos de vencimiento: endpoint protegido por token de servicio con reclamo atómico (un solo aviso por periodo, filas `sending` huérfanas visibles y no reintentadas), plantilla aprobada si la ventana WhatsApp está cerrada, reintentos hasta el máximo; worker `avisar_vencimientos` en `render.yaml`.
+- Métricas: tiempo de primera respuesta (media/mediana), conversaciones por asesor, motivos de escalamiento y preguntas sin respuesta (muestras truncadas y escapadas).
+- Writer OpenCode/DeepSeek; terminó en un solo intento, sin correcciones. Observaciones del spec review atendidas (partes dobles de R42/R47/R48/R53/R69 con test propio, R22, S2). Spec revisado en `progress/specreview_administracion_y_avisos.md`; trazabilidad R1–R74 en `progress/impl_administracion_y_avisos.md`; revisión `APPROVED` en `progress/review_administracion_y_avisos.md`.
+- `./init.sh`: 2951 passed, 1 skipped, 2 warnings.
+
+
+## 2026-11-04 — Feature #43 proveedor_whatsapp_real (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- Adaptador de producción de WhatsApp Cloud API (Meta) en `telegram_gateway`, detrás de la interfaz de #36: desactivado por defecto (sin adaptador, webhook 404), secretos por entorno validados al arrancar y fuera de `repr`/logs.
+- Webhook: suscripción GET con verify token; POST con firma HMAC sobre bytes crudos (401 si inválida), sin token de servicio; normaliza texto, respuestas interactivas y botones de plantilla, reenvía tipos no soportados, descarta inválidos sin perder los válidos, deduplica por `wamid` separado de Telegram, registra estados de entrega sin reenviarlos.
+- Envío: ventana de 24 h por último mensaje entrante; texto solo dentro de ventana (422 sin petición fuera), plantillas con variables en orden, opciones como mensajes interactivos, bloques en orden con corte al primer fallo; traducción de errores de Meta (ventana cerrada, plantilla no aprobada, fallo de envío) sin exponer secretos ni cuerpos.
+- Writer OpenCode/DeepSeek. Trazabilidad R1–R62 y tasks T1–T22; revisión `APPROVED` en `progress/review_proveedor_whatsapp_real.md` (observaciones no bloqueantes: ampliar test R55; mantener `OrchestratorError` sin texto de usuario).
+- `./init.sh`: 3031 passed, 1 skipped, 2 warnings.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Request
@@ -10,33 +11,64 @@ from lazaro_contracts import ChunkActiveRequest, ChunkUpdateRequest, ManualUploa
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from . import admin
+from . import admin, advisor_panel
 from .accounts import ROLES, USERNAME_PATTERN, hash_token
+from .administration import (
+    OPERATIONAL_SETTINGS,
+    OPERATIONAL_SETTINGS_BY_KEY,
+    resolve_operational_settings,
+)
 from .classifier import parse_threshold, validate_category_fields
 from .config import Settings
 from .domain import (
     Adapters,
     CategoryCodeTaken,
+    ClientNotFound,
+    CredentialRevoked,
+    DomainError,
     CategoryNotFound,
     LastAdmin,
     LoginThrottled,
+    NoticeVersionRequired,
     ProfileNotFound,
     RagRejected,
     ServiceUnavailable,
+    SettingsInvalid,
+    TemplateExists,
+    TemplateNotFound,
+    TemplateTransitionInvalid,
     UsernameTaken,
+    admin_metrics,
     authenticate_admin,
     change_role,
+    change_template_status,
     classifier_threshold,
+    conversation_texts,
+    create_client,
     create_profile,
     create_query_category,
+    create_template,
+    execute_suppression_from_panel,
     issue_link_token,
+    list_clients_admin,
     list_profiles,
     list_query_categories,
+    operational_settings,
     recent_events,
+    record_panel_audit,
+    renew_credential,
+    revoke_credential,
+    close_client_session,
+    save_operational_settings,
     set_classifier_threshold,
     set_query_category_active,
+    suppression_queue,
+    text_history,
+    update_conversation_texts,
     update_query_category,
+    update_template,
 )
+from .privacy import CONVERSATION_TEXT_FIELDS, ConversationTexts
 
 SESSION_COOKIE = "admin_session"
 LOGIN_ERROR = "Usuario o contraseña incorrectos."
@@ -115,6 +147,127 @@ def _validate_profile_fields(
     if len(password) < settings.profile_password_min_length:
         return "La contraseña es demasiado corta."
     return None
+
+
+MAX_CONVERSATION_TEXT_LENGTH = 4096
+
+
+def _conversation_texts_from_form(
+    form: dict[str, str],
+) -> ConversationTexts | None:
+    values = {field: form.get(field, "") for field in CONVERSATION_TEXT_FIELDS}
+    if any(len(value) > MAX_CONVERSATION_TEXT_LENGTH for value in values.values()):
+        return None
+    if not values["notice_text"].strip() or not values["notice_version"].strip():
+        return None
+    return ConversationTexts(**values)
+
+
+def _audit(profile, action: str, result: str, adapters: Adapters, **kwargs) -> None:
+    try:
+        record_panel_audit(profile, action, result, adapters, **kwargs)
+    except Exception:
+        pass
+
+
+def _actor(session, adapters: Adapters):
+    return adapters.repository.get_profile(session.profile_id)
+
+
+def _form_date(raw: str, utc_offset_minutes: int) -> datetime | None:
+    """R3, R4, S9: AAAA-MM-DD a medianoche local; vacío significa no enviado."""
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError("fecha") from None
+    return (parsed.replace(tzinfo=timezone.utc) - timedelta(
+        minutes=utc_offset_minutes
+    ))
+
+
+def _effective_setting_value(key: str, operational) -> str:
+    if key.startswith("identity."):
+        field = {
+            "identity.link_ttl_minutes": "link_ttl_minutes",
+            "identity.session_idle_minutes": "session_idle_minutes",
+            "identity.login_max_attempts": "login_max_attempts",
+            "identity.lockout_minutes": "lockout_minutes",
+            "identity.validity_days": "validity_days",
+            "identity.expiry_notice_days": "expiry_notice_days",
+        }[key]
+        return str(getattr(operational.identity, field))
+    if key == "expiry_notice.enabled":
+        return "true" if operational.expiry_notice_enabled else "false"
+    if key == "business_hours.enabled":
+        return "true" if operational.hours.enabled else "false"
+    if key == "business_hours.start":
+        return operational.hours.start.strftime("%H:%M")
+    if key == "business_hours.end":
+        return operational.hours.end.strftime("%H:%M")
+    if key == "business_hours.days":
+        return ",".join(str(day) for day in sorted(operational.hours.days))
+    if key == "business_hours.utc_offset_minutes":
+        return str(operational.hours.utc_offset_minutes)
+    if key == "suppression.deadline_business_days":
+        return str(operational.suppression_deadline_business_days)
+    return str(operational.suppression_due_soon_business_days)
+
+
+def _default_setting_value(spec, settings: Settings) -> str:
+    value = getattr(settings, spec.default_attr)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _setting_range(spec) -> str:
+    if spec.kind == "bool":
+        return "true | false"
+    if spec.kind == "time":
+        return "HH:MM"
+    if spec.kind == "days":
+        return "1-7 separados por comas"
+    return f"{spec.minimum}..{spec.maximum}"
+
+
+def _settings_view(settings: Settings, adapters: Adapters) -> list[dict[str, str]]:
+    overrides = adapters.repository.get_app_settings(("identity.", "expiry_notice.", "business_hours.", "suppression."))
+    operational = resolve_operational_settings(settings, overrides)
+    rows = []
+    for spec in OPERATIONAL_SETTINGS:
+        raw = overrides.get(spec.key)
+        effective = _effective_setting_value(spec.key, operational)
+        origin = "entorno"
+        if raw is not None and raw.strip() and _raw_matches_effective(spec, raw, effective):
+            origin = "panel"
+        rows.append(
+            {
+                "key": spec.key,
+                "effective": effective,
+                "default": _default_setting_value(spec, settings),
+                "origin": origin,
+                "range": _setting_range(spec),
+            }
+        )
+    return rows
+
+
+def _raw_matches_effective(spec, raw: str, effective: str) -> bool:
+    value = raw.strip()
+    if spec.kind == "bool":
+        return value.lower() == effective
+    if spec.kind == "days":
+        return (
+            ",".join(token.strip() for token in value.split(",") if token.strip())
+            == ",".join(sorted(effective.split(","), key=int))
+        )
+    try:
+        return str(int(value)) == effective
+    except ValueError:
+        return value == effective
 
 
 def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
@@ -469,6 +622,130 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
             return _category_page(session, 404, "category_not_found")
         return _redirect("/admin/categories")
 
+    @router.get("/admin/texts")
+    async def texts_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        return _html(
+            admin.render_conversation_texts(
+                conversation_texts(settings, adapters),
+                session.csrf_token,
+                versions=adapters.repository.current_text_versions(),
+            )
+        )
+
+    @router.get("/admin/texts/{field}/historial")
+    async def text_history_page(field: str, request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        if field not in CONVERSATION_TEXT_FIELDS:
+            return _html(
+                admin.render_error(404, "not_found", session.csrf_token),
+                status_code=404,
+            )
+        return _html(
+            admin.render_text_history(
+                field,
+                text_history(field, settings, adapters),
+                session.csrf_token,
+            )
+        )
+
+    @router.post("/admin/texts")
+    async def save_texts(request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        texts = _conversation_texts_from_form(form)
+        if texts is None:
+            return _html(
+                admin.render_conversation_texts(
+                    conversation_texts(settings, adapters),
+                    session.csrf_token,
+                    "El texto legal y su versión son obligatorios (máx. 4096).",
+                    versions=adapters.repository.current_text_versions(),
+                ),
+                status_code=422,
+            )
+        current = conversation_texts(settings, adapters)
+        changed_fields = [
+            field
+            for field in CONVERSATION_TEXT_FIELDS
+            if getattr(texts, field) != getattr(current, field)
+        ]
+        try:
+            update_conversation_texts(
+                texts, session.profile_id, settings, adapters
+            )
+        except NoticeVersionRequired:
+            _audit(actor, "texts_update", "notice_version_required", adapters)
+            return _html(
+                admin.render_conversation_texts(
+                    conversation_texts(settings, adapters),
+                    session.csrf_token,
+                    "Debes indicar una versión nueva al cambiar el texto legal.",
+                    versions=adapters.repository.current_text_versions(),
+                ),
+                status_code=422,
+            )
+        for field in changed_fields:
+            _audit(actor, "texts_update", "ok", adapters, target=field)
+        if not changed_fields:
+            _audit(actor, "texts_update", "ok", adapters)
+        return _redirect("/admin/texts")
+
+    @router.get("/admin/supresiones")
+    async def suppression_list(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        profile = adapters.repository.get_profile(session.profile_id)
+        if profile is None:
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        try:
+            rows = suppression_queue(profile, settings, adapters)
+        except DomainError as exc:
+            _audit(profile, "suppression_queue_viewed", exc.code, adapters)
+            return _html(
+                admin.render_error(exc.status_code, exc.code, session.csrf_token),
+                status_code=exc.status_code,
+            )
+        _audit(profile, "suppression_queue_viewed", "ok", adapters)
+        return _html(
+            advisor_panel.render_suppression_queue(
+                rows, session.csrf_token, "/admin/supresiones"
+            )
+        )
+
+    @router.post("/admin/supresiones/{request_id}/execute")
+    async def suppression_execute(request_id: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        profile = adapters.repository.get_profile(session.profile_id)
+        if profile is None:
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        try:
+            execute_suppression_from_panel(
+                request_id, profile, form.get("note", ""), settings, adapters
+            )
+        except DomainError as exc:
+            _audit(
+                profile, "suppression_execute", exc.code, adapters,
+                request_id=request_id,
+            )
+            return _html(
+                admin.render_error(exc.status_code, exc.code, session.csrf_token),
+                status_code=exc.status_code,
+            )
+        _audit(
+            profile, "suppression_execute", "ok", adapters, request_id=request_id
+        )
+        return _redirect("/admin/supresiones")
+
     @router.post("/admin/categories/{category_id}/active")
     async def toggle_category(category_id: str, request: Request) -> Response:
         session = _require_session(request, adapters)
@@ -482,5 +759,245 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
         except CategoryNotFound:
             return _category_page(session, 404, "category_not_found")
         return _redirect("/admin/categories")
+
+    def _clients_page(session, status_code: int = 200, error: str | None = None):
+        return _html(
+            admin.render_clients(
+                list_clients_admin(settings, adapters), session.csrf_token, error
+            ),
+            status_code=status_code,
+        )
+
+    @router.get("/admin/clientes")
+    async def clients_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        return _clients_page(session)
+
+    @router.post("/admin/clientes")
+    async def create_client_page(request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        username = form.get("username", "")
+        password = form.get("password", "")
+        if (
+            not USERNAME_PATTERN.fullmatch(username.lower())
+            or len(password) < settings.profile_password_min_length
+        ):
+            _audit(actor, "client_create", "validation_error", adapters)
+            return _clients_page(session, 422, "Datos del cliente no válidos.")
+        offset = operational_settings(settings, adapters).hours.utc_offset_minutes
+        try:
+            valid_from = _form_date(form.get("valid_from", ""), offset)
+            valid_until = _form_date(form.get("valid_until", ""), offset)
+        except ValueError:
+            _audit(actor, "client_create", "validation_error", adapters)
+            return _clients_page(session, 422, "Las fechas no son válidas.")
+        if (
+            valid_from is not None
+            and valid_until is not None
+            and valid_until <= valid_from
+        ):
+            _audit(actor, "client_create", "validation_error", adapters)
+            return _clients_page(
+                session, 422, "La fecha final debe ser posterior a la inicial."
+            )
+        try:
+            created = create_client(
+                username, password, valid_from, valid_until, settings, adapters
+            )
+        except UsernameTaken:
+            _audit(actor, "client_create", "username_taken", adapters)
+            return _clients_page(session, 409, "username_taken")
+        _audit(actor, "client_create", "ok", adapters, target=created.profile_id)
+        return _redirect("/admin/clientes")
+
+    @router.post("/admin/clientes/{profile_id}/renovar")
+    async def renew_client(profile_id: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        try:
+            renew_credential(profile_id, settings, adapters)
+        except ClientNotFound:
+            _audit(actor, "client_renew", "client_not_found", adapters, target=profile_id)
+            return _clients_page(session, 404, "client_not_found")
+        except CredentialRevoked:
+            _audit(actor, "client_renew", "credential_revoked", adapters, target=profile_id)
+            return _clients_page(session, 409, "credential_revoked")
+        _audit(actor, "client_renew", "ok", adapters, target=profile_id)
+        return _redirect("/admin/clientes")
+
+    @router.post("/admin/clientes/{profile_id}/revocar")
+    async def revoke_client(profile_id: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        try:
+            revoke_credential(profile_id, settings, adapters)
+        except ClientNotFound:
+            _audit(actor, "client_revoke", "client_not_found", adapters, target=profile_id)
+            return _clients_page(session, 404, "client_not_found")
+        _audit(actor, "client_revoke", "ok", adapters, target=profile_id)
+        return _redirect("/admin/clientes")
+
+    @router.post("/admin/clientes/{profile_id}/cerrar-sesion")
+    async def close_client(profile_id: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        try:
+            close_client_session(profile_id, settings, adapters)
+        except ClientNotFound:
+            _audit(
+                actor, "client_close_session", "client_not_found", adapters,
+                target=profile_id,
+            )
+            return _clients_page(session, 404, "client_not_found")
+        _audit(actor, "client_close_session", "ok", adapters, target=profile_id)
+        return _redirect("/admin/clientes")
+
+    def _templates_page(session, status_code: int = 200, error: str | None = None):
+        return _html(
+            admin.render_templates(
+                adapters.repository.list_whatsapp_templates(),
+                session.csrf_token,
+                error,
+            ),
+            status_code=status_code,
+        )
+
+    @router.get("/admin/plantillas")
+    async def templates_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        return _templates_page(session)
+
+    @router.post("/admin/plantillas")
+    async def create_template_page(request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        try:
+            create_template(
+                form.get("name", ""),
+                form.get("purpose", ""),
+                form.get("language", ""),
+                form.get("variables", ""),
+                form.get("body", ""),
+                actor,
+                adapters,
+            )
+        except ValueError:
+            _audit(actor, "template_create", "validation_error", adapters)
+            return _templates_page(session, 422, "Datos de plantilla no válidos.")
+        except TemplateExists:
+            _audit(actor, "template_create", "template_exists", adapters)
+            return _templates_page(session, 409, "template_exists")
+        _audit(
+            actor, "template_create", "ok", adapters,
+            target=form.get("name", ""),
+        )
+        return _redirect("/admin/plantillas")
+
+    @router.post("/admin/plantillas/{name}")
+    async def update_template_page(name: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        try:
+            update_template(
+                name,
+                form.get("language", ""),
+                form.get("variables", ""),
+                form.get("body", ""),
+                actor,
+                adapters,
+            )
+        except TemplateNotFound:
+            _audit(actor, "template_update", "template_not_found", adapters, target=name)
+            return _templates_page(session, 404, "template_not_found")
+        except ValueError:
+            _audit(actor, "template_update", "validation_error", adapters, target=name)
+            return _templates_page(session, 422, "Datos de plantilla no válidos.")
+        _audit(actor, "template_update", "ok", adapters, target=name)
+        return _redirect("/admin/plantillas")
+
+    @router.post("/admin/plantillas/{name}/estado")
+    async def template_status_page(name: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        try:
+            change_template_status(
+                name, form.get("status", ""), actor, adapters
+            )
+        except TemplateNotFound:
+            _audit(actor, "template_status", "template_not_found", adapters, target=name)
+            return _templates_page(session, 404, "template_not_found")
+        except TemplateTransitionInvalid:
+            _audit(actor, "template_status", "invalid_transition", adapters, target=name)
+            return _templates_page(session, 409, "invalid_transition")
+        _audit(actor, "template_status", "ok", adapters, target=name)
+        return _redirect("/admin/plantillas")
+
+    def _settings_page(session, status_code: int = 200, error: str | None = None):
+        return _html(
+            admin.render_settings(
+                _settings_view(settings, adapters), session.csrf_token, error
+            ),
+            status_code=status_code,
+        )
+
+    @router.get("/admin/ajustes")
+    async def settings_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        return _settings_page(session)
+
+    @router.post("/admin/ajustes")
+    async def save_settings(request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        _require_csrf(session, form)
+        actor = _actor(session, adapters)
+        before = adapters.repository.get_app_settings(
+            ("identity.", "expiry_notice.", "business_hours.", "suppression.")
+        )
+        try:
+            save_operational_settings(form, actor, settings, adapters)
+        except SettingsInvalid:
+            _audit(actor, "settings_update", "validation_error", adapters)
+            return _settings_page(session, 422, "Algún ajuste no es válido.")
+        for spec in OPERATIONAL_SETTINGS:
+            raw = form.get(spec.key, "").strip()
+            previous = before.get(spec.key, "")
+            if raw == previous:
+                continue
+            _audit(actor, "settings_update", "ok", adapters, target=spec.key)
+        return _redirect("/admin/ajustes")
+
+    @router.get("/admin/metricas")
+    async def metrics_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        raw_days = request.query_params.get("dias", "7")
+        try:
+            days = int(raw_days)
+        except (TypeError, ValueError):
+            days = 0
+        if days < 1 or days > 90:
+            return _html(
+                admin.render_error(422, "validation_error", session.csrf_token),
+                status_code=422,
+            )
+        actor = _actor(session, adapters)
+        metrics = admin_metrics(days, settings, adapters)
+        _audit(actor, "metrics_viewed", "ok", adapters, target=str(days))
+        return _html(admin.render_metrics(metrics, session.csrf_token))
 
     return router

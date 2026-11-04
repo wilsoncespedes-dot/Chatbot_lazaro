@@ -21,6 +21,10 @@ VALID = {
     "privacy_accept_phrase": "Acepto el tratamiento de mis datos.",
     "privacy_accepted_reply": "Gracias.",
     "privacy_retention_days": "90",
+    # #38: identidad de clientes
+    "identity_public_base_url": "https://orchestrator.example",
+    "identity_link_signing_key": "k" * 32,
+    "identity_login_required": True,
 }
 
 

@@ -1,0 +1,5 @@
+{
+  "type": "template",
+  "name": "aviso_vencimiento",
+  "variables": ["2026-11-08"]
+}

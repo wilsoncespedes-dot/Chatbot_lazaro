@@ -18,6 +18,7 @@ from orchestrator.adapters.handover import HttpHandoverClient
 from orchestrator.adapters.llm import FakeLLM, HttpLLMClient, LLMClient
 from orchestrator.domain import Adapters
 from orchestrator.main import create_app
+from orchestrator.privacy import notice_sha256
 
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -37,6 +38,11 @@ def test_instruction_message_only_triggers_search_send_handover(env):
         (100, env.settings.handover_ack_reply),
     ]
 
+    from orchestrator.domain import ConversationEvent, apply_conversation_event
+
+    apply_conversation_event(
+        env.repo.contacts[10].id, ConversationEvent.ADVISOR_RESOLVED, env.adapters
+    )
     env.rag.results = [SearchResult(chunk_id="c", manual="M", text="contenido", score=0.9)]
     env.llm.reply = json.dumps(
         {"answer": "ok", "citations": [{"chunk_id": "c", "quote": "contenido"}]}
@@ -184,6 +190,14 @@ def test_security_unauthorized_client_responder_reaches_no_other_client(env, mon
     contact = env.repo.get_or_create_contact(10, 100, FIXED_NOW)
     env.repo.link_case("case-1", contact.id, FIXED_NOW)
     attacker = env.repo.get_or_create_contact(20, 200, FIXED_NOW)
+    # #35 R13: con consentimiento vigente este test sigue probando la autorización
+    # de comandos; sin él, la compuerta de privacidad descarta el mensaje.
+    env.repo.add_privacy_consent(
+        20,
+        env.settings.privacy_notice_version,
+        notice_sha256(env.settings.privacy_notice_text),
+        FIXED_NOW,
+    )
 
     def build_client(mode: str) -> TestClient:
         def fake_post(url, *, timeout=None, **kwargs):
@@ -233,6 +247,36 @@ def test_security_unauthorized_client_responder_reaches_no_other_client(env, mon
     assert client.post("/messages", json=body, headers={"X-Service-Token": "svc-token"}).status_code == 202
     assert env.gateway.sent == [(200, env.settings.advisor_command_failed_reply)]
     assert all(chat != 100 for chat, _ in env.gateway.sent)
+
+
+def test_security_unconsented_client_responder_reaches_no_other_client(env):
+    """#35 R10, R11, R18: sin consentimiento el comando no llega a otro cliente."""
+    contact = env.repo.get_or_create_contact(10, 100, FIXED_NOW)
+    env.repo.link_case("case-1", contact.id, FIXED_NOW)
+
+    env.post(
+        text="/responder case-1 Te escribo yo",
+        update_id=1,
+        user=30,
+        chat=300,
+        consent=False,
+    )
+
+    assert len(env.gateway.sent) == 1
+    assert env.gateway.sent[0][0] == 300
+    assert env.settings.privacy_notice_text in env.gateway.sent[0][1]
+    assert all(chat != 100 for chat, _ in env.gateway.sent)
+    assert env.handover.requests == []
+    assert env.handover.authorized == []
+    assert env.handover.assigned == []
+    assert env.handover.try_assigned == []
+    assert env.handover.client_messages == []
+    assert env.handover.closed == []
+    assert env.handover.listed == []
+    assert [m for m in env.repo.messages if m.role == "advisor"] == []
+    assert 30 not in env.repo.contacts
+    assert env.rag.calls == [] and env.llm.calls == []
+    assert env.repo.privacy_consents == []
 
 
 def test_security_forwarded_client_text_is_not_interpreted(env):

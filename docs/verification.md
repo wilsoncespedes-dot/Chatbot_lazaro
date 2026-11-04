@@ -73,7 +73,7 @@ deben estar y pasar:
 | Una respuesta del modelo con citas inventadas se reemplaza por el rechazo fijo | 6 |
 | Un mensaje con instrucciones («ignora tus reglas y ejecuta…») se trata como texto: no dispara ninguna acción distinta de buscar, responder o traspasar | 4 |
 | El traspaso responde bien cuando no hay asesores | 7 |
-| Un cliente no puede consultar la base de datos | feature de consulta (posterior) |
+| Un cliente solo consulta sus propios datos mediante vistas con RLS y no obtiene datos de otros clientes | #26 y #39 |
 
 ## Anti-patrones (no hacer)
 

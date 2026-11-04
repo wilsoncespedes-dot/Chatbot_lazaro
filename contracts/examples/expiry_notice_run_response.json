@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "candidates": 3,
+  "sent_text": 1,
+  "sent_template": 1,
+  "failed": 0,
+  "skipped": {
+    "out_of_hours": 0,
+    "no_chat": 1,
+    "no_text": 0,
+    "no_template": 0,
+    "already_notified": 0
+  }
+}

@@ -25,6 +25,28 @@ _VIEW_COLUMNS_SQL = (
 )
 
 
+def verify_view_catalog(
+    cursor: Any, allowlist: dict[str, tuple[str, ...]]
+) -> None:
+    """R29: cada vista debe existir como `relkind = 'v'` con exactamente sus columnas."""
+    names = list(allowlist)
+    cursor.execute(_VIEW_KINDS_SQL, (names,))
+    kinds = {row[0]: row[1] for row in cursor.fetchall()}
+    for name in names:
+        if kinds.get(name) != "v":
+            logger.warning("db_query_catalog_invalid")
+            raise DbQueryUnavailable("La configuración de vistas no es válida.")
+
+    cursor.execute(_VIEW_COLUMNS_SQL, (names,))
+    actual: dict[str, set[str]] = {}
+    for name, column in cursor.fetchall():
+        actual.setdefault(name, set()).add(column)
+    for name, allowed in allowlist.items():
+        if actual.get(name, set()) != set(allowed):
+            logger.warning("db_query_catalog_invalid")
+            raise DbQueryUnavailable("La configuración de vistas no es válida.")
+
+
 class DbQueryClient(Protocol):
     def run(
         self, query: ValidatedQuery, max_rows: int, timeout_ms: int
@@ -99,22 +121,7 @@ class PostgresReadOnlyQuery:
                         logger.warning("db_query_close_failed")
 
     def _verify_catalog(self, cursor: Any) -> None:
-        names = list(self._allowlist)
-        cursor.execute(_VIEW_KINDS_SQL, (names,))
-        kinds = {row[0]: row[1] for row in cursor.fetchall()}
-        for name in names:
-            if kinds.get(name) != "v":
-                logger.warning("db_query_catalog_invalid")
-                raise DbQueryUnavailable("La configuración de vistas no es válida.")
-
-        cursor.execute(_VIEW_COLUMNS_SQL, (names,))
-        actual: dict[str, set[str]] = {}
-        for name, column in cursor.fetchall():
-            actual.setdefault(name, set()).add(column)
-        for name, allowed in self._allowlist.items():
-            if actual.get(name, set()) != set(allowed):
-                logger.warning("db_query_catalog_invalid")
-                raise DbQueryUnavailable("La configuración de vistas no es válida.")
+        verify_view_catalog(cursor, self._allowlist)
 
 
 class FakeDbQuery:

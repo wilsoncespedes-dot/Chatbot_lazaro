@@ -1,0 +1,9 @@
+{
+  "channel": "whatsapp",
+  "external_user_id": "573001112233",
+  "external_chat_id": "573001112233",
+  "external_message_id": "wamid-001",
+  "kind": "text",
+  "text": "Hola, necesito ayuda con mi pedido.",
+  "received_at": "2026-11-03T16:05:12Z"
+}

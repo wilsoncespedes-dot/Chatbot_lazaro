@@ -1,5 +1,9 @@
 # Chatbot Lázaro Software: resumen del proyecto y decisiones
 
+> **Fuente de verdad:** `docs/especificacion.md` contiene las decisiones
+> vigentes del producto y manda sobre las secciones históricas de este resumen
+> cuando haya diferencias.
+
 > Preparado el 30 de octubre de 2026. Combina las especificaciones del chatbot
 > (30 oct 2026, Alejandro) con el trabajo de búsqueda y análisis de
 > repositorios, diseño y preparación del harness.
@@ -12,7 +16,7 @@
 
 ## 1. Resumen ejecutivo
 
-El proyecto es un chatbot de atención y soporte por Telegram, con un panel de
+El proyecto es un chatbot de atención y soporte por Telegram y WhatsApp, con un panel de
 administración y un panel para asesores, hecho con microservicios. Debe
 responder preguntas sobre manuales (RAG), distinguir a qué servicio técnico
 corresponde una consulta, consultar la base de datos en lenguaje natural y
@@ -35,8 +39,8 @@ documento completo. La decisión central es:
 
 ### Alcance y arquitectura
 
-- **Canal:** Telegram. WhatsApp queda fuera por ahora; el canal será una capa
-  aparte para poder agregar otros después sin tocar el orquestador.
+- **Canales:** Telegram y WhatsApp comparten un núcleo; adaptadores aíslan los
+  protocolos de cada canal y proveedor.
 - **Arquitectura:** microservicios, para cambiar una pieza sin dañar las demás.
   Todo corre con Docker y se organiza en un monorepo con una carpeta por
   servicio y ramas por integrante.
@@ -58,8 +62,8 @@ documento completo. La decisión central es:
 2. **Clasificación del tipo de pregunta.** Las categorías las configura el
    administrador. Un clasificador pequeño devuelve un porcentaje por opción; si
    la confianza es baja, queda como "sin clasificar".
-3. **Base de datos en lenguaje natural.** Solo para personal autorizado, con
-   usuario de solo lectura, tablas permitidas y registro de cada consulta.
+3. **Consultas de datos.** El cliente consulta sus propios datos mediante
+   vistas con RLS; el personal usa las vistas y permisos autorizados.
 4. **Paso a un asesor.** Un servicio aparte avisa a los asesores (unos 3) y
    registra a quién avisó y por qué. Si ninguno se conecta dentro de un tiempo
    de espera (por definir), el bot avisa al cliente.
@@ -68,15 +72,13 @@ documento completo. La decisión central es:
 
 | Rol           | Dónde entra                   | Qué puede hacer                                                                  |
 |---------------|-------------------------------|----------------------------------------------------------------------------------|
-| Administrador | Panel de administración       | Perfiles y roles, manuales, fragmentos, registros del agente                     |
-| Asesor        | Panel de servicio al cliente  | Ver conversaciones, historial, tipo de pregunta, responder por Telegram y cerrar el caso |
-| Cliente       | Telegram                      | Preguntar sobre manuales y pedir hablar con una persona                          |
+| Administrador | Panel de administración       | Clientes y credenciales, textos, plantillas, horarios, manuales y asesores       |
+| Asesor        | Panel de servicio al cliente  | Atender conversaciones de Telegram y WhatsApp, responder, transferir y cerrar casos |
+| Cliente       | Telegram o WhatsApp           | Aceptar el tratamiento, iniciar sesión, consultar sus datos y hablar con asesor  |
 
-En Telegram escriben clientes y personal por el mismo bot, y el perfil
-verificado define qué puede preguntar cada uno. La verificación usa un enlace
-que une la cuenta de Telegram con un perfil de usuario y contraseña. Riesgo
-señalado en el documento: un cliente verificado no debe poder hacer consultas a
-la base de datos.
+Clientes y personal usan los canales de chat; la identidad autenticada y el
+estado de conversación definen las capacidades. La consulta de datos de cliente
+se limita a sus propios datos mediante vistas con RLS.
 
 ### Restricciones de infraestructura
 
@@ -139,28 +141,23 @@ otros no confirmados.
 | D6 | Desarrollar con el harness SDD, empezando en modo supervisado | El humano aprueba cada spec; el modo nocturno bloquea pip, gasta muchas llamadas al modelo y se salta la aprobación |
 | D7 | Se puede pagar una segunda base de datos | Quita el límite de una base gratuita por espacio de trabajo y resuelve vencimiento y copias |
 
-## 6. Diseño de la consulta a la base de datos (feature posterior)
+## 6. Diseño de la consulta a la base de datos
 
 La seguridad no depende solo del código: la impone PostgreSQL.
 
-1. Usuario de solo lectura con `GRANT SELECT` solo sobre un esquema de vistas
-   (esa es la lista de tablas permitidas). `default_transaction_read_only` y
-   `statement_timeout` se configuran por rol, pero una sesión puede cambiarlos
-   con `SET`, así que la barrera real son los permisos mínimos.
-2. Transacción de solo lectura explícita en cada consulta, con tiempo máximo y
-   límite de filas.
-3. Validación del SQL: una sola sentencia y solo `SELECT`.
-4. Auditoría con otra conexión: la escribe el orquestador con su usuario normal
-   de aplicación, nunca el usuario de lectura. Guarda el SQL ejecutado, quién
-   lo pidió y cuántas filas devolvió.
-5. Consultas predefinidas con parámetros (p. ej. `consultar_pedido(numero)`)
-   para lo conocido; el SQL libre sobre vistas queda solo para el personal.
-6. Acceso solo para personal verificado. La identidad de quien pregunta viaja
-   en cada petición y se registra en la auditoría. Si algún día un cliente ve
-   sus propios datos, se impone con RLS o vistas filtradas.
+1. Los clientes solo consultan vistas permitidas con RLS; `cliente_id` se
+   deriva de la sesión autenticada, nunca de la pregunta ni de la IA.
+2. El usuario SQL tiene `GRANT SELECT` únicamente sobre vistas permitidas. La
+   barrera efectiva son los permisos mínimos de PostgreSQL.
+3. Cada consulta usa transacción de solo lectura, tiempo máximo, límite de filas
+   y validación de una sola sentencia `SELECT`.
+4. El orquestador audita con su usuario normal de aplicación: quién pidió la
+   consulta, SQL ejecutado, resultado y filas devueltas.
+5. Las consultas de personal conservan permisos específicos; ninguna ruta
+   accede directamente a tablas ni elude RLS para datos de cliente.
 
-**Pruebas obligatorias:** un cliente no puede consultar la base de datos, y
-ningún usuario logra que el sistema ejecute código que él escribió.
+**Pruebas obligatorias:** un cliente no consulta datos de otra persona y ningún
+usuario logra que el sistema ejecute código que él escribió.
 
 ## 7. Contratos entre servicios (borrador de la versión mínima)
 
@@ -213,7 +210,7 @@ edición de fragmentos y verificación de cuentas (enlace Telegram ↔ perfil).
 |--------|------------|
 | Un cliente consulta la base de datos | Acceso solo a personal verificado, usuario de solo lectura, pruebas obligatorias |
 | Inyección de instrucciones desde manuales o mensajes | Tratar el texto como datos; el modelo no tiene herramientas que escriban en la base |
-| Datos personales (Ley 1581, sin verificar con abogado) | Guardar lo mínimo, aviso y autorización antes de producción, poder borrar datos |
+| Datos personales (Ley 1581, sin verificar con abogado) | Consentimiento antes de cualquier dato salvo el personal vinculado; guardar lo mínimo, aviso y autorización antes de producción, poder borrar datos. Tratamiento técnico mínimo para responder: deduplicación en Redis con `DEDUP_TTL_SECONDS`, búfer de agrupación con `MESSAGE_GROUPING_BUFFER_TTL_SECONDS` y `processed_updates` solo con `update_id` |
 | La base gratuita de Render expira y no tiene copias | Plan de pago o exportar periódicamente |
 | Render gratuito tarda en despertar y Telegram reenvía mensajes | Guardar update_id y descartar repetidos |
 | Claves filtradas o leídas por agentes | `.env` fuera del repositorio y bloqueado para lectura de agentes |
@@ -222,26 +219,46 @@ edición de fragmentos y verificación de cuentas (enlace Telegram ↔ perfil).
 
 ## 12. Dudas abiertas
 
-Del documento original:
+La especificación vigente cierra las decisiones de producto salvo los puntos
+legales indicados en `docs/especificacion.md`.
 
-- Qué manuales hay: cantidad, formatos y tamaño real.
-- Quién crea los usuarios y contraseñas de los clientes en Telegram.
-- Qué son los "servicios técnicos" (las categorías serán configurables).
-- Cuánto espera el bot a un asesor antes de avisar que no hay asesores.
-- Si se procesan audio e imágenes en esta etapa.
-- Si se implementan los botones de PQRS (propuesta: fuera de la versión mínima).
-- Datos personales: aviso y autorización según la Ley 1581.
-- Quién paga la API del proveedor de IA en producción.
-- Qué pasa con los fragmentos corregidos a mano si se vuelve a subir un manual.
+Decisiones de implementación pendientes:
 
-Nuevas, surgidas del análisis:
+- Confirmar el coste de las plantillas del proveedor elegido de WhatsApp.
+- Calibrar el modelo de embeddings y el umbral con manuales reales.
 
-- Si se acepta separar el bot de clientes y el de personal.
-- Si el empresario acepta que el esquema de la base de datos se envíe al proveedor de IA.
-- Modelo de embeddings y umbral de similitud (calibrar con un manual real).
-- Si la herramienta de consultas necesita aceptar varios JOIN.
+Decisión cerrada por el dueño (2026-11-03): el proveedor de producción de
+WhatsApp es **Meta Cloud API** (Graph API). Twilio y 360dialog quedan fuera de
+alcance de la feature #43; la interfaz `ChannelAdapter` sigue permitiendo
+incorporarlos en features posteriores.
+
+Validación legal pendiente:
+
+- Confirmar el orden y texto del consentimiento, los plazos de supresión, la
+  conservación del rechazo y la justificación/plazo de memoria permanente.
 
 > **Regla para los agentes:** una duda abierta NO se resuelve inventando. Si
 > una feature depende de una de ellas, el spec la recoge como **supuesto
 > configurable** (valor por defecto + variable de entorno) en la sección
 > «Supuestos a confirmar» de `design.md`, o la feature queda `blocked`.
+
+## 13. Decisiones vigentes del producto
+
+La fuente de detalle es `docs/especificacion.md`. Estas decisiones resumen el
+cambio de alcance y prevalecen sobre las descripciones históricas anteriores:
+
+1. Un núcleo común atiende Telegram y WhatsApp; adaptadores normalizan mensajes
+   y traducen respuestas, sin lógica exclusiva de canal en el núcleo. Antes del
+   login, identidad y consentimiento se aíslan por `(canal, id_externo)`; el
+   vínculo entre canales solo ocurre tras login verificado.
+2. El proveedor de WhatsApp queda detrás de una interfaz que admite Cloud API,
+   Twilio y 360dialog. La implementación de producción es **Meta Cloud API**
+   (decisión del dueño, 2026-11-03); Twilio y 360dialog quedan fuera de alcance
+   hasta que exista una feature propia.
+3. La identidad de cliente se vincula automáticamente al chat actual por login
+   web con credenciales; no requiere enlazar manualmente el número. Una
+   credencial permite una sola sesión activa; la IA y el código aplican permisos
+   según el estado.
+4. El cliente autenticado puede consultar solo sus propios datos mediante
+   vistas con RLS; la supresión la solicita el cliente y la ejecuta una persona,
+   mientras la purga automática excluye casos activos y memoria permanente.

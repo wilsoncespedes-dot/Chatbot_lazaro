@@ -23,6 +23,7 @@ ROUTES = [
     ("/cases/case-x/assign", {"advisor_id": "111"}),
     ("/cases/case-x/close", {"advisor_id": "111"}),
     ("/cases/case-x/authorize", {"advisor_id": "111", "action": "reply"}),
+    ("/cases/case-x/transfer", {"advisor_id": "111", "target_advisor_id": "222"}),
     ("/cases/case-x/client-message", {"text": "hola", "at": "2026-01-02T03:00:00Z"}),
     ("/cases/check-timeouts", {}),
 ]
@@ -36,6 +37,9 @@ INVALID_BODIES = [
     ("/cases/case-x/authorize", {"advisor_id": "111"}),
     ("/cases/case-x/authorize", {"action": "reply"}),
     ("/cases/case-x/authorize", {"advisor_id": "111", "action": "assign"}),
+    ("/cases/case-x/transfer", {"advisor_id": "111"}),
+    ("/cases/case-x/transfer", {"target_advisor_id": "222"}),
+    ("/cases/case-x/transfer", {"advisor_id": "111", "target_advisor_id": "222", "extra": 1}),
     ("/cases/case-x/client-message", {"text": "hola"}),
     ("/cases/case-x/client-message", {"text": "hola", "at": "2026-01-02T03:00:00"}),
     ("/cases/case-x/client-message", {"text": "", "at": "2026-01-02T03:00:00Z"}),

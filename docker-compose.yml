@@ -18,6 +18,17 @@ services:
   telegram_gateway:
     build: {context: ., dockerfile: services/telegram_gateway/Dockerfile}
     env_file: [.env]
+    environment:
+      WHATSAPP_ENABLED: ${WHATSAPP_ENABLED:-false}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_GRAPH_BASE_URL: ${WHATSAPP_GRAPH_BASE_URL:-https://graph.facebook.com}
+      WHATSAPP_GRAPH_API_VERSION: ${WHATSAPP_GRAPH_API_VERSION:-v21.0}
+      WHATSAPP_TEMPLATE_LANGUAGE: ${WHATSAPP_TEMPLATE_LANGUAGE:-es}
+      WHATSAPP_INTERACTIVE_BODY_TEXT: ${WHATSAPP_INTERACTIVE_BODY_TEXT:-Elige una opción:}
+      WHATSAPP_WINDOW_HOURS: ${WHATSAPP_WINDOW_HOURS:-24}
     ports: ["8001:8000"]
     depends_on: [redis]
   orchestrator:
@@ -54,6 +65,12 @@ services:
     env_file: [.env]
     command: ["python", "purgar_datos.py", "--intervalo"]
     depends_on: [orchestrator, handover]
+    restart: unless-stopped
+  expiry_notice_worker:
+    build: {context: ., dockerfile: services/handover/Dockerfile}
+    env_file: [.env]
+    command: ["python", "avisar_vencimientos.py", "--intervalo"]
+    depends_on: [orchestrator]
     restart: unless-stopped
 volumes:
   pgdata:

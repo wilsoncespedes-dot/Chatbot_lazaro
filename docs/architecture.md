@@ -13,7 +13,8 @@ contracts/                 # Contratos entre servicios (feature 1)
 └── tests/
 services/
 ├── telegram_gateway/      # Canal Telegram: recibe updates, envía mensajes
-├── orchestrator/          # Cerebro: contacto, conversación, decide qué hacer
+├── orchestrator/          # Cerebro: contacto, conversación, decide qué hacer;
+│                          # incluye el módulo de identidad de clientes (#38)
 ├── rag/                   # Manuales: ingesta, fragmentos, búsqueda pgvector
 └── handover/              # Traspaso a asesor: casos, avisos, tiempo de espera
 eval/                      # Evaluación con preguntas de ejemplo (feature 8)
@@ -37,6 +38,32 @@ services/<servicio>/
 
 **No se añaden servicios, carpetas de primer nivel ni capas nuevas** sin que
 una feature de `feature_list.json` lo pida y su `design.md` lo justifique.
+
+### Panel de asesores multicanal (#41)
+
+La bandeja, la vista de conversación, las plantillas WhatsApp, la presencia y la
+cola de supresión del panel de asesores viven en el orchestrator
+(`advisor_routes.py`, `advisor_panel.py`, funciones puras en `panel.py`), sin
+JavaScript ni CDN. Handover expone la transferencia de un caso entre asesores.
+
+### Administración y avisos (#42)
+
+La administración de clientes, textos versionados, plantillas, ajustes
+operativos y métricas vive en el orchestrator (`admin_routes.py`,
+`administration.py`), sin JavaScript ni CDN. Un worker externo
+(`scripts/avisar_vencimientos.py`) ejecuta la pasada de avisos de vencimiento
+contra `POST /credentials/expiry-notices`.
+
+### Identidad de clientes (#38)
+
+La identidad web vive **dentro del orchestrator** (`identity.py`,
+`identity_routes.py`, `identity_page.py`), no en un servicio nuevo. `GET/POST
+/acceso` es la única ruta pública para personas: no exige `X-Service-Token`
+(igual que `/health`), sirve HTML propio sin CDN y usa un enlace firmado de un
+solo uso. Las rutas internas `/clients…` sí exigen `X-Service-Token` y son el
+punto de entrada para la administración de credenciales (#42). El token del
+enlace nunca se registra en logs: un filtro sobre `uvicorn.access` redacta el
+valor de `t=`.
 
 ## 2. Tecnología fijada
 
@@ -72,18 +99,26 @@ PSF). El agente solo instala lo que está en `requirements.txt` y en el
    proveedor de IA (LLM y embeddings), Postgres, Redis y los demás servicios
    se usan a través de un adaptador con una versión falsa (`Fake…`) para
    tests. Así los tests no necesitan red, claves ni Docker.
-5. **Configuración solo por variables de entorno** (`config.py` con
-   Pydantic Settings o `os.environ`). Ningún valor secreto ni URL fija en el
-   código. Toda variable nueva se añade a `.env.example`.
-6. **Idempotencia.** Telegram reenvía mensajes (Render tarda en despertar):
-   cada mensaje lleva un identificador único y se descartan los repetidos.
+5. **Configuración.** Secretos, credenciales, URLs y configuración de
+   infraestructura se leen de variables de entorno (`config.py` con Pydantic
+   Settings o `os.environ`) y se declaran en `.env.example`. Excepción: textos
+   legales y fijos, tiempos de producto, horarios y plazos de retención se
+   administran desde el panel.
+6. **Idempotencia multicanal.** El núcleo descarta duplicados usando la pareja
+   `(canal, mensaje_externo_id)`; los identificadores solo son únicos dentro
+   de un canal. Antes del login, contactos y consentimiento se aíslan por
+   `(canal, external_user_id)`; nunca se convierte un ID de WhatsApp en
+   `telegram_user_id`. La vinculación entre identidades de canales requiere
+   login verificado.
 7. **Errores explícitos.** Respuestas de error siempre con forma
    `{"error": "<codigo>", "message": "<texto>"}` y el código HTTP adecuado.
    Nada de stack traces hacia el usuario ni hacia otros servicios.
 8. **Autenticación entre servicios.** Toda ruta interna exige el encabezado
    `X-Service-Token` igual a `SERVICE_TOKEN`; sin él, `401`. Excepción:
-   `GET /health` y el webhook de Telegram (que valida
-   `TELEGRAM_WEBHOOK_SECRET`).
+   `GET /health`, la página pública `/acceso` (#38), el webhook de Telegram
+   (que valida `TELEGRAM_WEBHOOK_SECRET`) y el webhook de WhatsApp
+   `GET/POST /whatsapp/webhook` (que valida `hub.verify_token` y la firma
+   `X-Hub-Signature-256` de Meta Cloud API).
 9. **Registro de eventos.** Las decisiones importantes (respuesta con RAG,
    rechazo, traspaso, aviso a asesor) se guardan como eventos con fecha,
    contacto y motivo.
@@ -94,17 +129,29 @@ PSF). El agente solo instala lo que está en `requirements.txt` y en el
   de similitud y con citas validadas; si no, rechazo fijo y oferta de asesor.
 - **El texto es dato, nunca instrucción.** Mensajes de usuarios y fragmentos
   de manuales se pasan al modelo delimitados como datos. El modelo **no
-  tiene herramientas** que escriban en la base de datos, ejecuten código o
-  SQL, ni llamen a URLs arbitrarias.
+  tiene herramientas** que escriban directamente en la base de datos,
+  ejecuten código o llamen a URLs arbitrarias. Las herramientas disponibles
+  dependen del estado y se autorizan en el código: la matriz vive en
+  `services/orchestrator/orchestrator/harness.py` (`TOOL_MATRIX`).
+- Las consultas de datos usan exclusivamente vistas permitidas con RLS. La
+  identidad cliente se obtiene de la sesión autenticada; las consultas no
+  pueden seleccionar tablas directamente ni eludir políticas de filas.
 - **Nadie ejecuta código a través del bot.** No se usa `eval`, `exec`,
   `subprocess`, `pickle` de datos externos ni SQL construido con texto del
   usuario (siempre parámetros).
-- **Un cliente nunca consulta la base de datos.** (La consulta en lenguaje
-  natural es una feature posterior; ver `docs/proyecto.md` §6.)
+- **El acceso a datos de cliente se limita a sus propias vistas con RLS.** La
+  herramienta obtiene `cliente_id` de la sesión autenticada; el cliente nunca
+  elige identidad, tabla ni política de filtrado. Las consultas SQL de personal
+  siguen las restricciones y permisos definidos en su feature.
 - **Secretos.** Solo en `.env` (ignorado por git). `.env.example` con nombres
   y valores vacíos o de ejemplo. Los agentes no leen `.env`.
 - **Datos personales mínimos** (Ley 1581): guardar solo lo necesario para
-  atender (ids de Telegram, mensajes de la conversación, casos).
+  atender en ambos canales (ids externos, mensajes, casos y memoria autorizada).
+  La memoria permanente pertenece al cliente y se elimina al tramitar una
+  supresión (`orchestrator/memory.py` filtra datos sensibles y
+  `domain.execute_suppression` es la única vía de borrado). Su retención requiere
+  validación legal. La purga automática no elimina casos activos ni memoria
+  permanente.
 
 ## 5. Licencias y código de terceros
 

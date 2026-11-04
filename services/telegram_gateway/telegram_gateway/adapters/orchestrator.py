@@ -4,13 +4,15 @@ from __future__ import annotations
 from typing import Protocol
 
 import httpx
-from lazaro_contracts import SERVICE_TOKEN_HEADER, MessageRequest
+from lazaro_contracts import SERVICE_TOKEN_HEADER, MessageRequest, NormalizedMessage
 
 from ..domain import OrchestratorError
 
 
 class OrchestratorClient(Protocol):
-    def post_message(self, request: MessageRequest) -> None:  # lanza OrchestratorError
+    def post_message(
+        self, request: MessageRequest | NormalizedMessage
+    ) -> None:  # lanza OrchestratorError
         ...
 
 
@@ -20,7 +22,7 @@ class HttpOrchestratorClient:
         self._service_token = service_token
         self._timeout = timeout
 
-    def post_message(self, request: MessageRequest) -> None:
+    def post_message(self, request: MessageRequest | NormalizedMessage) -> None:
         try:
             response = httpx.post(
                 f"{self._base_url}/messages",
@@ -44,10 +46,10 @@ class HttpOrchestratorClient:
 
 class FakeOrchestratorClient:
     def __init__(self, fail: bool = False) -> None:
-        self.received: list[MessageRequest] = []
+        self.received: list[MessageRequest | NormalizedMessage] = []
         self.fail = fail
 
-    def post_message(self, request: MessageRequest) -> None:
+    def post_message(self, request: MessageRequest | NormalizedMessage) -> None:
         if self.fail:
             raise OrchestratorError("orquestador caído")
         self.received.append(request)

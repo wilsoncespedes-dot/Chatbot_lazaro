@@ -39,3 +39,34 @@ def test_send_invalid_body_returns_422(env):
     r = env.client.post("/send", json={"chat_id": 9}, headers=HEADERS)
     assert r.status_code == 422
     assert r.json()["error"] == "validation_error"
+
+
+def test_send_canonical_signed_options_renders_inline_keyboard(env):
+    """R38: la ruta /send pinta los botones de consentimiento como teclado."""
+    response = env.client.post(
+        "/send",
+        json={
+            "channel": "telegram",
+            "destination": "77",
+            "blocks": [
+                {"type": "text", "text": "Elige"},
+                {
+                    "type": "options",
+                    "options": ["Acepto", "No acepto"],
+                    "option_ids": ["privacy.accept", "privacy.reject"],
+                    "option_proofs": ["a" * 32, "b" * 32],
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert env.telegram.reply_markups[-1] == {
+        "inline_keyboard": [
+            [
+                {"text": "Acepto", "callback_data": f"privacy.accept:{'a' * 32}"},
+                {"text": "No acepto", "callback_data": f"privacy.reject:{'b' * 32}"},
+            ]
+        ]
+    }

@@ -10,7 +10,11 @@ from lazaro_contracts import HandoverRequest
 
 from orchestrator.adapters import gateway, handover, llm, rag
 from orchestrator.adapters.repository import PostgresRepository
-from orchestrator.domain import ServiceUnavailable
+from orchestrator.domain import (
+    AuthorizationDenied,
+    ChannelRejected,
+    ServiceUnavailable,
+)
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -61,6 +65,22 @@ def test_http_clients_send_service_token_url_and_timeout(captured):
         assert timeout == 3
     assert json.loads(requests[0][0].content) == {"query": "hola", "top_k": 5}
     assert json.loads(requests[1][0].content) == {"chat_id": 9, "text": "texto"}
+
+
+def test_http_gateway_send_channel_uses_canonical_contract(captured):
+    """R10: el núcleo puede enviar la respuesta abstracta al canal de origen."""
+    requests, responses = captured
+    responses["/send"] = httpx.Response(200, json={"sent": True})
+
+    gateway.HttpGatewayClient("http://gw:8000", "tok", 3).send_channel(
+        "whatsapp", "57300", "hola"
+    )
+
+    assert json.loads(requests[0][0].content) == {
+        "channel": "whatsapp",
+        "destination": "57300",
+        "blocks": [{"type": "text", "text": "hola"}],
+    }
 
 
 def test_http_clients_raise_service_unavailable_on_errors(captured):
@@ -143,6 +163,54 @@ def test_postgres_repository_uses_parameters_only():
         assert "'" not in sql
     dml = [sql for sql, _ in conn.log if not sql.startswith("CREATE")]
     assert dml and all("%s" in sql for sql in dml)
+
+
+def test_http_gateway_raises_channel_rejected_on_422(captured):
+    """R21: un 422 del gateway lanza ChannelRejected (subclase de ServiceUnavailable)."""
+    _, responses = captured
+    responses["/send"] = httpx.Response(
+        422, json={"error": "validation_error", "message": "ventana"}
+    )
+    client = gateway.HttpGatewayClient("http://gw", "t")
+    with pytest.raises(ChannelRejected):
+        client.send_channel("whatsapp", "57300", "hola")
+    assert issubclass(ChannelRejected, ServiceUnavailable)
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(403, "forbidden"), (404, "not_found"), (409, "case_closed"),
+     (422, "validation_error")],
+)
+def test_http_transfer_maps_denials(captured, status, code):
+    """R32, R33: los rechazos de transfer se convierten en AuthorizationDenied."""
+    _, responses = captured
+    responses["/cases/case-1/transfer"] = httpx.Response(
+        status, json={"error": code, "message": "x"}
+    )
+    with pytest.raises(AuthorizationDenied) as excinfo:
+        handover.HttpHandoverClient("http://ho", "t").transfer("case-1", "111", "222")
+    assert excinfo.value.code == code
+
+
+def test_http_transfer_uses_route_token_and_payload(captured):
+    """R26, R32: transfer usa su ruta, token y el contrato de transferencia."""
+    requests, responses = captured
+    responses["/cases/case-1/transfer"] = httpx.Response(
+        200, json={"status": "assigned", "case_id": "case-1", "advisor_id": "222"}
+    )
+    parsed = handover.HttpHandoverClient("http://ho:8000/", "tok", 3).transfer(
+        "case-1", "111", "222"
+    )
+    assert (parsed.case_id, parsed.advisor_id) == ("case-1", "222")
+    request, timeout = requests[0]
+    assert request.url.path == "/cases/case-1/transfer"
+    assert request.headers["X-Service-Token"] == "tok"
+    assert timeout == 3
+    assert json.loads(request.content) == {
+        "advisor_id": "111",
+        "target_advisor_id": "222",
+    }
 
 
 def test_postgres_repository_connects_lazily():

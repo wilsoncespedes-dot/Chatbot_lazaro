@@ -84,3 +84,73 @@ resultados, conteos ni metadatos leídos de la base.
 - Cada solicitud (incluidas las denegadas y rechazadas) deja una fila en
   `db_query_audit` con perfil, `telegram_user_id`, estado, vistas, número de
   filas y `sql_sha256`. No se guardan la pregunta, el SQL en claro ni las filas.
+
+## Datos propios del cliente (#39)
+
+La herramienta `consultar_mis_datos` usa una conexión **distinta** del panel y
+del personal (`CLIENT_DATA_DATABASE_URL`), con su propio rol de solo lectura.
+El `cliente_id` se toma siempre de la sesión autenticada (`profile_id` de
+`client_sessions`), nunca del texto ni de la salida del modelo.
+
+### 1. Rol de lectura de clientes
+
+```sql
+CREATE ROLE lazaro_cliente_lectura LOGIN PASSWORD '<clave-fuerte>';
+ALTER ROLE lazaro_cliente_lectura NOSUPERUSER NOBYPASSRLS;
+ALTER ROLE lazaro_cliente_lectura SET default_transaction_read_only = on;
+ALTER ROLE lazaro_cliente_lectura SET statement_timeout = '5s';
+REVOKE ALL ON DATABASE lazaro FROM lazaro_cliente_lectura;
+GRANT CONNECT ON DATABASE lazaro TO lazaro_cliente_lectura;
+
+CREATE SCHEMA IF NOT EXISTS mis_datos;
+GRANT USAGE ON SCHEMA mis_datos TO lazaro_cliente_lectura;
+GRANT SELECT ON ALL TABLES IN SCHEMA mis_datos TO lazaro_cliente_lectura;
+```
+
+No concedas `SELECT` sobre tablas base ni sobre `public`. Si el rol conectado
+es superusuario o tiene `BYPASSRLS`, el orquestador responde
+`CLIENT_DATA_UNAVAILABLE_REPLY` y no ejecuta la consulta.
+
+### 2. RLS en tablas y vistas permitidas
+
+```sql
+CREATE TABLE app.datos_cliente (
+  cliente_id TEXT NOT NULL,
+  nombre TEXT,
+  estado TEXT
+);
+ALTER TABLE app.datos_cliente ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app.datos_cliente FORCE ROW LEVEL SECURITY;
+CREATE POLICY clientes_solo_sus_datos ON app.datos_cliente
+  USING (cliente_id = current_setting('lazaro.cliente_id', true));
+
+CREATE VIEW mis_datos.v_datos AS
+  SELECT cliente_id, nombre, estado FROM app.datos_cliente;
+```
+
+El rol de consulta no recibe `SELECT` sobre `app` ni sobre tablas base:
+solo sobre las vistas de `mis_datos`. La vista debe ser propiedad de un rol
+**sin** `BYPASSRLS` (el dueño de la vista puede leer la tabla base, pero la RLS
+sigue aplicándose por `FORCE`). La allowlist
+`CLIENT_DATA_ALLOWLIST` (mismo formato JSON que `DB_QUERY_ALLOWLIST`) debe
+coincidir exactamente con las columnas de cada vista de `CLIENT_DATA_VIEWS_SCHEMA`:
+
+```env
+CLIENT_DATA_ENABLED=true
+CLIENT_DATA_DATABASE_URL=postgresql://lazaro_cliente_lectura:<clave>@host:5432/lazaro
+CLIENT_DATA_VIEWS_SCHEMA=mis_datos
+CLIENT_DATA_ALLOWLIST={"mis_datos.v_datos": ["cliente_id", "nombre", "estado"]}
+CLIENT_DATA_RLS_SETTING=lazaro.cliente_id
+```
+
+### 3. Sonda de RLS y fallo cerrado
+
+En el primer uso, antes de ejecutar la consulta, el adaptador comprueba en
+`pg_catalog` que cada objeto de la allowlist sea una vista (`relkind = 'v'`) con
+exactamente sus columnas. Después fija `CLIENT_DATA_RLS_SETTING` a cadena vacía
+y ejecuta `SELECT 1 FROM <vista> LIMIT 1` por vista: si alguna devuelve una
+fila, asume que la RLS no está activa y falla cerrado sin ejecutar la consulta.
+Cada consulta viaja en una transacción `READ ONLY` con
+`SELECT set_config('lazaro.cliente_id', <cliente_id>, true)` parametrizado y
+termina siempre con `ROLLBACK`. Reinicia el orquestador tras cambiar vistas,
+allowlist o políticas.

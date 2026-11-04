@@ -22,6 +22,8 @@ from lazaro_contracts import (
     CaseCloseResponse,
     CaseListQuery,
     CaseListResponse,
+    CaseTransferRequest,
+    CaseTransferResponse,
     CheckTimeoutsRequest,
     CheckTimeoutsResponse,
     ErrorResponse,
@@ -49,6 +51,7 @@ from .domain import (
     log_orphan_cases,
     open_case,
     purge_personal_data,
+    transfer_case,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +162,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     @app.post("/cases/{case_id}/close", response_model=CaseCloseResponse)
     def post_close(case_id: str, body: CaseCloseRequest) -> CaseCloseResponse:
         return close_case(case_id, body.advisor_id, settings, adapters)
+
+    @app.post("/cases/{case_id}/transfer", response_model=CaseTransferResponse)
+    def post_transfer(case_id: str, body: CaseTransferRequest) -> CaseTransferResponse:
+        return transfer_case(case_id, body, settings, adapters)
 
     @app.post("/cases/{case_id}/authorize", response_model=CaseAuthorizeResponse)
     def post_authorize(case_id: str, body: CaseAuthorizeRequest) -> CaseAuthorizeResponse:

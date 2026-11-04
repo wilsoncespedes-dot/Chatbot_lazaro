@@ -39,6 +39,8 @@ nunca en el repositorio:
 | `PRIVACY_ACCEPTED_REPLY` | orchestrator | Respuesta fija tras aceptar el aviso. |
 | `PRIVACY_RETENTION_DAYS` | handover | Plazo de retención de datos personales; única fuente. |
 | `PRIVACY_ACTIVE_CASE_MAX_DAYS` | handover | Antigüedad máxima de un caso activo antes de cerrarlo y borrarlo. |
+| `IDENTITY_PUBLIC_BASE_URL` | orchestrator | URL pública del orchestrator; debe empezar por `https://`. Se usa para el enlace `/acceso`. |
+| `IDENTITY_LINK_SIGNING_KEY` | orchestrator | Secreto de firma de los enlaces de login, distinto de `SERVICE_TOKEN`; mínimo 32 caracteres. |
 
 `SERVICE_TOKEN` lo genera Render en el env group `lazaro-compartido`; no lo
 copies al repositorio. `DATABASE_URL` y `REDIS_URL` salen de las referencias a
@@ -115,6 +117,23 @@ Opciones:
 
 El script nunca imprime `TELEGRAM_BOT_TOKEN` ni `TELEGRAM_WEBHOOK_SECRET`, ni
 siquiera ante errores HTTP o de red.
+
+### 4.1 Configurar el webhook de WhatsApp (Meta Cloud API, #43)
+
+El proveedor de producción de WhatsApp es **Meta Cloud API**. En la app de Meta
+(WhatsApp → Configuration) se registra la URL pública del **telegram-gateway**:
+
+- **Callback URL:** `{PUBLIC_BASE_URL}/whatsapp/webhook` (debe empezar por
+  `https://`).
+- **Verify token:** el mismo valor que `WHATSAPP_VERIFY_TOKEN` en Render.
+- **Suscripción:** el campo `messages` de la cuenta de WhatsApp Business.
+- **Credenciales:** un token de sistema permanente en `WHATSAPP_ACCESS_TOKEN`,
+  el App Secret de la app en `WHATSAPP_APP_SECRET` y el identificador del número
+  emisor en `WHATSAPP_PHONE_NUMBER_ID`.
+
+Mientras `WHATSAPP_ENABLED=false` (valor por defecto), el gateway responde
+`404` a `GET/POST /whatsapp/webhook` y `POST /send` con `channel=whatsapp`
+devuelve `502 upstream_error`. No se imprimen ni se versionan los secretos.
 
 ## 5. Comprobar `/health`
 

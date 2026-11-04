@@ -18,6 +18,15 @@ PACKAGE_DIR = CONTRACTS_DIR / "lazaro_contracts"
 MODEL_NAMES = [
     "MessageRequest",
     "MessageResponse",
+    "NormalizedMessage",
+    "TextBlock",
+    "OptionsBlock",
+    "ListBlock",
+    "LinkBlock",
+    "TemplateBlock",
+    "ResponseBlocks",
+    "ChannelCapabilities",
+    "ChannelSendRequest",
     "SendRequest",
     "SendResponse",
     "SearchRequest",
@@ -49,6 +58,8 @@ MODEL_NAMES = [
     "ManualListResponse",
     "ErrorResponse",
     "HealthResponse",
+    "ExpiryNoticeRunRequest",
+    "ExpiryNoticeRunResponse",
 ]
 
 
@@ -138,5 +149,8 @@ def test_package_imports_only_stdlib_and_pydantic(path: Path) -> None:
 def test_package_has_the_expected_modules() -> None:
     """R46: el recorrido de imports cubre los módulos del paquete."""
     names = {path.name for path in PACKAGE_DIR.glob("*.py")}
-    expected = {"__init__.py", "common.py", "messages.py", "search.py", "manuals.py", "cases.py"}
+    expected = {
+        "__init__.py", "common.py", "messages.py", "search.py", "manuals.py",
+        "cases.py", "credentials.py",
+    }
     assert expected <= names

@@ -17,6 +17,8 @@ from lazaro_contracts import (
     CaseCloseResponse,
     CaseListItem,
     CaseListResponse,
+    CaseTransferRequest,
+    CaseTransferResponse,
     CheckTimeoutsResponse,
     HandoverRequest,
     HandoverResponse,
@@ -38,7 +40,7 @@ CLIENT_FORWARD_TEMPLATE = "Caso {case_id} | Cliente: {text}"
 _INTEGER_PATTERN = re.compile(r"-?[0-9]+")
 
 CaseStatus = Literal["open", "assigned", "timed_out", "closed"]
-DenialAction = Literal["reply", "close", "assign"]
+DenialAction = Literal["reply", "close", "assign", "transfer"]
 
 
 class DomainError(Exception):
@@ -66,6 +68,11 @@ class AdvisorForbidden(DomainError):
 class UpstreamError(DomainError):
     code = "upstream_error"
     status_code = 502
+
+
+class TransferTargetInvalid(DomainError):
+    code = "validation_error"
+    status_code = 422
 
 
 class PrivacyNotConfigured(DomainError):
@@ -375,6 +382,50 @@ def assign_case(
     if adapters.repository.assign_if_unassigned(case_id, advisor_id, adapters.clock()):
         return CaseAssignResponse(status="assigned", case_id=case_id)
     return _resolve_lost_assignment(case_id, advisor_id, adapters)
+
+
+def _resolve_lost_transfer(
+    case_id: str, advisor_id: str, target_id: str, adapters: Adapters
+) -> CaseTransferResponse:
+    """R31: si la escritura condicional no cambió filas, decide con el estado actual."""
+    current = adapters.repository.get_case(case_id)
+    if current is None:
+        raise CaseNotFound("El caso no existe.")
+    if current.status == "closed":
+        raise CaseClosed("El caso está cerrado.")
+    if current.status == "assigned" and current.advisor_id == target_id:
+        return CaseTransferResponse(
+            status="assigned", case_id=case_id, advisor_id=target_id
+        )
+    _deny(case_id, advisor_id, "transfer", adapters)
+
+
+def transfer_case(
+    case_id: str, req: CaseTransferRequest, settings: Settings, adapters: Adapters
+) -> CaseTransferResponse:
+    """R27-R31: reasigna con una escritura condicional solo al asesor actual."""
+    advisor_id = req.advisor_id
+    target_id = req.target_advisor_id
+    if not is_registered_advisor(advisor_id, settings):
+        _deny(case_id, advisor_id, "transfer", adapters)
+    case = adapters.repository.get_case(case_id)
+    if case is None:
+        raise CaseNotFound("El caso no existe.")
+    if case.status == "closed":
+        raise CaseClosed("El caso está cerrado.")
+    if case.status != "assigned" or case.advisor_id != advisor_id:
+        _deny(case_id, advisor_id, "transfer", adapters)
+    if not is_registered_advisor(target_id, settings) or target_id == advisor_id:
+        raise TransferTargetInvalid(
+            "El asesor destino no es válido para transferir el caso."
+        )
+    if adapters.repository.transfer_if_assigned_to(
+        case_id, advisor_id, target_id, adapters.clock()
+    ):
+        return CaseTransferResponse(
+            status="assigned", case_id=case_id, advisor_id=target_id
+        )
+    return _resolve_lost_transfer(case_id, advisor_id, target_id, adapters)
 
 
 def _resolve_lost_close(

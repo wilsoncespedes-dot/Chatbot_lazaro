@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, Field
 
+from .channels import NormalizedMessage
 from .common import ContractModel, MessageText
 
 
@@ -35,3 +36,16 @@ class SendResponse(ContractModel):
     """Respuesta 200 de POST /send."""
 
     sent: Literal[True]
+
+
+def normalize_legacy_message(request: MessageRequest) -> NormalizedMessage:
+    """Traduce el payload Telegram histórico al modelo común (canal telegram)."""
+    return NormalizedMessage(
+        channel="telegram",
+        external_user_id=str(request.telegram_user_id),
+        external_chat_id=str(request.chat_id),
+        external_message_id=str(request.update_id),
+        kind="text",
+        text=request.text,
+        received_at=request.received_at,
+    )

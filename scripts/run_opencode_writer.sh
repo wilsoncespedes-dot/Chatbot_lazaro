@@ -71,12 +71,12 @@ if missing:
     raise SystemExit(f"Faltan archivos de spec para {name}: {', '.join(missing)}")
 PY
 
-if ! opencode auth list 2>&1 | grep -qi 'deepseek'; then
-  echo "No hay credencial DeepSeek en OpenCode. Abre OpenCode, ejecuta /connect, selecciona Other, usa el id 'deepseek' y configura tu API key allí." >&2
+if ! opencode auth list 2>&1 | grep -Eqi 'OpenCode Go|opencode-go'; then
+  echo "No hay credencial OpenCode Go en OpenCode. En la TUI ejecuta /connect, selecciona Other, usa el id 'opencode-go' y pega allí tu API key de OpenCode Go. No la guardes en el repositorio." >&2
   exit 3
 fi
 
-MODEL="${OPENCODE_WRITER_MODEL:-deepseek/deepseek-flash}"
+MODEL="${OPENCODE_WRITER_MODEL:-opencode-go/deepseek-v4.1-flash}"
 PROMPT="Implementa la feature SDD aprobada '${FEATURE}'. Lee y sigue specs/${FEATURE}/requirements.md, design.md y tasks.md en orden. Respeta AGENTS.md y .opencode/agents/implementer.md. No cambies el estado de feature_list.json, no marques done y no edites el harness."
 if [ -n "$CONTEXT_FILE" ]; then
   PROMPT+=$'\n\nLee también el informe indicado y atiende sus cambios: '

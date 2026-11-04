@@ -1,6 +1,8 @@
 """Configuración del servicio telegram_gateway leída de variables de entorno."""
 from __future__ import annotations
 
+import re
+
 from lazaro_contracts.production import (
     ProductionConfigError,
     is_valid_webhook_secret,
@@ -8,7 +10,7 @@ from lazaro_contracts.production import (
     parse_app_env,
     production_problems,
 )
-from pydantic import model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REQUIRED_IN_PRODUCTION = (
@@ -41,6 +43,70 @@ class Settings(BaseSettings):
     message_grouping_max_attempts: int = 3
     message_grouping_poll_seconds: float = 0.5
     message_grouping_accept_phrase: str = ""
+
+    # WhatsApp Cloud API (#43)
+    whatsapp_enabled: bool = False
+    whatsapp_access_token: SecretStr = SecretStr("")
+    whatsapp_app_secret: SecretStr = SecretStr("")
+    whatsapp_verify_token: SecretStr = SecretStr("")
+    whatsapp_phone_number_id: str = ""
+    whatsapp_graph_base_url: str = "https://graph.facebook.com"
+    whatsapp_graph_api_version: str = "v21.0"
+    whatsapp_template_language: str = "es"
+    whatsapp_interactive_body_text: str = "Elige una opción:"
+    whatsapp_window_hours: int = 24
+
+    @field_validator("whatsapp_graph_base_url")
+    @classmethod
+    def _normalize_graph_base_url(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @field_validator("whatsapp_graph_api_version")
+    @classmethod
+    def _validate_graph_api_version(cls, value: str) -> str:
+        if not re.fullmatch(r"v\d+\.\d+", value):
+            raise ValueError("WHATSAPP_GRAPH_API_VERSION no tiene el formato v<mayor>.<menor>")
+        return value
+
+    @field_validator("whatsapp_template_language")
+    @classmethod
+    def _validate_template_language(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-z]{2}(_[A-Z]{2})?", value):
+            raise ValueError("WHATSAPP_TEMPLATE_LANGUAGE no tiene un formato válido")
+        return value
+
+    @field_validator("whatsapp_interactive_body_text")
+    @classmethod
+    def _validate_interactive_body_text(cls, value: str) -> str:
+        if not 1 <= len(value) <= 1024:
+            raise ValueError("WHATSAPP_INTERACTIVE_BODY_TEXT debe tener entre 1 y 1024 caracteres")
+        return value
+
+    @field_validator("whatsapp_window_hours")
+    @classmethod
+    def _validate_window_hours(cls, value: int) -> int:
+        if not 1 <= value <= 24:
+            raise ValueError("WHATSAPP_WINDOW_HOURS debe estar entre 1 y 24")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_whatsapp(self) -> "Settings":
+        if not self.whatsapp_enabled:
+            return self
+        missing: list[str] = []
+        if not self.whatsapp_access_token.get_secret_value():
+            missing.append("WHATSAPP_ACCESS_TOKEN")
+        if not self.whatsapp_app_secret.get_secret_value():
+            missing.append("WHATSAPP_APP_SECRET")
+        if not self.whatsapp_verify_token.get_secret_value():
+            missing.append("WHATSAPP_VERIFY_TOKEN")
+        if not self.whatsapp_phone_number_id:
+            missing.append("WHATSAPP_PHONE_NUMBER_ID")
+        if missing:
+            raise ValueError(
+                "configuración de WhatsApp incompleta: faltan " + ", ".join(missing)
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_message_grouping(self) -> "Settings":
