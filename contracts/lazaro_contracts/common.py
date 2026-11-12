@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 SERVICE_TOKEN_HEADER = "X-Service-Token"
 # S9: límite de sendMessage de Telegram.
@@ -36,7 +36,24 @@ class ErrorResponse(ContractModel):
 
 
 class HealthResponse(ContractModel):
-    """Respuesta de GET /health en todos los servicios."""
+    """Respuesta de GET /health en todos los servicios.
 
-    status: Literal["ok"]
+    `dependencies` solo aparece cuando una dependencia crítica no responde y el
+    servicio devuelve HTTP 503; nunca incluye URLs, credenciales ni DSN.
+    """
+
+    status: Literal["ok", "unhealthy"]
     service: Annotated[str, StringConstraints(min_length=1)]
+    dependencies: dict[str, Literal["unavailable"]] | None = None
+
+    @model_validator(mode="after")
+    def _validate_dependencies_consistency(self) -> "HealthResponse":
+        """R2: unhealthy exige dependencias fallidas; ok no las admite."""
+        if self.status == "unhealthy":
+            if not self.dependencies:
+                raise ValueError(
+                    "status 'unhealthy' requires a non-empty dependencies map"
+                )
+        elif self.dependencies is not None:
+            raise ValueError("status 'ok' must not include dependencies")
+        return self

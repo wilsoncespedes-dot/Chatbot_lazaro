@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from lazaro_contracts import ErrorResponse, HealthResponse
 from pydantic import BaseModel
 
+from rag.adapters.embeddings import FakeEmbeddings
+from rag.adapters.repository import FakeChunkRepository
 from rag.config import Settings
 from rag.domain import DomainError
 from rag.main import create_app
@@ -57,7 +59,9 @@ def _compose_service_block() -> str:
 
 
 def _build_app() -> FastAPI:
-    app = create_app(Settings(service_token=TOKEN))
+    app = create_app(
+        Settings(service_token=TOKEN), FakeEmbeddings(), FakeChunkRepository()
+    )
 
     @app.post("/_test/echo")
     async def echo(body: _Echo) -> _Echo:

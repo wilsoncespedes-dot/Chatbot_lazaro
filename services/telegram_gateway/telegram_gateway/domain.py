@@ -119,13 +119,15 @@ def _normalize_text(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def is_immediate(text: str, accept_phrase: str) -> bool:
-    """R13, R14: comandos y la frase de aceptación no se agrupan."""
+def is_immediate(text: str, accept_phrase: str, reject_phrase: str = "") -> bool:
+    """R13, R14, R46 R31: comandos y frases de decisión no se agrupan."""
     if text.strip().startswith("/"):
         return True
-    if not accept_phrase.strip():
-        return False
-    return _normalize_text(text) == _normalize_text(accept_phrase)
+    normalized = _normalize_text(text)
+    for phrase in (accept_phrase, reject_phrase):
+        if phrase.strip() and normalized == _normalize_text(phrase):
+            return True
+    return False
 
 
 def compute_due(
@@ -187,6 +189,17 @@ def extract_incoming(update: dict) -> IncomingUpdate | None:
         user_id=user_id if user_id is not None else chat_id,
         text=text,
     )
+
+
+def extract_callback_query_id(update: dict) -> str | None:
+    """R7: id real de `callback_query` para confirmarlo; nunca uno sintético."""
+    callback = update.get("callback_query")
+    if not isinstance(callback, dict):
+        return None
+    callback_query_id = callback.get("id")
+    if not isinstance(callback_query_id, str) or not callback_query_id.strip():
+        return None
+    return callback_query_id
 
 
 def extract_callback(update: dict) -> IncomingCallback | None:

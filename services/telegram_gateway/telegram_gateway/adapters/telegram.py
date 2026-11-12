@@ -34,11 +34,39 @@ class TelegramClient(Protocol):
     ) -> None:  # lanza TelegramError
         ...
 
+    def answer_callback_query(self, callback_query_id: str) -> None:  # lanza TelegramError
+        ...
+
 
 class HttpTelegramClient:
-    def __init__(self, bot_token: str, timeout: float = 10) -> None:
+    def __init__(
+        self,
+        bot_token: str,
+        timeout: float = 10,
+        answer_callback_timeout: float = 3.0,
+    ) -> None:
         self._bot_token = bot_token
         self._timeout = timeout
+        self._answer_callback_timeout = answer_callback_timeout
+
+    def answer_callback_query(self, callback_query_id: str) -> None:
+        url = f"https://api.telegram.org/bot{self._bot_token}/answerCallbackQuery"
+        try:
+            response = httpx.post(
+                url,
+                json={"callback_query_id": callback_query_id},
+                timeout=self._answer_callback_timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # No se propaga la URL original (contiene el token del bot).
+            raise TelegramError(
+                f"Telegram respondió {exc.response.status_code} al confirmar el callback."
+            ) from None
+        except httpx.HTTPError as exc:
+            raise TelegramError(
+                f"No se pudo contactar con Telegram ({type(exc).__name__})."
+            ) from None
 
     def send_message(
         self, chat_id: int, text: str, reply_markup: dict | None = None
@@ -64,10 +92,17 @@ class HttpTelegramClient:
 
 
 class FakeTelegramClient:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, fail_answer: bool = False) -> None:
         self.sent: list[tuple[int, str]] = []
         self.reply_markups: list[dict | None] = []
+        self.answered: list[str] = []
         self.fail = fail
+        self.fail_answer = fail_answer
+
+    def answer_callback_query(self, callback_query_id: str) -> None:
+        if self.fail_answer:
+            raise TelegramError("Telegram no disponible.")
+        self.answered.append(callback_query_id)
 
     def send_message(
         self, chat_id: int, text: str, reply_markup: dict | None = None

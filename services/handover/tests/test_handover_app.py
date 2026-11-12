@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,10 @@ from fastapi.testclient import TestClient
 from lazaro_contracts import ErrorResponse, HealthResponse
 from pydantic import BaseModel
 
+from handover.adapters.gateway import FakeGatewayClient
+from handover.adapters.repository import FakeCaseRepository
 from handover.config import Settings
-from handover.domain import DomainError
+from handover.domain import Adapters, DomainError
 from handover.main import create_app
 
 SVC = "handover"
@@ -57,7 +60,12 @@ def _compose_service_block() -> str:
 
 
 def _build_app() -> FastAPI:
-    app = create_app(Settings(service_token=TOKEN))
+    adapters = Adapters(
+        repository=FakeCaseRepository(),
+        gateway=FakeGatewayClient(),
+        clock=lambda: datetime.now(timezone.utc),
+    )
+    app = create_app(Settings(service_token=TOKEN), adapters)
 
     @app.post("/_test/echo")
     async def echo(body: _Echo) -> _Echo:

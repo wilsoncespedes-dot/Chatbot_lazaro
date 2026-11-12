@@ -262,3 +262,11 @@ cambio de alcance y prevalecen sobre las descripciones históricas anteriores:
 4. El cliente autenticado puede consultar solo sus propios datos mediante
    vistas con RLS; la supresión la solicita el cliente y la ejecuta una persona,
    mientras la purga automática excluye casos activos y memoria permanente.
+5. Consentimiento: en Telegram se muestra el aviso vigente sin botones inline;
+   la persona acepta escribiendo exactamente la frase configurada (por defecto
+   `ACEPTO`) y rechaza con la frase configurada (por defecto `NO ACEPTO`). La
+   comparación normaliza espacios extremos, colapsa espacios internos repetidos
+   y no distingue mayúsculas/minúsculas; es igualdad, no contención. La
+   aceptación se guarda con evidencia `text` ligada al id externo, la versión,
+   el hash y el timestamp del mensaje. WhatsApp conserva sus botones
+   Acepto/No acepto y la evidencia `button`.

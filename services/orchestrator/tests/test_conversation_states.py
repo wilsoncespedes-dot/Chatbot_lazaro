@@ -175,7 +175,9 @@ def test_unsupported_and_unknown_events_keep_the_state():
 
 def test_first_message_shows_greeting_notice_and_buttons_without_persisting(env):
     """R2, R35: saludo, aviso y botones; ni contacto, ni mensaje, ni estado, ni LLM."""
-    process_channel_message(_message("Hola"), env.settings, env.adapters)
+    process_channel_message(
+        _message("Hola", channel="whatsapp"), env.settings, env.adapters
+    )
 
     assert env.repo.contacts == {}
     assert env.repo.messages == []
@@ -184,7 +186,7 @@ def test_first_message_shows_greeting_notice_and_buttons_without_persisting(env)
     assert env.repo.processed_messages == set()
     assert env.rag.calls == [] and env.llm.calls == []
     [channel, destination, prompt] = env.gateway.channel_sent[0]
-    assert (channel, destination) == ("telegram", "100")
+    assert (channel, destination) == ("whatsapp", "100")
     assert env.settings.conversation_greeting in prompt
     assert env.settings.privacy_notice_text in prompt
     assert "Acepto" in prompt and "No acepto" in prompt
@@ -192,7 +194,11 @@ def test_first_message_shows_greeting_notice_and_buttons_without_persisting(env)
 
 def test_policy_question_answers_with_the_policy_and_buttons(env):
     """R3: una pregunta sobre la política recibe el aviso vigente sin LLM."""
-    process_channel_message(_message("¿Qué hacen con mis datos?"), env.settings, env.adapters)
+    process_channel_message(
+        _message("¿Qué hacen con mis datos?", channel="whatsapp"),
+        env.settings,
+        env.adapters,
+    )
 
     assert env.repo.contacts == {} and env.repo.messages == []
     assert env.llm.calls == []
@@ -200,29 +206,39 @@ def test_policy_question_answers_with_the_policy_and_buttons(env):
 
 
 def test_text_affirmation_asks_for_the_button_and_keeps_awaiting(env):
-    """R6, R34: el «sí» textual no concede; se pide confirmar con el botón."""
+    """R6, R34, R30 de #46: en WhatsApp el «sí» textual pide el botón."""
     process_channel_message(
-        _message(env.settings.privacy_accept_phrase, message_id="m1"),
+        _message(env.settings.privacy_accept_phrase, channel="whatsapp", message_id="m1"),
         env.settings,
         env.adapters,
     )
     process_channel_message(
-        _message("sí, acepto", message_id="m2"), env.settings, env.adapters
+        _message("sí, acepto", channel="whatsapp", message_id="m2"),
+        env.settings,
+        env.adapters,
     )
 
     assert env.repo.privacy_consents == []
     assert env.repo.contacts == {}
     assert env.repo.conversation_states == {}
     assert env.llm.calls == []
-    assert (100, env.settings.conversation_confirm_button_reply) in env.gateway.sent
+    assert (
+        "whatsapp",
+        "100",
+        env.settings.conversation_confirm_button_reply,
+    ) in env.gateway.channel_sent
     assert "Acepto" in env.gateway.channel_sent[-1][2]
 
 
 def test_policy_question_while_awaiting_consent_answers_policy(env):
     """R3: una pregunta posterior al primer mensaje recibe el aviso y los botones."""
-    process_channel_message(_message("Hola", message_id="m1"), env.settings, env.adapters)
     process_channel_message(
-        _message("¿Qué hacen con mis datos?", message_id="m2"),
+        _message("Hola", channel="whatsapp", message_id="m1"),
+        env.settings,
+        env.adapters,
+    )
+    process_channel_message(
+        _message("¿Qué hacen con mis datos?", channel="whatsapp", message_id="m2"),
         env.settings,
         env.adapters,
     )
@@ -241,8 +257,9 @@ def test_accept_button_records_version_hash_message_and_button(env):
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
-            button_proof=_proof(env, PRIVACY_ACCEPT_BUTTON),
+            button_proof=_proof(env, PRIVACY_ACCEPT_BUTTON, channel="whatsapp"),
             message_id="btn-1",
         ),
         env.settings,
@@ -250,7 +267,7 @@ def test_accept_button_records_version_hash_message_and_button(env):
     )
 
     [consent] = env.repo.privacy_consents
-    assert consent.channel == "telegram"
+    assert consent.channel == "whatsapp"
     assert consent.external_user_id == "10"
     assert consent.notice_version == env.settings.privacy_notice_version
     assert consent.notice_sha256 == notice_sha256(env.settings.privacy_notice_text)
@@ -259,15 +276,19 @@ def test_accept_button_records_version_hash_message_and_button(env):
     assert consent.external_message_id == "btn-1"
     assert consent.button_id == PRIVACY_ACCEPT_BUTTON
     assert consent.accepted_at == NOW
-    contact = env.repo.contacts[10]
+    contact = env.repo.contacts[("whatsapp", "10")]
     assert _state(env, contact.id) == ConversationState.AWAITING_LOGIN
-    assert env.gateway.sent[-1] == (100, env.settings.privacy_accepted_reply)
+    assert env.gateway.channel_sent[-1] == (
+        "whatsapp",
+        "100",
+        env.settings.privacy_accepted_reply,
+    )
 
 
 def test_reject_button_records_only_minimal_evidence_and_deletes_content(env):
     """R5, R29, R36: rechazo con evidencia mínima y sin contenido personal."""
     contact = env.repo.get_or_create_channel_contact(
-        "telegram", "10", "100", NOW
+        "whatsapp", "10", "100", NOW
     )
     env.repo.add_message(contact.id, "user", "dato personal", NOW)
     env.repo.add_event(contact.id, "rag_answer", "chunks_found", NOW)
@@ -275,8 +296,9 @@ def test_reject_button_records_only_minimal_evidence_and_deletes_content(env):
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_REJECT_BUTTON,
-            button_proof=_proof(env, PRIVACY_REJECT_BUTTON),
+            button_proof=_proof(env, PRIVACY_REJECT_BUTTON, channel="whatsapp"),
             message_id="btn-r",
         ),
         env.settings,
@@ -292,7 +314,11 @@ def test_reject_button_records_only_minimal_evidence_and_deletes_content(env):
     assert env.repo.messages == []
     assert env.repo.events == []
     assert env.repo.conversation_states == {}
-    assert env.gateway.sent[-1] == (100, env.settings.conversation_rejected_reply)
+    assert env.gateway.channel_sent[-1] == (
+        "whatsapp",
+        "100",
+        env.settings.conversation_rejected_reply,
+    )
 
 
 def test_rejected_conversation_restarts_from_new_on_next_message(env):
@@ -300,15 +326,18 @@ def test_rejected_conversation_restarts_from_new_on_next_message(env):
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_REJECT_BUTTON,
-            button_proof=_proof(env, PRIVACY_REJECT_BUTTON),
+            button_proof=_proof(env, PRIVACY_REJECT_BUTTON, channel="whatsapp"),
             message_id="btn-r",
         ),
         env.settings,
         env.adapters,
     )
     process_channel_message(
-        _message("Hola otra vez", message_id="m2"), env.settings, env.adapters
+        _message("Hola otra vez", channel="whatsapp", message_id="m2"),
+        env.settings,
+        env.adapters,
     )
 
     assert env.settings.conversation_greeting in env.gateway.channel_sent[-1][2]
@@ -319,7 +348,12 @@ def test_rejected_conversation_restarts_from_new_on_next_message(env):
 def test_unknown_button_does_not_grant_consent(env):
     """R4, R5: un botón desconocido no registra consentimiento ni crea contacto."""
     process_channel_message(
-        _message(kind="button", button_id="otro.boton", message_id="btn-x"),
+        _message(
+            kind="button",
+            channel="whatsapp",
+            button_id="otro.boton",
+            message_id="btn-x",
+        ),
         env.settings,
         env.adapters,
     )
@@ -369,12 +403,14 @@ def test_new_policy_version_blocks_new_messages_and_requests_consent(env):
 
 
 def test_consent_prompt_carries_signed_canonical_buttons(env):
-    """R38, R39: el aviso viaja con IDs canónicos y prueba del nonce vigente."""
-    process_channel_message(_message("Hola"), env.settings, env.adapters)
+    """R38, R39: el aviso de WhatsApp viaja con IDs canónicos y prueba del nonce vigente."""
+    process_channel_message(
+        _message("Hola", channel="whatsapp"), env.settings, env.adapters
+    )
 
     [_channel, _destination, blocks] = env.gateway.blocks_sent[-1]
     options = blocks[-1]
-    challenge = env.adapters.consent_challenges.get("telegram", "10")
+    challenge = env.adapters.consent_challenges.get("whatsapp", "10")
     assert challenge is not None
     sha = notice_sha256(env.settings.privacy_notice_text)
     assert options.type == "options"
@@ -382,7 +418,7 @@ def test_consent_prompt_carries_signed_canonical_buttons(env):
     assert options.option_proofs == [
         consent_button_proof(
             env.settings.service_token,
-            "telegram",
+            "whatsapp",
             "10",
             "100",
             PRIVACY_ACCEPT_BUTTON,
@@ -392,7 +428,7 @@ def test_consent_prompt_carries_signed_canonical_buttons(env):
         ),
         consent_button_proof(
             env.settings.service_token,
-            "telegram",
+            "whatsapp",
             "10",
             "100",
             PRIVACY_REJECT_BUTTON,
@@ -407,12 +443,14 @@ def test_consent_prompt_carries_signed_canonical_buttons(env):
 def test_old_or_tampered_button_does_not_accept_the_new_policy(env):
     """R37: el clic de un aviso anterior o manipulado no registra consentimiento."""
     old = env.repo.get_conversation_texts()
-    process_channel_message(_message("Hola"), env.settings, env.adapters)
-    challenge = env.adapters.consent_challenges.get("telegram", "10")
+    process_channel_message(
+        _message("Hola", channel="whatsapp"), env.settings, env.adapters
+    )
+    challenge = env.adapters.consent_challenges.get("whatsapp", "10")
     assert challenge is not None
     old_proof = consent_button_proof(
         env.settings.service_token,
-        "telegram",
+        "whatsapp",
         "10",
         "100",
         PRIVACY_ACCEPT_BUTTON,
@@ -428,7 +466,7 @@ def test_old_or_tampered_button_does_not_accept_the_new_policy(env):
 
     other_user_proof = consent_button_proof(
         env.settings.service_token,
-        "telegram",
+        "whatsapp",
         "99",
         "100",
         PRIVACY_ACCEPT_BUTTON,
@@ -440,6 +478,7 @@ def test_old_or_tampered_button_does_not_accept_the_new_policy(env):
         process_channel_message(
             _message(
                 kind="button",
+                channel="whatsapp",
                 button_id=PRIVACY_ACCEPT_BUTTON,
                 button_proof=proof,
                 message_id=f"btn-{proof}",
@@ -682,10 +721,18 @@ def test_panel_texts_are_read_at_runtime_without_restart(env):
 
 def test_challenge_is_random_per_presentation_and_invalidates_previous_buttons(env):
     """R37, R39: cada presentación emite un nonce nuevo; el botón anterior no vale."""
-    process_channel_message(_message("Hola", message_id="m1"), env.settings, env.adapters)
-    first = env.adapters.consent_challenges.get("telegram", "10")
-    process_channel_message(_message("Hola", message_id="m2"), env.settings, env.adapters)
-    second = env.adapters.consent_challenges.get("telegram", "10")
+    process_channel_message(
+        _message("Hola", channel="whatsapp", message_id="m1"),
+        env.settings,
+        env.adapters,
+    )
+    first = env.adapters.consent_challenges.get("whatsapp", "10")
+    process_channel_message(
+        _message("Hola", channel="whatsapp", message_id="m2"),
+        env.settings,
+        env.adapters,
+    )
+    second = env.adapters.consent_challenges.get("whatsapp", "10")
 
     assert first is not None and second is not None
     assert first.nonce != second.nonce
@@ -693,7 +740,7 @@ def test_challenge_is_random_per_presentation_and_invalidates_previous_buttons(e
     texts = env.repo.get_conversation_texts()
     old_proof = consent_button_proof(
         env.settings.service_token,
-        "telegram",
+        "whatsapp",
         "10",
         "100",
         PRIVACY_ACCEPT_BUTTON,
@@ -704,6 +751,7 @@ def test_challenge_is_random_per_presentation_and_invalidates_previous_buttons(e
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
             button_proof=old_proof,
             message_id="btn-old",
@@ -721,22 +769,25 @@ def test_challenge_is_random_per_presentation_and_invalidates_previous_buttons(e
 def test_button_from_another_chat_does_not_consume_the_challenge(env):
     """R38, R40: el mismo usuario desde otro chat no registra ni consume el desafío."""
     process_channel_message(
-        _message("Hola", chat="100", message_id="m1"), env.settings, env.adapters
+        _message("Hola", channel="whatsapp", chat="100", message_id="m1"),
+        env.settings,
+        env.adapters,
     )
     proof = consent_button_proof(
         env.settings.service_token,
-        "telegram",
+        "whatsapp",
         "10",
         "100",
         PRIVACY_ACCEPT_BUTTON,
         env.settings.privacy_notice_version,
         notice_sha256(env.settings.privacy_notice_text),
-        env.adapters.consent_challenges.get("telegram", "10").nonce,
+        env.adapters.consent_challenges.get("whatsapp", "10").nonce,
     )
 
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
             button_proof=proof,
             chat="200",
@@ -749,11 +800,12 @@ def test_button_from_another_chat_does_not_consume_the_challenge(env):
     assert env.repo.privacy_consents == []
     assert env.repo.contacts == {}
     assert env.repo.conversation_states == {}
-    assert env.adapters.consent_challenges.get("telegram", "10") is not None
+    assert env.adapters.consent_challenges.get("whatsapp", "10") is not None
 
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
             button_proof=proof,
             chat="100",
@@ -765,7 +817,7 @@ def test_button_from_another_chat_does_not_consume_the_challenge(env):
 
     [consent] = env.repo.privacy_consents
     assert consent.result == "accepted"
-    assert env.adapters.consent_challenges.get("telegram", "10") is None
+    assert env.adapters.consent_challenges.get("whatsapp", "10") is None
 
 
 def test_button_without_a_pending_presentation_is_rejected(env):
@@ -773,6 +825,7 @@ def test_button_without_a_pending_presentation_is_rejected(env):
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
             button_proof="f" * 32,
             message_id="btn-absent",
@@ -789,11 +842,12 @@ def test_button_without_a_pending_presentation_is_rejected(env):
 
 def test_repeated_reject_after_accept_is_ignored(env):
     """R29, R39: un rechazo viejo no borra una conversación activa."""
-    accept_proof = _proof(env, PRIVACY_ACCEPT_BUTTON)
-    reject_proof = _proof(env, PRIVACY_REJECT_BUTTON)
+    accept_proof = _proof(env, PRIVACY_ACCEPT_BUTTON, channel="whatsapp")
+    reject_proof = _proof(env, PRIVACY_REJECT_BUTTON, channel="whatsapp")
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
             button_proof=accept_proof,
             message_id="btn-accept",
@@ -801,7 +855,7 @@ def test_repeated_reject_after_accept_is_ignored(env):
         env.settings,
         env.adapters,
     )
-    contact = env.repo.contacts[10]
+    contact = env.repo.contacts[("whatsapp", "10")]
     apply_conversation_event(contact.id, ConversationEvent.LOGIN_VALID, env.adapters)
     env.repo.add_message(contact.id, "user", "contenido activo", NOW)
     messages_before = list(env.repo.messages)
@@ -810,6 +864,7 @@ def test_repeated_reject_after_accept_is_ignored(env):
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_REJECT_BUTTON,
             button_proof=reject_proof,
             message_id="btn-reject",
@@ -819,18 +874,19 @@ def test_repeated_reject_after_accept_is_ignored(env):
     )
 
     assert [consent.result for consent in env.repo.privacy_consents] == ["accepted"]
-    assert env.repo.contacts[10].id == contact.id
+    assert env.repo.contacts[("whatsapp", "10")].id == contact.id
     assert env.repo.messages == messages_before
     assert _state(env, contact.id) == state_before == ConversationState.ACTIVE
 
 
 def test_repeated_accept_after_reject_is_ignored(env):
     """R36, R39: tras rechazar, un aceptar repetido no crea contacto ni consentimiento."""
-    reject_proof = _proof(env, PRIVACY_REJECT_BUTTON)
-    accept_proof = _proof(env, PRIVACY_ACCEPT_BUTTON)
+    reject_proof = _proof(env, PRIVACY_REJECT_BUTTON, channel="whatsapp")
+    accept_proof = _proof(env, PRIVACY_ACCEPT_BUTTON, channel="whatsapp")
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_REJECT_BUTTON,
             button_proof=reject_proof,
             message_id="btn-reject",
@@ -842,6 +898,7 @@ def test_repeated_accept_after_reject_is_ignored(env):
     process_channel_message(
         _message(
             kind="button",
+            channel="whatsapp",
             button_id=PRIVACY_ACCEPT_BUTTON,
             button_proof=accept_proof,
             message_id="btn-accept",

@@ -519,13 +519,84 @@ def test_error_response_rejects_invalid_values(data: dict[str, str]) -> None:
 
 @pytest.mark.parametrize(
     "data",
-    [{"status": "down", "service": "rag"}, {"status": "ok", "service": ""}],
-    ids=["status_down", "empty_service"],
+    [
+        {"status": "down", "service": "rag"},
+        {"status": "ok", "service": ""},
+        {"status": "degraded", "service": "rag"},
+    ],
+    ids=["status_down", "empty_service", "status_degraded"],
 )
 def test_health_response_rejects_invalid_values(data: dict[str, str]) -> None:
-    """R44: status distinto de ok o service vacío lanza ValidationError."""
+    """R44: status fuera de ok/unhealthy o service vacío lanza ValidationError."""
     with pytest.raises(ValidationError):
         _validate(HealthResponse, data)
+
+
+def test_health_response_accepts_healthy_body() -> None:
+    """healthcheck_dependencias R1: el cuerpo saludable no necesita dependencies."""
+    response = _validate(HealthResponse, {"status": "ok", "service": "rag"})
+    assert response.status == "ok"
+    assert response.dependencies is None
+
+
+def test_health_response_accepts_unhealthy_body_with_dependencies() -> None:
+    """healthcheck_dependencias R2: unhealthy nombra las dependencias fallidas."""
+    response = _validate(
+        HealthResponse,
+        {
+            "status": "unhealthy",
+            "service": "handover",
+            "dependencies": {"postgres": "unavailable"},
+        },
+    )
+    assert response.status == "unhealthy"
+    assert response.dependencies == {"postgres": "unavailable"}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"status": "unhealthy", "service": "rag"},
+        {"status": "unhealthy", "service": "rag", "dependencies": {}},
+        {"status": "unhealthy", "service": "rag", "dependencies": None},
+        {"status": "ok", "service": "rag", "dependencies": {"postgres": "unavailable"}},
+        {"status": "ok", "service": "rag", "dependencies": {}},
+    ],
+    ids=[
+        "unhealthy_without_dependencies",
+        "unhealthy_with_empty_dependencies",
+        "unhealthy_with_null_dependencies",
+        "ok_with_unavailable_dependency",
+        "ok_with_empty_dependencies",
+    ],
+)
+def test_health_response_rejects_inconsistent_dependencies(data: dict[str, Any]) -> None:
+    """healthcheck_dependencias R2: unhealthy exige dependencias y ok no las admite."""
+    with pytest.raises(ValidationError):
+        _validate(HealthResponse, data)
+
+
+@pytest.mark.parametrize(
+    "dependencies",
+    [
+        {"postgres": "down"},
+        {"postgres": ""},
+        {"postgres": None},
+        "postgres",
+    ],
+    ids=["invalid_state", "empty_state", "none_state", "not_a_mapping"],
+)
+def test_health_response_rejects_invalid_dependencies(dependencies: Any) -> None:
+    """healthcheck_dependencias R2: solo se acepta el estado unavailable por dependencia."""
+    with pytest.raises(ValidationError):
+        _validate(
+            HealthResponse,
+            {
+                "status": "unhealthy",
+                "service": "rag",
+                "dependencies": dependencies,
+            },
+        )
 
 
 # ── contrato_autorizacion_asesores (feature #13) ─────────────────────────────

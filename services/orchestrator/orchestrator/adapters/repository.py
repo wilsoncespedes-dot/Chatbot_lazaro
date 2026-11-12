@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol, Sequence
@@ -32,6 +33,10 @@ from ..privacy import (
 
 
 class Repository(Protocol):
+    def health_check(self, timeout_seconds: float) -> None:
+        """Comprueba PostgreSQL con `SELECT 1` y un timeout acotado (solo lectura)."""
+        ...
+
     def mark_message_if_new(
         self, channel: str, external_message_id: str
     ) -> bool: ...
@@ -751,6 +756,14 @@ class FakeRepository:
         self._rag_lock = threading.Lock()
         self._processed_lock = threading.Lock()
         self._identity_lock = threading.Lock()
+        self.health_checks: list[float] = []
+        self.health_error: BaseException | None = None
+
+    def health_check(self, timeout_seconds: float) -> None:
+        """healthcheck_dependencias R4, R8: fallo y timeout controlables en tests."""
+        self.health_checks.append(timeout_seconds)
+        if self.health_error is not None:
+            raise self.health_error
 
     def mark_message_if_new(
         self, channel: str, external_message_id: str
@@ -1373,13 +1386,13 @@ class FakeRepository:
     def has_channel_privacy_consent(
         self, channel: str, external_user_id: str, notice_version: str
     ) -> bool:
-        """R4, R34: solo una aceptación de botón de la versión vigente habilita."""
+        """R4, R34, R46 R13: una aceptación vigente por botón o por texto habilita."""
         return any(
             consent.channel == channel
             and consent.external_user_id == external_user_id
             and consent.notice_version == notice_version
             and consent.result == "accepted"
-            and consent.evidence_type == "button"
+            and consent.evidence_type in ("button", "text")
             for consent in self.privacy_consents
         )
 
@@ -2508,16 +2521,20 @@ def _is_unique_violation(error: BaseException) -> bool:
     return False
 
 
-def _pg_connect(database_url: str) -> Any:
+def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
     import pg8000.dbapi
 
     parsed = urlparse(database_url)
+    kwargs: dict[str, Any] = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     return pg8000.dbapi.connect(
         user=unquote(parsed.username or ""),
         password=unquote(parsed.password or ""),
         host=parsed.hostname or "localhost",
         port=parsed.port or 5432,
         database=(parsed.path or "/").lstrip("/"),
+        **kwargs,
     )
 
 
@@ -2553,9 +2570,13 @@ class PostgresRepository:
         connect: Callable[[], Any] | None = None,
         new_id: Callable[[], str] | None = None,
         run_migrations: bool | None = None,
+        connect_health: Callable[[float], Any] | None = None,
     ) -> None:
         self._database_url = database_url
         self._connect = connect or (lambda: _pg_connect(self._database_url))
+        self._connect_health = connect_health or (
+            lambda timeout: _pg_connect(self._database_url, timeout)
+        )
         self._new_id = new_id or (lambda: uuid.uuid4().hex)
         # En producción (conexión real) se aplica el esquema y la migración; las
         # conexiones falsas de los tests pueden activarla para probar el DDL.
@@ -2583,6 +2604,17 @@ class PostgresRepository:
     def ensure_schema(self) -> None:
         """Crea el esquema y aplica la migración idempotente de #36."""
         self._connection()
+
+    def health_check(self, timeout_seconds: float) -> None:
+        """Conexión independiente y acotada; solo `SELECT 1`, sin esquema ni migraciones."""
+        conn = self._connect_health(timeout_seconds)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            with suppress(Exception):
+                conn.close()
 
     def _run(self, sql: str, params: tuple, fetch: bool = False) -> list:
         with self._lock:
@@ -2847,13 +2879,16 @@ class PostgresRepository:
     def foreign_session_windows(
         self, contact_id: str, profile_id: str | None, idle_minutes: int, now: datetime
     ) -> list[tuple[datetime, datetime, datetime]]:
-        rows = self._run(
+        base = (
             "SELECT profile_id, started_at, last_activity_at, ended_at "
-            "FROM client_sessions WHERE contact_id = %s "
-            "AND (%s IS NULL OR profile_id <> %s)",
-            (contact_id, profile_id, profile_id),
-            fetch=True,
+            "FROM client_sessions WHERE contact_id = %s"
         )
+        if profile_id is None:
+            rows = self._run(base, (contact_id,), fetch=True)
+        else:
+            rows = self._run(
+                base + " AND profile_id <> %s", (contact_id, profile_id), fetch=True
+            )
         return [
             session_window(row[1], row[2], row[3], now, idle_minutes) for row in rows
         ]
@@ -3446,7 +3481,7 @@ class PostgresRepository:
             "SELECT 1 FROM privacy_consents "
             "WHERE channel = %s AND external_user_id = %s "
             "AND notice_version = %s AND result = 'accepted' "
-            "AND evidence_type = 'button' LIMIT 1",
+            "AND evidence_type IN ('button', 'text') LIMIT 1",
             (channel, external_user_id, notice_version),
             fetch=True,
         )

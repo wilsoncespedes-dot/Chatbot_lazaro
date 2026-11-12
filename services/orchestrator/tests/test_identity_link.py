@@ -91,10 +91,16 @@ def test_missing_label_fails_closed_without_link(env_factory, caplog):
 
 
 def test_accept_button_sends_text_and_link_to_same_channel_and_chat(env_factory):
-    """R1: tras Acepto, `LinkBlock` al mismo canal/chat y mismo contacto."""
+    """R1: tras aceptar por texto, `LinkBlock` al mismo canal/chat y mismo contacto."""
     env = _env(env_factory)
     env.present(user=10, chat=100)
-    response = env.post_button(PRIVACY_ACCEPT_BUTTON, user=10, chat=100)
+    response = env.post(
+        text=env.settings.consent_accept_phrase,
+        update_id=2,
+        user=10,
+        chat=100,
+        consent=False,
+    )
     assert response.status_code == 202
 
     channel, destination, blocks = _blocks(env)

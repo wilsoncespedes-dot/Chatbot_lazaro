@@ -66,6 +66,7 @@ class Settings(BaseSettings):
         default=DEFAULT_CASE_LIST_LIMIT, ge=1, le=MAX_CASE_LIST_LIMIT
     )
     http_timeout_seconds: float = 10
+    healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     privacy_retention_days: str = ""
     privacy_active_case_max_days: str = ""
 

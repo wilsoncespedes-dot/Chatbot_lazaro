@@ -116,11 +116,14 @@ from .privacy import (
     PRIVACY_ACCEPT_BUTTON,
     PRIVACY_BUTTON_IDS,
     PRIVACY_REJECT_BUTTON,
+    TEXT_CONSENT_CHANNELS,
     ConsentChallengeStore,
     ConversationTexts,
     consent_button_proof,
     is_acceptance_affirmation,
+    matches_consent_phrase,
     notice_sha256,
+    text_consent_instruction,
 )
 
 if TYPE_CHECKING:
@@ -2240,14 +2243,33 @@ def consent_button_pending(message: NormalizedMessage) -> bool:
     )
 
 
-def _consent_prompt(texts: ConversationTexts, include_greeting: bool) -> str:
+def consent_text_pending(message: NormalizedMessage, settings: Settings) -> bool:
+    """R46 R16: una frase de decisión de Telegram se procesa en la petición."""
+    if message.channel not in TEXT_CONSENT_CHANNELS or message.kind != "text":
+        return False
+    text = message.text or ""
+    return matches_consent_phrase(
+        text, settings.consent_accept_phrase
+    ) or matches_consent_phrase(text, settings.consent_reject_phrase)
+
+
+def _consent_prompt(
+    texts: ConversationTexts,
+    include_greeting: bool,
+    channel: str,
+    settings: Settings,
+) -> str:
     body = texts.notice_text
     if include_greeting and texts.greeting:
         body = f"{texts.greeting}\n\n{body}"
-    return (
-        f"{body}\n\n{CONSENT_ACCEPT_LABEL} ({PRIVACY_ACCEPT_BUTTON})\n"
-        f"{CONSENT_REJECT_LABEL} ({PRIVACY_REJECT_BUTTON})"
-    )
+    if channel in TEXT_CONSENT_CHANNELS:
+        instruction = text_consent_instruction(
+            settings.privacy_text_consent_instruction,
+            settings.consent_accept_phrase,
+            settings.consent_reject_phrase,
+        )
+        return f"{body}\n\n{instruction}"
+    return f"{body}\n\n{CONSENT_ACCEPT_LABEL}\n{CONSENT_REJECT_LABEL}"
 
 
 def _notify_consent_prompt(
@@ -2259,13 +2281,30 @@ def _notify_consent_prompt(
     settings: Settings,
     adapters: Adapters,
 ) -> None:
-    """R2, R38: muestra aviso y botones; si el gateway no acepta bloques, usa texto."""
-    prompt = _consent_prompt(texts, include_greeting)
+    """R2, R38, R46 R6-R9: aviso sin botones en Telegram y con opciones en el resto."""
+    prompt = _consent_prompt(texts, include_greeting, channel, settings)
+    sha = notice_sha256(texts.notice_text)
     send_blocks = getattr(adapters.gateway, "send_channel_blocks", None)
+    if channel in TEXT_CONSENT_CHANNELS:
+        # R9: el desafío existe aunque el gateway no sepa enviar bloques.
+        adapters.consent_challenges.register(
+            channel, external_user_id, destination, texts.notice_version, sha
+        )
+        if send_blocks is None:
+            _notify_channel(channel, destination, prompt, adapters)
+            return
+        try:
+            send_blocks(
+                channel,
+                destination,
+                [TextBlock(type="text", text=prompt)],
+            )
+        except ServiceUnavailable:
+            logger.error("channel_reply_failed channel=%s", channel)
+        return
     if send_blocks is None:
         _notify_channel(channel, destination, prompt, adapters)
         return
-    sha = notice_sha256(texts.notice_text)
     button_ids = [PRIVACY_ACCEPT_BUTTON, PRIVACY_REJECT_BUTTON]
     challenge = adapters.consent_challenges.register(
         channel, external_user_id, destination, texts.notice_version, sha
@@ -2309,21 +2348,141 @@ def _preconsent_state(
     return ConversationState.NEW
 
 
+def _finish_acceptance(
+    channel: str,
+    external_user_id: str,
+    destination: str,
+    texts: ConversationTexts,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """R46 R12: mismo flujo posterior a la aceptación que el botón de #37."""
+    repo = adapters.repository
+    contact = repo.get_or_create_channel_contact(
+        channel, external_user_id, destination, adapters.clock()
+    )
+    repo.set_conversation_state(
+        contact.id, ConversationState.AWAITING_LOGIN, adapters.clock()
+    )
+    url = issue_login_link(contact, settings, adapters)
+    _send_identity_blocks(
+        contact, texts.accepted_reply, texts.login_link_label, url, adapters
+    )
+
+
+def _record_text_consent_decision(
+    channel: str,
+    external_user_id: str,
+    destination: str,
+    result: str,
+    external_message_id: str,
+    received_at: datetime,
+    texts: ConversationTexts,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """R46 R10, R17-R19: evidencia de texto y efecto de aceptar o rechazar."""
+    repo = adapters.repository
+    adapters.consent_shown.discard((channel, external_user_id))
+    repo.add_privacy_decision(
+        channel,
+        external_user_id,
+        texts.notice_version,
+        notice_sha256(texts.notice_text),
+        result,
+        external_message_id,
+        "",
+        received_at,
+        evidence_type="text",
+    )
+    if result == "accepted":
+        repo.mark_message_if_new(channel, external_message_id)
+        _finish_acceptance(
+            channel, external_user_id, destination, texts, settings, adapters
+        )
+        return
+    repo.delete_contact_content(channel, external_user_id)
+    _notify_channel(channel, destination, texts.rejected_reply, adapters)
+
+
 def _handle_pre_consent_text(
     channel: str,
     external_user_id: str,
     destination: str,
     text: str,
+    external_message_id: str,
+    received_at: datetime,
     settings: Settings,
     adapters: Adapters,
 ) -> None:
-    """R2, R3, R6, R8, R35, R36: solo respuestas fijas, sin persistir ni LLM."""
+    """R2, R3, R6, R8, R35, R36, R46 R10-R23: solo respuestas fijas, sin persistir ni LLM."""
     texts = conversation_texts(settings, adapters)
     key = (channel, external_user_id)
     state = _preconsent_state(channel, external_user_id, adapters)
     if state == ConversationState.CLOSED:
         adapters.consent_shown.discard(key)
+        adapters.consent_challenges.discard(channel, external_user_id)
         state = transition_state(state, ConversationEvent.RESTART_MESSAGE)
+    if channel in TEXT_CONSENT_CHANNELS:
+        accept = matches_consent_phrase(text, settings.consent_accept_phrase)
+        reject = matches_consent_phrase(text, settings.consent_reject_phrase)
+        if accept or reject:
+            consumed = adapters.consent_challenges.consume_text(
+                channel,
+                external_user_id,
+                destination,
+                notice_version=texts.notice_version,
+                notice_sha=notice_sha256(texts.notice_text),
+            )
+            if consumed:
+                _record_text_consent_decision(
+                    channel,
+                    external_user_id,
+                    destination,
+                    "accepted" if accept else "rejected",
+                    external_message_id,
+                    received_at,
+                    texts,
+                    settings,
+                    adapters,
+                )
+                return
+            include_greeting = state == ConversationState.NEW and key not in (
+                adapters.consent_shown
+            )
+            adapters.consent_shown.add(key)
+            _notify_consent_prompt(
+                channel,
+                external_user_id,
+                destination,
+                texts,
+                include_greeting,
+                settings,
+                adapters,
+            )
+            return
+        if state == ConversationState.NEW and key not in adapters.consent_shown:
+            adapters.consent_shown.add(key)
+            _notify_consent_prompt(
+                channel,
+                external_user_id,
+                destination,
+                texts,
+                True,
+                settings,
+                adapters,
+            )
+            return
+        _notify_consent_prompt(
+            channel,
+            external_user_id,
+            destination,
+            texts,
+            False,
+            settings,
+            adapters,
+        )
+        return
     awaiting = key in adapters.consent_shown
     if state == ConversationState.NEW and not awaiting:
         adapters.consent_shown.add(key)
@@ -2383,6 +2542,23 @@ def _handle_consent_button(
             button_id,
         )
         return
+    if channel in TEXT_CONSENT_CHANNELS:
+        # R25, R26: un botón antiguo de Telegram no registra nada y reenvía el
+        # aviso de texto vigente.
+        logger.info(
+            "consent_button_ignored channel=%s reason=text_consent_channel",
+            channel,
+        )
+        _notify_consent_prompt(
+            channel,
+            external_user_id,
+            destination,
+            texts,
+            False,
+            settings,
+            adapters,
+        )
+        return
     if button_id not in PRIVACY_BUTTON_IDS:
         _notify_consent_prompt(
             channel,
@@ -2438,15 +2614,8 @@ def _handle_consent_button(
             button_id,
             message.received_at,
         )
-        contact = repo.get_or_create_channel_contact(
-            channel, external_user_id, destination, adapters.clock()
-        )
-        repo.set_conversation_state(
-            contact.id, ConversationState.AWAITING_LOGIN, adapters.clock()
-        )
-        url = issue_login_link(contact, settings, adapters)
-        _send_identity_blocks(
-            contact, texts.accepted_reply, texts.login_link_label, url, adapters
+        _finish_acceptance(
+            channel, external_user_id, destination, texts, settings, adapters
         )
         return
     if button_id == PRIVACY_REJECT_BUTTON:
@@ -2667,6 +2836,8 @@ def _legacy_consent_gate(
         str(request.telegram_user_id),
         str(request.chat_id),
         request.text,
+        str(request.update_id),
+        request.received_at,
         settings,
         adapters,
     )
@@ -2747,6 +2918,8 @@ def process_channel_message(
             message.external_user_id,
             message.external_chat_id,
             text,
+            message.external_message_id,
+            message.received_at,
             settings,
             adapters,
         )

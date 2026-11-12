@@ -1,0 +1,8 @@
+# #44 confirmar_callback_telegram — Tasks
+
+- [x] T1 — Añadir `telegram_answer_callback_timeout_seconds` (default `3.0`, validador `> 0`) a `config.py` y `TELEGRAM_ANSWER_CALLBACK_TIMEOUT_SECONDS=3` a `.env.example`. Cubre: R2.
+- [x] T2 — En `adapters/telegram.py`: `answer_callback_query` en el Protocol, en `HttpTelegramClient` (URL `/answerCallbackQuery`, cuerpo `{"callback_query_id": id}`, timeout propio, errores -> `TelegramError` sin token) y en `FakeTelegramClient` (`answered`, `fail_answer`). `build_default_adapters` pasa el timeout. Cubre: R2, R3.
+- [x] T3 — En `domain.py`: `extract_callback_query_id`; en `main.py`: confirmar al inicio del webhook con `try/except Exception` y log WARNING con solo el tipo de error, sin tocar el resto del flujo de #37. Cubre: R1, R4, R5, R6, R7, R8.
+- [x] T4 — Tests de contrato HTTP en `tests/test_webhook.py` con `httpx.post` simulado por `monkeypatch` (sin red): URL termina en `/answerCallbackQuery`, `json == {"callback_query_id": "cb-1"}`, `timeout == 3.0`; estado 400 y `httpx.ConnectError`/`httpx.TimeoutException` lanzan `TelegramError` cuyo mensaje no contiene `BOT_TOKEN`; default y lectura por env del nuevo setting. Cubre: R2, R3.
+- [x] T5 — Tests del webhook en `tests/test_webhook.py` con `FakeTelegramClient`: callback válido -> `answered == ["cb-1"]` y botón reenviado; `fail_answer=True` (y un cliente que lanza `RuntimeError`) -> 200, botón reenviado, log con el tipo y sin `BOT_TOKEN` (`caplog`); duplicado -> confirmado dos veces, reenviado una; callback sin `data` y con `data` inválida pero id real -> confirmado, no reenviado; sin `id`/id vacío -> `answered == []` (nunca `"50"`); update de texto -> `answered == []`. Cubre: R1, R4, R5, R6, R7, R8.
+- [x] T6 — `./init.sh` verde. Cubre: R1–R8.

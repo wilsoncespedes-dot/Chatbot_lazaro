@@ -523,3 +523,37 @@
 - Envío: ventana de 24 h por último mensaje entrante; texto solo dentro de ventana (422 sin petición fuera), plantillas con variables en orden, opciones como mensajes interactivos, bloques en orden con corte al primer fallo; traducción de errores de Meta (ventana cerrada, plantilla no aprobada, fallo de envío) sin exponer secretos ni cuerpos.
 - Writer OpenCode/DeepSeek. Trazabilidad R1–R62 y tasks T1–T22; revisión `APPROVED` en `progress/review_proveedor_whatsapp_real.md` (observaciones no bloqueantes: ampliar test R55; mantener `OrchestratorError` sin texto de usuario).
 - `./init.sh`: 3031 passed, 1 skipped, 2 warnings.
+
+
+## 2026-11-04 — Feature #44 confirmar_callback_telegram (done)
+- **Modo:** supervisado (spec aprobado por reviewer en `progress/review_spec_confirmar_callback_telegram.md`).
+- Bug corregido: al pulsar un botón inline (p. ej. "Acepto" del consentimiento #37) el indicador quedaba girando porque `telegram_gateway` nunca llamaba a `answerCallbackQuery`.
+- `telegram_gateway`: el webhook confirma el `callback_query` al principio con el id real de Telegram, también si es duplicado o inválido; nunca usa ids sintéticos sacados de `update_id`. Si la confirmación falla, se registra solo el tipo de error, sin secretos, y el botón se deduplica y se reenvía al orquestador igual (200). Hay un timeout nuevo `TELEGRAM_ANSWER_CALLBACK_TIMEOUT_SECONDS` (3 s, debe ser > 0).
+- Writer OpenCode/DeepSeek; tasks T1–T6. Informe en `progress/impl_confirmar_callback_telegram.md`; revisión `APPROVED` en `progress/review_confirmar_callback_telegram.md`, con trazabilidad R1–R8.
+- `./init.sh`: 3048 passed, 1 skipped, 2 warnings.
+
+
+## 2026-11-04 — Feature #45 corregir_foreign_session_windows (done)
+- **Modo:** supervisado (spec aprobado por reviewer en `progress/specreview_corregir_foreign_session_windows.md`).
+- Bug corregido: `GET /asesor/cases/<id>` respondía 500 porque PostgreSQL lanzaba 42P18 en `PostgresRepository.foreign_session_windows` (`(%s IS NULL OR profile_id <> %s)` con `profile_id` None).
+- `orchestrator`: la consulta usa SQL distinto por rama. Sin perfil filtra solo por `contact_id`; con perfil añade `profile_id <> %s`. Nunca envía `None` como parámetro y el mapeo a `session_window` y el repositorio en memoria no cambian.
+- Writer OpenCode/DeepSeek; tasks T1–T5. Tests nuevos en `services/orchestrator/tests/test_foreign_session_windows.py` (Conn/Cursor falsos que emulan 42P18). Informe en `progress/impl_corregir_foreign_session_windows.md`; revisión `APPROVED` en `progress/review_corregir_foreign_session_windows.md`, con trazabilidad R1–R6.
+- `./init.sh`: 3052 passed, 1 skipped, 2 warnings.
+
+## 2026-11-04 — Feature #46 consentimiento_texto_telegram (done)
+- **Modo:** supervisado; spec aprobado en `progress/specreview_consentimiento_texto_telegram.md` y código `APPROVED` en `progress/review_consentimiento_texto_telegram.md`.
+- Telegram presenta el aviso sin botones inline; acepta con `ACEPTO` y rechaza con `NO ACEPTO` (configurables), con desafío ligado a versión/hash/chat y evidencia de consentimiento por texto. Los botones antiguos de Telegram no registran consentimiento. WhatsApp mantiene los botones.
+- El rechazo guarda solo la decisión mínima de privacidad; la compuerta sigue antes de persistir otros datos personales, conforme a #35. El gateway entrega inmediatamente la frase de rechazo.
+- Writer OpenCode/DeepSeek; tasks T1–T24. Trazabilidad R1–R32 en `progress/impl_consentimiento_texto_telegram.md`.
+- `./init.sh`: 3098 passed, 1 skipped, 0 failed. Reviewer volvió a ejecutar la suite y aprobó.
+
+## 2026-11-11 — Feature #47 healthcheck_dependencias (done)
+- Writer OpenCode con `opencode-go/deepseek-v4.1-flash`. Añadió probes de Redis/PostgreSQL con timeout, respuestas `200/503` seguras para los cuatro servicios y healthchecks de Compose.
+- Revisión de código aprobada en `progress/review_healthcheck_dependencias.md`; ajuste de consistencia de `HealthResponse` incorporado tras la primera revisión.
+- `./init.sh`: 3155 passed, 1 skipped, 2 warnings de deprecación, 0 fallos. Trazabilidad R1–R9 en `progress/impl_healthcheck_dependencias.md`.
+
+## 2026-11-11 — Registro de features #48–#55 (pending)
+- Revisión de brechas entre `docs/especificacion.md` y el código, a petición del dueño. Las 47 features anteriores estaban `done`; se registran como `pending` las piezas de la especificación que no tenían feature. Sin cambios de código.
+- #48 `retirar_asesores_telegram`, #49 `roles_supervisor_responsable_datos`, #50 `notas_internas_y_etiquetas`, #51 `respuestas_guardadas`, #52 `asignacion_automatica_carga`, #53 `panel_tiempo_real`, #54 `segundo_factor_panel`, #55 `evaluacion_ataques_y_preguntas_reales`.
+- Supuestos por confirmar recogidos en el acceptance: `no_advisors` sin aviso Telegram (#48), reasignación solo a asesores disponibles (#49), casos en cola sin reasignación automática posterior (#52), TOTP como segundo factor y obligatorio en producción (#54).
+- Siguen fuera del repositorio y a cargo del dueño: validación legal, manuales reales para calibrar embeddings y umbral, costo de plantillas de Meta y despliegue en Render.

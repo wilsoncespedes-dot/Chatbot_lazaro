@@ -23,6 +23,7 @@ from lazaro_contracts import (
     SearchResponse,
 )
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings
@@ -105,8 +106,24 @@ def create_app(
         logger.exception("Excepción no controlada")
         return _error(500, "internal_error", "Error interno.")
 
-    @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
+    @app.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
+    async def health() -> HealthResponse | JSONResponse:
+        try:
+            await run_in_threadpool(
+                repository.health_check, settings.healthcheck_timeout_seconds
+            )
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo es unhealthy
+            logger.warning(
+                "healthcheck_postgres_unavailable code=%s", type(exc).__name__
+            )
+            return JSONResponse(
+                status_code=503,
+                content=HealthResponse(
+                    status="unhealthy",
+                    service=SERVICE_NAME,
+                    dependencies={"postgres": "unavailable"},
+                ).model_dump(exclude_none=True),
+            )
         return HealthResponse(status="ok", service=SERVICE_NAME)
 
     @app.post("/manuals", status_code=201, response_model=ManualUploadResponse)

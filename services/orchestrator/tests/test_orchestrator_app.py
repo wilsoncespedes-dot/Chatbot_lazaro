@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,14 @@ from fastapi.testclient import TestClient
 from lazaro_contracts import ErrorResponse, HealthResponse
 from pydantic import BaseModel
 
+from orchestrator.adapters.db_query import FakeDbQuery
+from orchestrator.adapters.gateway import FakeGatewayClient
+from orchestrator.adapters.handover import FakeHandoverClient
+from orchestrator.adapters.llm import FakeLLM
+from orchestrator.adapters.rag import FakeRagClient
+from orchestrator.adapters.repository import FakeRepository
 from orchestrator.config import Settings
-from orchestrator.domain import DomainError
+from orchestrator.domain import Adapters, DomainError
 from orchestrator.main import create_app
 
 SVC = "orchestrator"
@@ -57,7 +64,18 @@ def _compose_service_block() -> str:
 
 
 def _build_app() -> FastAPI:
-    app = create_app(Settings(service_token=TOKEN))
+    counter = iter(range(1, 10_000))
+    adapters = Adapters(
+        repository=FakeRepository(),
+        rag=FakeRagClient(),
+        llm=FakeLLM(reply="{}"),
+        gateway=FakeGatewayClient(),
+        handover=FakeHandoverClient(),
+        db_query=FakeDbQuery(),
+        clock=lambda: datetime.now(timezone.utc),
+        new_id=lambda: f"case-{next(counter)}",
+    )
+    app = create_app(Settings(service_token=TOKEN), adapters)
 
     @app.post("/_test/echo")
     async def echo(body: _Echo) -> _Echo:

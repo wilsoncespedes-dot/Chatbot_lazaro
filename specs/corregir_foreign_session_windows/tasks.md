@@ -1,0 +1,7 @@
+# #45 corregir_foreign_session_windows — Tasks
+
+- [x] T1 — En `adapters/repository.py`, reescribir `PostgresRepository.foreign_session_windows` con dos ramas SQL (sin `IS NULL` sobre parámetro): `profile_id is None` -> `WHERE contact_id = %s` con `(contact_id,)`; no nulo -> `WHERE contact_id = %s AND profile_id <> %s` con `(contact_id, profile_id)`. Mapeo a `session_window` sin cambios. No tocar `FakeRepository`. Cubre: R1, R2, R3, R4, R5.
+- [x] T2 — Nuevo `tests/test_foreign_session_windows.py` con `Conn`/`Cursor` falsos que capturan `(sql, params)`, devuelven dos filas preparadas y lanzan si la SQL contiene `%s IS NULL` con un parámetro `None` (emulación de 42P18). Test `profile_id=None`: una sola sentencia, `params == ("c1",)`, `"IS NULL" not in sql`, `"profile_id <>" not in sql`, `None not in params`, no lanza. Test `profile_id="p1"`: `params == ("c1", "p1")`, `"profile_id <> %s" in sql`, `"IS NULL" not in sql`. Cubre: R1, R2, R3.
+- [x] T3 — En el mismo archivo, test de mapeo: con filas `(profile_id, started_at, last_activity_at, ended_at)` preparadas, el resultado es igual a `[session_window(...)]` por fila en orden, para ambas ramas. Cubre: R4.
+- [x] T4 — Verificar sin modificar que las pruebas existentes de `FakeRepository.foreign_session_windows` y `tests/test_panel_case_view.py` / `tests/test_panel_pure.py` siguen verdes. Cubre: R5, R6.
+- [x] T5 — `./init.sh` verde. Cubre: R1–R6.

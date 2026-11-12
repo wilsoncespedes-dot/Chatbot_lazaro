@@ -73,6 +73,12 @@ services:
           type: web
           name: orchestrator
           envVarKey: PRIVACY_ACCEPT_PHRASE
+      # La frase de rechazo es la misma que valida el orchestrator (#46).
+      - key: MESSAGE_GROUPING_REJECT_PHRASE
+        fromService:
+          type: web
+          name: orchestrator
+          envVarKey: PRIVACY_REJECT_PHRASE
 
   - type: web
     name: orchestrator
@@ -116,6 +122,10 @@ services:
         sync: false
       - key: PRIVACY_ACCEPT_PHRASE
         sync: false
+      - key: PRIVACY_REJECT_PHRASE
+        sync: false
+      - key: PRIVACY_TEXT_CONSENT_INSTRUCTION
+        value: "Para aceptar, escribe exactamente: {accept}. Si no aceptas, escribe exactamente: {reject}."
       - key: PRIVACY_ACCEPTED_REPLY
         sync: false
       - key: PRIVACY_RETENTION_DAYS

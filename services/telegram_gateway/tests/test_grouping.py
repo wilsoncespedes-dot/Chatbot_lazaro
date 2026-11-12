@@ -115,6 +115,7 @@ def test_grouping_settings_defaults(monkeypatch):
         "MESSAGE_GROUPING_MAX_ATTEMPTS",
         "MESSAGE_GROUPING_POLL_SECONDS",
         "MESSAGE_GROUPING_ACCEPT_PHRASE",
+        "MESSAGE_GROUPING_REJECT_PHRASE",
         "HTTP_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -128,6 +129,7 @@ def test_grouping_settings_defaults(monkeypatch):
     assert settings.message_grouping_max_attempts == 3
     assert settings.message_grouping_poll_seconds == 0.5
     assert settings.message_grouping_accept_phrase == ""
+    assert settings.message_grouping_reject_phrase == ""
 
 
 def test_grouping_settings_read_from_environment(monkeypatch):
@@ -141,6 +143,7 @@ def test_grouping_settings_read_from_environment(monkeypatch):
     monkeypatch.setenv("MESSAGE_GROUPING_MAX_ATTEMPTS", "2")
     monkeypatch.setenv("MESSAGE_GROUPING_POLL_SECONDS", "0.2")
     monkeypatch.setenv("MESSAGE_GROUPING_ACCEPT_PHRASE", "acepto")
+    monkeypatch.setenv("MESSAGE_GROUPING_REJECT_PHRASE", "no acepto")
     monkeypatch.setenv("HTTP_TIMEOUT_SECONDS", "10")
     settings = Settings()
     assert settings.message_grouping_enabled is False
@@ -152,6 +155,7 @@ def test_grouping_settings_read_from_environment(monkeypatch):
     assert settings.message_grouping_max_attempts == 2
     assert settings.message_grouping_poll_seconds == 0.2
     assert settings.message_grouping_accept_phrase == "acepto"
+    assert settings.message_grouping_reject_phrase == "no acepto"
 
 
 @pytest.mark.parametrize(
@@ -193,10 +197,28 @@ def test_env_example_lists_grouping_variables_with_defaults():
         "MESSAGE_GROUPING_MAX_ATTEMPTS": "3",
         "MESSAGE_GROUPING_POLL_SECONDS": "0.5",
         "MESSAGE_GROUPING_ACCEPT_PHRASE": "",
+        "MESSAGE_GROUPING_REJECT_PHRASE": "",
     }
     for key, value in expected.items():
         assert declared.get(key) == value, key
     assert "PRIVACY_ACCEPT_PHRASE" in text
+    assert "PRIVACY_REJECT_PHRASE" in text
+
+
+def test_render_references_reject_phrase_from_orchestrator():
+    """R3, R46 R31: el gateway hereda MESSAGE_GROUPING_REJECT_PHRASE."""
+    blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
+    gateway = next(
+        service for service in blueprint["services"] if service["name"] == "telegram-gateway"
+    )
+    variable = next(
+        var for var in gateway["envVars"] if var.get("key") == "MESSAGE_GROUPING_REJECT_PHRASE"
+    )
+    assert variable["fromService"] == {
+        "type": "web",
+        "name": "orchestrator",
+        "envVarKey": "PRIVACY_REJECT_PHRASE",
+    }
 
 
 def test_render_references_accept_phrase_from_orchestrator():
@@ -434,6 +456,28 @@ def test_accept_phrase_is_immediate_after_normalization():
     env.clock.advance(0.1)
     post(env, update_id=2, text="  ACEPTO   los   Términos ")
     assert [m.text for m in env.orchestrator.received] == ["antes", "  ACEPTO   los   Términos "]
+
+
+def test_reject_phrase_is_delivered_immediately():
+    """R46 R31: la frase de rechazo configurada tampoco se agrupa."""
+    env = make_env(message_grouping_reject_phrase="No acepto los términos")
+    post(env, update_id=1, text="antes")
+    env.clock.advance(0.1)
+    post(env, update_id=2, text="  NO   ACEPTO   los   Términos ")
+    assert [m.text for m in env.orchestrator.received] == [
+        "antes",
+        "  NO   ACEPTO   los   Términos ",
+    ]
+
+
+def test_empty_reject_phrase_does_not_change_grouping():
+    """R46 R31: con la frase vacía la agrupación sigue igual que antes."""
+    env = make_env(message_grouping_reject_phrase="")
+    post(env, update_id=1, text="hola")
+    env.clock.advance(0.1)
+    post(env, update_id=2, text="NO ACEPTO")
+    assert env.orchestrator.received == []
+    assert [m.text for m in env.buffer.pending(77)] == ["hola", "NO ACEPTO"]
 
 
 def test_immediate_message_is_sent_alone_when_group_is_inflight(caplog):

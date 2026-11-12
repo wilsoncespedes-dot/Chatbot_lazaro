@@ -7,7 +7,6 @@ import pytest
 
 from orchestrator.accounts import hash_token, new_link_token
 from orchestrator.adapters.repository import FakeRepository
-from orchestrator.privacy import PRIVACY_ACCEPT_BUTTON
 
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 USER_ID = 10
@@ -172,14 +171,19 @@ def test_acceptance_after_any_route_only_adds_privacy_consent(env, route):
     env.post(text=text, update_id=1, user=USER_ID, chat=CHAT_ID, consent=False)
     assert all(not value for value in _linked_rows(env.repo, USER_ID).values())
 
-    response = env.post_button(
-        PRIVACY_ACCEPT_BUTTON, user=USER_ID, chat=CHAT_ID, message_id="btn-1"
+    response = env.post(
+        text=env.settings.consent_accept_phrase,
+        update_id=2,
+        user=USER_ID,
+        chat=CHAT_ID,
+        consent=False,
     )
 
     assert response.status_code == 202
     assert len(env.repo.privacy_consents) == 1
     consent = env.repo.privacy_consents[0]
     assert consent.telegram_user_id == USER_ID
+    assert consent.evidence_type == "text"
     assert env.gateway.sent[-1] == (CHAT_ID, env.settings.privacy_accepted_reply)
 
 
@@ -425,8 +429,12 @@ def test_client_token_survives_until_acceptance(env):
     assert env.repo.link_tokens[token_hash].used_at is None
     assert env.repo.profiles[profile.id].telegram_user_id is None
 
-    env.post_button(
-        PRIVACY_ACCEPT_BUTTON, user=USER_ID, chat=CHAT_ID, message_id="btn-1"
+    env.post(
+        text=env.settings.consent_accept_phrase,
+        update_id=2,
+        user=USER_ID,
+        chat=CHAT_ID,
+        consent=False,
     )
     env.post(
         text=f"/start {token}",

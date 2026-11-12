@@ -15,6 +15,8 @@ PRIVACY_BUTTON_IDS = (PRIVACY_ACCEPT_BUTTON, PRIVACY_REJECT_BUTTON)
 CONSENT_ACCEPT_LABEL = "Acepto"
 CONSENT_REJECT_LABEL = "No acepto"
 
+TEXT_CONSENT_CHANNELS: frozenset[str] = frozenset({"telegram"})
+
 
 @dataclass(frozen=True)
 class ConversationTexts:
@@ -222,12 +224,47 @@ class ConsentChallengeStore:
             del self._pending[key]
             return True
 
+    def consume_text(
+        self,
+        channel: str,
+        external_user_id: str,
+        external_chat_id: str,
+        *,
+        notice_version: str,
+        notice_sha: str,
+    ) -> bool:
+        """R46 R11, R14: consume el desafío de texto ligado a versión, hash y chat."""
+        key = (channel, external_user_id)
+        with self._lock:
+            challenge = self._pending.get(key)
+            if challenge is None:
+                return False
+            if (
+                challenge.notice_version != notice_version
+                or challenge.notice_sha256 != notice_sha
+                or challenge.external_chat_id != external_chat_id
+            ):
+                return False
+            del self._pending[key]
+            return True
+
 
 def is_acceptance(text: str, phrase: str) -> bool:
     """R12 de #35: la aceptación es igualdad normalizada, no contención."""
     if not phrase.strip():
         return False
     return normalize_privacy_text(text) == normalize_privacy_text(phrase)
+
+
+def matches_consent_phrase(text: str, phrase: str) -> bool:
+    """R46 R5: coincidencia exacta tras `normalize_privacy_text`, nunca contención."""
+    return is_acceptance(text, phrase)
+
+
+def text_consent_instruction(template: str, accept: str, reject: str) -> str:
+    """R46 R7: sustituye marcadores sin interpretar otras llaves del texto."""
+    return template.replace("{accept}", accept).replace("{reject}", reject)
+
 
 
 def is_acceptance_affirmation(text: str, phrase: str) -> bool:

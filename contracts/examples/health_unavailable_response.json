@@ -1,0 +1,7 @@
+{
+  "status": "unhealthy",
+  "service": "orchestrator",
+  "dependencies": {
+    "postgres": "unavailable"
+  }
+}

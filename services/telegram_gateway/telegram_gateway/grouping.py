@@ -141,7 +141,11 @@ def enqueue_text(incoming: IncomingUpdate, settings: Settings, adapters: Adapter
         if len(text) > MAX_TEXT_LENGTH:
             _post_single(incoming, adapters)
             return
-        if is_immediate(text, settings.message_grouping_accept_phrase):
+        if is_immediate(
+            text,
+            settings.message_grouping_accept_phrase,
+            settings.message_grouping_reject_phrase,
+        ):
             _flush_webhook(incoming.chat_id, incoming.update_id, settings, adapters)
             _post_single(incoming, adapters)
             return

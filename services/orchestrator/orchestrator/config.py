@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
+    healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
     rag_top_k: int = Field(default=5, ge=1, le=20)
     no_answer_reply: str = (
@@ -234,6 +235,11 @@ class Settings(BaseSettings):
     privacy_notice_text: str = ""
     privacy_notice_version: str = ""
     privacy_accept_phrase: str = ""
+    privacy_reject_phrase: str = ""
+    privacy_text_consent_instruction: str = (
+        "Para aceptar, escribe exactamente: {accept}\n"
+        "Si no aceptas, escribe exactamente: {reject}"
+    )
     privacy_accepted_reply: str = ""
     privacy_retention_days: str = ""
     conversation_greeting: str = (
@@ -434,6 +440,21 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_text_consent_phrases(self) -> "Settings":
+        accept = normalize_privacy_text(self.consent_accept_phrase)
+        reject = normalize_privacy_text(self.consent_reject_phrase)
+        if accept == reject:
+            raise ValueError(
+                "PRIVACY_REJECT_PHRASE debe ser distinto de PRIVACY_ACCEPT_PHRASE"
+            )
+        instruction = self.privacy_text_consent_instruction
+        if "{accept}" not in instruction or "{reject}" not in instruction:
+            raise ValueError(
+                "PRIVACY_TEXT_CONSENT_INSTRUCTION debe contener {accept} y {reject}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_client_data(self) -> "Settings":
         if not self.client_data_enabled:
             return self
@@ -519,6 +540,14 @@ class Settings(BaseSettings):
         if not self.privacy_retention_days.strip():
             return None
         return int(self.privacy_retention_days)
+
+    @property
+    def consent_accept_phrase(self) -> str:
+        return self.privacy_accept_phrase.strip() or "ACEPTO"
+
+    @property
+    def consent_reject_phrase(self) -> str:
+        return self.privacy_reject_phrase.strip() or "NO ACEPTO"
 
     @property
     def privacy_configured(self) -> bool:

@@ -10,7 +10,7 @@ from lazaro_contracts.production import (
     parse_app_env,
     production_problems,
 )
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REQUIRED_IN_PRODUCTION = (
@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     orchestrator_url: str = "http://orchestrator:8000"
     dedup_ttl_seconds: int = 86400
+    healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
+    telegram_answer_callback_timeout_seconds: float = 3.0
     non_text_reply: str = "Por ahora solo puedo leer mensajes de texto."
     message_grouping_enabled: bool = True
     message_grouping_window_seconds: float = 2.0
@@ -43,6 +45,7 @@ class Settings(BaseSettings):
     message_grouping_max_attempts: int = 3
     message_grouping_poll_seconds: float = 0.5
     message_grouping_accept_phrase: str = ""
+    message_grouping_reject_phrase: str = ""
 
     # WhatsApp Cloud API (#43)
     whatsapp_enabled: bool = False
@@ -55,6 +58,15 @@ class Settings(BaseSettings):
     whatsapp_template_language: str = "es"
     whatsapp_interactive_body_text: str = "Elige una opción:"
     whatsapp_window_hours: int = 24
+
+    @field_validator("telegram_answer_callback_timeout_seconds")
+    @classmethod
+    def _validate_answer_callback_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError(
+                "TELEGRAM_ANSWER_CALLBACK_TIMEOUT_SECONDS debe ser mayor que 0"
+            )
+        return value
 
     @field_validator("whatsapp_graph_base_url")
     @classmethod

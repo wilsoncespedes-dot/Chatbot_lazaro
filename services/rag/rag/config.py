@@ -6,7 +6,7 @@ from lazaro_contracts.production import (
     parse_app_env,
     production_problems,
 )
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REQUIRED_IN_PRODUCTION = (
@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     rag_similarity_threshold: float = 0.75
     rag_hybrid_enabled: bool = False
     rag_hybrid_candidate_limit: int = 50
+    healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
 
     @model_validator(mode="after")

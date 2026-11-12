@@ -15,12 +15,32 @@ class DedupStore(Protocol):
         """True si el par (canal, mensaje externo) es nuevo (y queda marcado)."""
         ...
 
+    def ping(self, timeout_seconds: float) -> bool:
+        """Comprueba Redis con PING y un timeout acotado (healthcheck, solo lectura)."""
+        ...
+
 
 class RedisDedupStore:
     def __init__(self, redis_url: str) -> None:
         import redis
 
+        self._redis_url = redis_url
         self._client = redis.Redis.from_url(redis_url)
+
+    def ping(self, timeout_seconds: float) -> bool:
+        # Cliente independiente solo para el probe: los límites de conexión y
+        # socket no alteran el timeout de las operaciones de negocio.
+        import redis
+
+        probe = redis.Redis.from_url(
+            self._redis_url,
+            socket_connect_timeout=timeout_seconds,
+            socket_timeout=timeout_seconds,
+        )
+        try:
+            return bool(probe.ping())
+        finally:
+            probe.close()
 
     def mark_if_new(self, update_id: int, ttl_seconds: int) -> bool:
         return self.mark_message_if_new("telegram", str(update_id), ttl_seconds)
@@ -43,11 +63,25 @@ class RedisDedupStore:
 
 
 class FakeDedupStore:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(
+        self,
+        fail: bool = False,
+        ping_ok: bool = True,
+        ping_error: BaseException | None = None,
+    ) -> None:
         # `keys` conserva la forma histórica (update_id -> ttl) para Telegram.
         self.keys: dict[int, int] = {}
         self.message_keys: set[tuple[str, str]] = set()
         self.fail = fail
+        self.ping_ok = ping_ok
+        self.ping_error = ping_error
+        self.ping_calls: list[float] = []
+
+    def ping(self, timeout_seconds: float) -> bool:
+        self.ping_calls.append(timeout_seconds)
+        if self.ping_error is not None:
+            raise self.ping_error
+        return self.ping_ok
 
     def mark_if_new(self, update_id: int, ttl_seconds: int) -> bool:
         return self.mark_message_if_new("telegram", str(update_id), ttl_seconds)

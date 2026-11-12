@@ -66,9 +66,23 @@ distintos. El payload Telegram histórico se traduce a `channel = telegram` y
 ### Salud
 
 Los 4 servicios (`telegram_gateway`, `orchestrator`, `rag`, `handover`) exponen
-`GET /health` sin token. Respuesta `200` con
-`{"status": "ok", "service": "<nombre>"}` (modelo `HealthResponse`), donde
-`<nombre>` es el nombre del servicio.
+`GET /health` sin token. La ruta comprueba las dependencias críticas del
+servicio con una operación de solo lectura y un timeout finito
+(`HEALTHCHECK_TIMEOUT_SECONDS`): Redis en `telegram_gateway` y PostgreSQL en
+`orchestrator`, `rag` y `handover`.
+
+- Saludable: `200` con `{"status": "ok", "service": "<nombre>"}` (modelo
+  `HealthResponse`), donde `<nombre>` es el nombre del servicio.
+- No saludable: `503` con `status` = `unhealthy`, el nombre del servicio y el
+  mapa `dependencies` con el nombre de cada dependencia fallida. Una dependencia
+  que falla o excede el timeout se representa como `unavailable`, por ejemplo
+  `{"status": "unhealthy", "service": "orchestrator", "dependencies":
+  {"postgres": "unavailable"}}`.
+
+La respuesta nunca incluye URLs, credenciales, DSN, hostnames, usuarios ni
+mensajes de excepción. La ruta sigue siendo pública, no exige
+`X-Service-Token` y no ejecuta operaciones de negocio.
+
 
 ## Mensaje normalizado y respuesta abstracta
 

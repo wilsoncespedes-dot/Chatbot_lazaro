@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import suppress
 from datetime import datetime
 from typing import Any, Callable, Protocol
 from urllib.parse import unquote, urlparse
@@ -13,6 +14,10 @@ from ..domain import Case, Denial, HandoverRequestRecord, Notification, RequestR
 
 
 class CaseRepository(Protocol):
+    def health_check(self, timeout_seconds: float) -> None:
+        """Comprueba PostgreSQL con `SELECT 1` y un timeout acotado (solo lectura)."""
+        ...
+
     def find_active_case(self, contact_id: str) -> Case | None: ...
 
     def create_case(self, case: Case) -> None: ...
@@ -82,6 +87,14 @@ class FakeCaseRepository:
         self.requests: list[HandoverRequestRecord] = []
         self.timeout_claims: dict[str, datetime] = {}
         self.privacy_purge_runs: list[dict[str, Any]] = []
+        self.health_checks: list[float] = []
+        self.health_error: BaseException | None = None
+
+    def health_check(self, timeout_seconds: float) -> None:
+        """healthcheck_dependencias R4, R8: fallo y timeout controlables en tests."""
+        self.health_checks.append(timeout_seconds)
+        if self.health_error is not None:
+            raise self.health_error
 
     def find_active_case(self, contact_id: str) -> Case | None:
         active = [
@@ -322,16 +335,20 @@ _CASE_COLUMNS = (
 )
 
 
-def _pg_connect(database_url: str) -> Any:
+def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
     import pg8000.dbapi
 
     parsed = urlparse(database_url)
+    kwargs: dict[str, Any] = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     return pg8000.dbapi.connect(
         user=unquote(parsed.username or ""),
         password=unquote(parsed.password or ""),
         host=parsed.hostname or "localhost",
         port=parsed.port or 5432,
         database=(parsed.path or "/").lstrip("/"),
+        **kwargs,
     )
 
 
@@ -361,11 +378,26 @@ def _row_to_case(row: tuple) -> Case:
 class PostgresCaseRepository:
     """SQL siempre parametrizado (%s); la conexión se abre en el primer uso."""
 
-    def __init__(self, database_url: str, connect: Callable[[], Any] | None = None) -> None:
+    def __init__(self, database_url: str, connect: Callable[[], Any] | None = None,
+                 connect_health: Callable[[float], Any] | None = None) -> None:
         self._database_url = database_url
         self._connect = connect or (lambda: _pg_connect(self._database_url))
+        self._connect_health = connect_health or (
+            lambda timeout: _pg_connect(self._database_url, timeout)
+        )
         self._conn: Any = None
         self._lock = threading.Lock()
+
+    def health_check(self, timeout_seconds: float) -> None:
+        """Conexión independiente y acotada; solo `SELECT 1`, sin esquema."""
+        conn = self._connect_health(timeout_seconds)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            with suppress(Exception):
+                conn.close()
 
     def _connection(self) -> Any:
         if self._conn is None:

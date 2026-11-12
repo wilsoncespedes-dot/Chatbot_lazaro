@@ -113,6 +113,7 @@ EXAMPLES: dict[str, type[BaseModel]] = {
     "chunk_active_response.json": ChunkItem,
     "error_response.json": ErrorResponse,
     "health_response.json": HealthResponse,
+    "health_unavailable_response.json": HealthResponse,
 }
 
 MODEL_NAMES = [

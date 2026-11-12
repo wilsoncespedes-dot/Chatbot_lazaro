@@ -42,6 +42,7 @@ from .domain import (
     WebhookForbidden,
     build_message_request,
     extract_callback,
+    extract_callback_query_id,
     extract_incoming,
     normalize_callback,
     normalize_incoming,
@@ -105,7 +106,11 @@ def build_default_adapters(settings: Settings) -> Adapters:
             _utcnow,
         )
     return Adapters(
-        telegram=HttpTelegramClient(settings.telegram_bot_token, settings.http_timeout_seconds),
+        telegram=HttpTelegramClient(
+            settings.telegram_bot_token,
+            settings.http_timeout_seconds,
+            settings.telegram_answer_callback_timeout_seconds,
+        ),
         dedup=RedisDedupStore(settings.redis_url),
         orchestrator=HttpOrchestratorClient(
             settings.orchestrator_url, settings.service_token, settings.http_timeout_seconds
@@ -188,13 +193,41 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         logger.exception("Excepción no controlada")
         return _error(500, "internal_error", "Error interno.")
 
-    @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
+    @app.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
+    async def health() -> HealthResponse | JSONResponse:
+        try:
+            healthy = await run_in_threadpool(
+                adapters.dedup.ping, settings.healthcheck_timeout_seconds
+            )
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo es unhealthy
+            logger.warning(
+                "healthcheck_redis_unavailable code=%s", type(exc).__name__
+            )
+            healthy = False
+        if not healthy:
+            return JSONResponse(
+                status_code=503,
+                content=HealthResponse(
+                    status="unhealthy",
+                    service=SERVICE_NAME,
+                    dependencies={"redis": "unavailable"},
+                ).model_dump(exclude_none=True),
+            )
         return HealthResponse(status="ok", service=SERVICE_NAME)
 
     @app.post(WEBHOOK_PATH)
     def webhook(update: TelegramUpdate) -> dict:
         raw = update.model_dump()
+        callback_query_id = extract_callback_query_id(raw)
+        if callback_query_id is not None:
+            try:
+                adapters.telegram.answer_callback_query(callback_query_id)
+            except Exception as exc:  # noqa: BLE001 - R4: nunca rompe el webhook
+                logger.warning(
+                    "Fallo al confirmar callback update_id=%s (%s)",
+                    update.update_id,
+                    type(exc).__name__,
+                )
         callback = extract_callback(raw)
         if callback is not None:
             try:

@@ -913,3 +913,41 @@ def test_chunk_update_section_documents_preserved_metadata() -> None:
     for fragment in ("`chunk_id`", "`manual_id`", "manual", "orden", "estado activo"):
         assert fragment in section, fragment
 
+
+# ── healthcheck_dependencias (feature #47) ───────────────────────────────────
+
+
+def test_health_documents_healthy_response() -> None:
+    """healthcheck_dependencias R1: la sección Salud documenta el 200 actual."""
+    section = _section(_doc(), "Salud", 3)
+    for fragment in (
+        "`200`",
+        '{"status": "ok", "service": "<nombre>"}',
+        "`HealthResponse`",
+        "sin token",
+    ):
+        assert fragment in section, fragment
+
+
+def test_health_documents_unhealthy_response_and_dependencies() -> None:
+    """healthcheck_dependencias R2: documenta 503, unhealthy y dependencies."""
+    section = _section(_doc(), "Salud", 3)
+    for fragment in (
+        "`503`",
+        "`unhealthy`",
+        "`dependencies`",
+        "`unavailable`",
+        "Redis",
+        "PostgreSQL",
+        "`HEALTHCHECK_TIMEOUT_SECONDS`",
+    ):
+        assert fragment in section, fragment
+
+
+def test_health_documents_that_no_sensitive_details_are_exposed() -> None:
+    """healthcheck_dependencias R2: la respuesta no expone URL, credenciales ni DSN."""
+    section = _section(_doc(), "Salud", 3)
+    for fragment in ("URLs", "credenciales", "DSN", "pública"):
+        assert fragment in section, fragment
+
+

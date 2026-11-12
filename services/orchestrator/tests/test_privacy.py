@@ -67,7 +67,8 @@ def test_without_consent_sends_notice_and_stores_nothing(env):
     [chat_id, prompt] = env.gateway.sent[0]
     assert chat_id == 100
     assert PRIVACY_NOTICE_TEXT in prompt
-    assert "Acepto" in prompt and "No acepto" in prompt
+    assert env.settings.consent_accept_phrase in prompt
+    assert env.settings.consent_reject_phrase in prompt
     assert _no_processing(env)
     assert env.rag.calls == []
     assert env.llm.calls == []
@@ -77,11 +78,19 @@ def test_without_consent_sends_notice_and_stores_nothing(env):
 
 def test_button_acceptance_records_consent(env):
     """R4, R24, R26: el botón guarda la prueba y deja la conversación en espera de login."""
-    response = env.post_button(PRIVACY_ACCEPT_BUTTON, message_id="btn-1")
+    env.present(channel="whatsapp", user=10, chat=100)
+    response = env.post_button(
+        PRIVACY_ACCEPT_BUTTON, message_id="btn-1", channel="whatsapp"
+    )
     assert response.json() == {"status": "accepted"}
-    assert env.gateway.sent[-1] == (100, PRIVACY_ACCEPTED_REPLY)
+    assert env.gateway.channel_sent[-1] == (
+        "whatsapp",
+        "100",
+        PRIVACY_ACCEPTED_REPLY,
+    )
     [consent] = env.repo.privacy_consents
-    assert consent.telegram_user_id == 10
+    assert consent.channel == "whatsapp"
+    assert consent.telegram_user_id is None
     assert consent.notice_version == PRIVACY_NOTICE_VERSION
     assert consent.notice_sha256 == hashlib.sha256(
         PRIVACY_NOTICE_TEXT.encode("utf-8")
@@ -90,7 +99,7 @@ def test_button_acceptance_records_consent(env):
     assert consent.external_message_id == "btn-1"
     assert consent.button_id == PRIVACY_ACCEPT_BUTTON
     assert consent.result == "accepted" and consent.evidence_type == "button"
-    contact = env.repo.contacts[10]
+    contact = env.repo.contacts[("whatsapp", "10")]
     assert env.repo.conversation_states[contact.id][0].value == "awaiting_login"
     assert env.repo.messages == [] and env.repo.events == []
     assert env.rag.calls == [] and env.llm.calls == []
@@ -132,7 +141,13 @@ def test_version_change_requires_new_acceptance_and_keeps_old_rows(env):
     assert PRIVACY_NOTICE_TEXT in env.gateway.sent[-1][1]
     assert env.repo.messages == []
 
-    env.post_button(PRIVACY_ACCEPT_BUTTON, message_id="btn-v1")
+    env.post(
+        text=env.settings.consent_accept_phrase,
+        update_id=2,
+        user=10,
+        chat=100,
+        consent=False,
+    )
     assert [c.notice_version for c in env.repo.privacy_consents] == ["v0", "v1"]
 
 
@@ -147,6 +162,7 @@ def test_current_consent_keeps_the_normal_flow(env):
 
 def test_consent_store_failure_returns_500_without_confirmation(env):
     """R4, R17, R18: si falla guardar la evidencia no se confirma y se responde 500."""
+    env.present(channel="whatsapp", user=10, chat=100)
     env.repo.fail_privacy_consent = True
     # `raise_server_exceptions=False` deja ver la respuesta del handler global
     # en lugar de propagar la excepción del transporte de TestClient.
@@ -154,14 +170,14 @@ def test_consent_store_failure_returns_500_without_confirmation(env):
     response = client.post(
         "/messages",
         json={
-            "channel": "telegram",
+            "channel": "whatsapp",
             "external_user_id": "10",
             "external_chat_id": "100",
             "external_message_id": "btn-fail",
             "kind": "button",
             "button_id": PRIVACY_ACCEPT_BUTTON,
             "button_proof": env.button_proof(
-                PRIVACY_ACCEPT_BUTTON, user=10, channel="telegram"
+                PRIVACY_ACCEPT_BUTTON, user=10, channel="whatsapp"
             ),
             "received_at": "2026-01-02T03:04:00+00:00",
         },
@@ -171,7 +187,10 @@ def test_consent_store_failure_returns_500_without_confirmation(env):
     )
     assert response.status_code == 500
     assert response.json()["error"] == "internal_error"
-    assert all(text != PRIVACY_ACCEPTED_REPLY for _, text in env.gateway.sent)
+    assert all(
+        text != PRIVACY_ACCEPTED_REPLY
+        for _channel, _destination, text in env.gateway.channel_sent
+    )
     assert env.repo.privacy_consents == []
 
 

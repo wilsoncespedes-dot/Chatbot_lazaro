@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from contextlib import suppress
 from dataclasses import replace
 from typing import Any, Callable, Protocol
 from urllib.parse import unquote, urlparse
@@ -39,6 +40,10 @@ def reciprocal_rank_fusion(
 
 
 class ChunkRepository(Protocol):
+    def health_check(self, timeout_seconds: float) -> None:
+        """Comprueba PostgreSQL con `SELECT 1` y un timeout acotado (solo lectura)."""
+        ...
+
     def add_manual(self, manual_id: str, name: str, chunks: list[Chunk]) -> None: ...
 
     def search(
@@ -71,6 +76,14 @@ class FakeChunkRepository:
     def __init__(self) -> None:
         self.manuals: dict[str, str] = {}
         self.chunks: list[Chunk] = []
+        self.health_checks: list[float] = []
+        self.health_error: BaseException | None = None
+
+    def health_check(self, timeout_seconds: float) -> None:
+        """healthcheck_dependencias R4, R8: fallo y timeout controlables en tests."""
+        self.health_checks.append(timeout_seconds)
+        if self.health_error is not None:
+            raise self.health_error
 
     def add_manual(self, manual_id: str, name: str, chunks: list[Chunk]) -> None:
         self.manuals[manual_id] = name
@@ -197,16 +210,20 @@ class FakeChunkRepository:
         raise ChunkNotFound("El fragmento no existe.")
 
 
-def _pg_connect(database_url: str) -> Any:
+def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
     import pg8000.dbapi
 
     parsed = urlparse(database_url)
+    kwargs: dict[str, Any] = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     return pg8000.dbapi.connect(
         user=unquote(parsed.username or ""),
         password=unquote(parsed.password or ""),
         host=parsed.hostname or "localhost",
         port=parsed.port or 5432,
         database=(parsed.path or "/").lstrip("/"),
+        **kwargs,
     )
 
 
@@ -222,11 +239,26 @@ class PgVectorChunkRepository:
         database_url: str,
         dim: int = 1536,
         connect: Callable[[], Any] | None = None,
+        connect_health: Callable[[float], Any] | None = None,
     ) -> None:
         self._database_url = database_url
         self._dim = int(dim)
         self._connect = connect or (lambda: _pg_connect(self._database_url))
+        self._connect_health = connect_health or (
+            lambda timeout: _pg_connect(self._database_url, timeout)
+        )
         self._conn: Any = None
+
+    def health_check(self, timeout_seconds: float) -> None:
+        """Conexión independiente y acotada; solo `SELECT 1`, sin esquema."""
+        conn = self._connect_health(timeout_seconds)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            with suppress(Exception):
+                conn.close()
 
     def _schema(self) -> tuple[str, ...]:
         return (

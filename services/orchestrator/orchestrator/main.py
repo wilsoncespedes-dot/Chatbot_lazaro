@@ -27,6 +27,7 @@ from lazaro_contracts import (
     normalize_legacy_message,
 )
 from pydantic import AwareDatetime, BaseModel, ConfigDict, field_validator
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import admin, advisor_panel
@@ -44,9 +45,11 @@ from .config import Settings
 from .domain import (
     Adapters,
     DomainError,
+    _has_current_consent,
     close_client_session,
     consent_button_pending,
     consent_configured,
+    consent_text_pending,
     conversation_texts,
     create_client,
     create_profile,
@@ -291,8 +294,25 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         logger.exception("Excepción no controlada")
         return _error(500, "internal_error", "Error interno.")
 
-    @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
+    @app.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
+    async def health() -> HealthResponse | JSONResponse:
+        try:
+            await run_in_threadpool(
+                adapters.repository.health_check,
+                settings.healthcheck_timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo es unhealthy
+            logger.warning(
+                "healthcheck_postgres_unavailable code=%s", type(exc).__name__
+            )
+            return JSONResponse(
+                status_code=503,
+                content=HealthResponse(
+                    status="unhealthy",
+                    service=SERVICE_NAME,
+                    dependencies={"postgres": "unavailable"},
+                ).model_dump(exclude_none=True),
+            )
         return HealthResponse(status="ok", service=SERVICE_NAME)
 
     # Registrar las rutas del panel una a una: con la versión instalada,
@@ -346,7 +366,6 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             )
             # R4/R5: el botón de consentimiento se procesa en la petición HTTP
             # para que un fallo al guardar la evidencia responda 500 (R18 de #35).
-            pending = consent_button_pending(body)
             # R21, R23: sin aviso configurado o sin consentimiento vigente no se
             # persiste la clave del mensaje; el gateway ya deduplica con TTL.
             # Tras consentir, la clave compuesta vuelve a ser la barrera
@@ -360,6 +379,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
                     conversation_texts(settings, adapters).notice_version,
                 )
             )
+            # R46 R16: la frase de texto de Telegram se procesa igual.
+            pending = consent_button_pending(body) or (
+                not consent_ready and consent_text_pending(body, settings)
+            )
             mark_new = lambda: adapters.repository.mark_message_if_new(
                 normalized.channel, normalized.external_message_id
             )
@@ -368,7 +391,15 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             normalized = normalize_legacy_message(body)
             direct = lambda: process_message(legacy, settings, adapters)
             action = lambda: _process(legacy, adapters)
-            pending = False
+            pending = (
+                not _has_current_consent(
+                    "telegram",
+                    str(legacy.telegram_user_id),
+                    settings,
+                    adapters,
+                )
+                and consent_text_pending(normalized, settings)
+            )
             # R22: la excepción aprobada de #35 conserva únicamente el
             # `update_id` en `processed_updates`, sin identidad ni payload.
             consent_ready = True

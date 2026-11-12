@@ -11,8 +11,11 @@ from fastapi.testclient import TestClient
 from lazaro_contracts import ErrorResponse, HealthResponse
 from pydantic import BaseModel
 
+from telegram_gateway.adapters.dedup import FakeDedupStore
+from telegram_gateway.adapters.orchestrator import FakeOrchestratorClient
+from telegram_gateway.adapters.telegram import FakeTelegramClient
 from telegram_gateway.config import Settings
-from telegram_gateway.domain import DomainError
+from telegram_gateway.domain import Adapters, DomainError
 from telegram_gateway.main import create_app
 
 SVC = "telegram_gateway"
@@ -57,7 +60,12 @@ def _compose_service_block() -> str:
 
 
 def _build_app() -> FastAPI:
-    app = create_app(Settings(service_token=TOKEN))
+    adapters = Adapters(
+        telegram=FakeTelegramClient(),
+        dedup=FakeDedupStore(),
+        orchestrator=FakeOrchestratorClient(),
+    )
+    app = create_app(Settings(service_token=TOKEN), adapters)
 
     @app.post("/_test/echo")
     async def echo(body: _Echo) -> _Echo:

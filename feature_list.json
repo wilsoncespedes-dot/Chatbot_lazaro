@@ -868,6 +868,238 @@
       "sdd": true,
       "status": "done",
       "auto_approved": true
+    },
+    {
+      "id": 44,
+      "name": "confirmar_callback_telegram",
+      "title": "Confirmar callback_query de Telegram (answerCallbackQuery)",
+      "description": "Bug: al pulsar un botón inline (p. ej. Acepto del consentimiento #37) el indicador queda girando porque telegram_gateway procesa el callback_query pero nunca invoca answerCallbackQuery.",
+      "acceptance": [
+        "Al recibir un callback_query válido con id de Telegram, telegram_gateway invoca answerCallbackQuery con ese callback_query_id mediante el cliente de Telegram (HTTP real y cliente falso).",
+        "Un fallo, excepción o timeout al confirmar el callback se registra sin secretos y no impide deduplicar ni reenviar el botón al orquestador; el webhook sigue respondiendo 200.",
+        "Callbacks duplicados o inválidos también se confirman cuando hay callback_query_id real, para que el indicador no quede girando; no se confirma con ids sintéticos derivados de update_id.",
+        "Pruebas cubren la llamada a answerCallbackQuery, el fallo al confirmar sin perder el procesamiento del botón, y el contrato del cliente HTTP; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        37
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 45,
+      "name": "corregir_foreign_session_windows",
+      "title": "Corregir tipo de parámetro en PostgresRepository.foreign_session_windows",
+      "description": "Bug: GET /asesor/cases/<id> devuelve 500 internal_error porque PostgreSQL lanza 42P18 'could not determine data type of parameter' en la condición '(%s IS NULL OR profile_id <> %s)' de foreign_session_windows cuando profile_id es None.",
+      "acceptance": [
+        "PostgresRepository.foreign_session_windows no produce 42P18 con profile_id None ni con profile_id no nulo: la consulta no depende de inferir el tipo de un parámetro NULL (p. ej. cast explícito o SQL distinto por rama).",
+        "Con profile_id None devuelve todas las ventanas de sesión del contacto; con profile_id no nulo devuelve solo las de otros perfiles; el comportamiento del repositorio en memoria no cambia.",
+        "GET /asesor/cases/<id> deja de responder 500 por esta causa.",
+        "Pruebas del repositorio/consulta cubren profile_id None y no nulo (SQL y parámetros emitidos, y/o Postgres real si está disponible); ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 46,
+      "name": "consentimiento_texto_telegram",
+      "title": "Consentimiento por frase de texto en Telegram (sin botones inline)",
+      "description": "Decisión explícita del dueño: en Telegram se quitan los botones inline Acepto/No acepto del aviso de consentimiento; el cliente acepta escribiendo la frase configurada de aceptación (por defecto 'ACEPTO', como antes) y rechaza escribiendo la frase configurada de rechazo (por defecto 'NO ACEPTO'). WhatsApp conserva sus opciones/botones actuales sin cambios.",
+      "acceptance": [
+        "En Telegram el aviso de consentimiento se envía sin reply_markup/botones inline y su texto indica claramente la frase exacta a escribir para aceptar y la frase para rechazar (frases configurables; defaults 'ACEPTO' y 'NO ACEPTO'; no se inventa redacción legal nueva: se reutiliza el aviso vigente y solo se añade la instrucción de qué escribir).",
+        "La aceptación solo se registra si el aviso vigente (versión/hash actuales) ya se mostró a ese contacto antes y luego llega un mensaje de texto que coincide exactamente con la frase de aceptación (normalización mínima documentada: trim y mayúsculas/minúsculas); una frase afirmativa enviada antes de mostrar el aviso vigente NO registra consentimiento y provoca mostrar el aviso.",
+        "La aceptación se registra con evidencia de tipo 'text' ligada al id del mensaje externo de Telegram, versión del aviso, hash del aviso y timestamp.",
+        "La frase de rechazo, tras mostrar el aviso, cierra el flujo sin persistir datos personales y responde con un texto seguro configurado/reutilizado; textos que no coinciden con ninguna frase mantienen el estado pendiente (se recuerda el aviso) sin persistir datos personales.",
+        "Se mantiene el requisito de #35: no se persisten datos personales (contenido de mensajes, perfil, etc.) antes del consentimiento.",
+        "WhatsApp conserva sus botones/opciones de consentimiento actuales y su comportamiento no cambia; los callbacks antiguos de botones Telegram no rompen el servicio (se ignoran o se responden de forma segura).",
+        "Pruebas cubren: aviso Telegram sin botones con instrucción de frase, frase antes del aviso no acepta, aceptación exacta tras aviso con evidencia text/versión/hash/timestamp, rechazo sin persistencia, texto no coincidente, WhatsApp intacto; ./init.sh verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        35
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 47,
+      "name": "healthcheck_dependencias",
+      "title": "Health checks reales de dependencias",
+      "description": "Evita que /health y Docker reporten servicios saludables cuando dependencias críticas configuradas están caídas.",
+      "acceptance": [
+        "Cada servicio mantiene GET /health sin token y devuelve estado no saludable y HTTP 503 cuando una dependencia crítica configurada no responde dentro del timeout.",
+        "Los checks cubren las dependencias críticas que usa este checkout (PostgreSQL y Redis según servicio), con pruebas mediante adaptadores falsos; no se agrega una dependencia Ollama inexistente.",
+        "Las respuestas saludables conservan el contrato actual y las no saludables identifican el servicio y dependencias fallidas sin incluir secretos ni DSNs.",
+        "Los probes usan timeout acotado y no alteran datos ni ejecutan consultas de negocio.",
+        "Pruebas cubren estado saludable, dependencia caída y timeout en cada servicio relevante; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 48,
+      "name": "retirar_asesores_telegram",
+      "title": "Retirar la atención de asesores por Telegram",
+      "description": "Decisión del dueño (2026-11-03): los asesores por Telegram (`/responder`, `/cerrar`, `ADVISOR_CHAT_IDS` y el aviso de caso por Telegram) eran compatibilidad temporal hasta terminar la fase 6 (#41). Esta feature los retira: los asesores atienden solo desde el panel y su identidad pasa a ser el perfil autenticado. Toca contracts, handover y orchestrator (specs/panel_asesores_multicanal/design.md S1).",
+      "acceptance": [
+        "Los asesores atienden solo desde el panel: `/responder` y `/cerrar` dejan de ser comandos de asesor en Telegram. Un mensaje con ese texto se trata como texto normal del remitente (compuerta de privacidad y flujo habitual) y no responde, asigna ni cierra ningún caso. `/consultar` (#26) no cambia.",
+        "La identidad del asesor en handover y en los contratos es el perfil autenticado del panel, no un `telegram_user_id`: un perfil con rol asesor sin Telegram vinculado puede ver, responder, asignar, transferir y cerrar casos desde el panel.",
+        "Handover deja de decidir quién es asesor con `ADVISOR_CHAT_IDS` y deja de avisar los casos por Telegram; los casos nuevos aparecen en la bandeja del panel. `ADVISOR_CHAT_IDS` y los textos de los comandos se retiran de la configuración, `.env.example`, `docker-compose.yml`, `render.yaml` y la documentación.",
+        "Las reglas de autorización vigentes (S12: un caso asignado solo lo atiende su asesor, casos huérfanos, precedencia de errores, fallo cerrado si handover no responde) se conservan con la identidad nueva; ninguna prueba de seguridad existente se elimina ni se debilita, solo se adapta a la identidad nueva.",
+        "Migración sin pérdida: los casos abiertos o asignados antes del cambio siguen visibles; un caso asignado a un chat_id se conserva asignado al perfil vinculado a ese `telegram_user_id` y, si no existe ese perfil, queda como caso huérfano según las reglas actuales.",
+        "Los cambios de contrato (identidad del asesor, respuesta de `POST /handover`, supuestos S12 y S13) quedan publicados en `contracts/CONTRATOS.md` y `lazaro_contracts` con ejemplos y tests; el spec lista cada edición a secciones ya publicadas.",
+        "Supuesto (confirmar): sin aviso por Telegram, `POST /handover` responde `no_advisors` cuando no existe ningún perfil con rol asesor habilitado; el cliente recibe `NO_ADVISORS_REPLY` como hoy.",
+        "Prueba de seguridad obligatoria: un `/responder <case_id> <texto>` enviado por Telegram, incluso desde un chat que antes estaba en `ADVISOR_CHAT_IDS`, no envía nada a ningún cliente. Las pruebas cubren además asesor sin Telegram, migración de casos asignados, casos huérfanos y arranque sin `ADVISOR_CHAT_IDS`; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41,
+        42
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 49,
+      "name": "roles_supervisor_responsable_datos",
+      "title": "Roles de supervisor y responsable de datos en el panel",
+      "description": "docs/especificacion.md define cuatro roles de personal; hoy existen admin y asesor (más cliente). Añade supervisor (ver todo, reasignar, métricas) y responsable de datos (cola de supresión). Cambia de forma explícita la decisión de la #14 «no se permite reasignar ni existe rol supervisor».",
+      "acceptance": [
+        "Existen los roles `supervisor` y `responsable_datos` en los perfiles; el administrador los asigna y cambia desde el panel; un perfil tiene un solo rol, como hoy.",
+        "Un supervisor puede hacer todo lo que hace un asesor y, además, ver todas las conversaciones escaladas (cualquier estado y asesor), reasignar un caso a otro asesor y consultar las métricas de #42 en solo lectura; no accede a clientes, credenciales, textos, plantillas, horarios ni cuentas.",
+        "La reasignación la decide handover, no el navegador: es una escritura condicional que no deshace una respuesta o un cierre simultáneos, queda en la auditoría con quién reasignó, de quién y a quién, y un asesor sin rol supervisor sigue recibiendo `403`. El cambio de regla queda publicado en `contracts/CONTRATOS.md` (S12).",
+        "Un responsable de datos solo ve y ejecuta la cola de supresión (casos, fecha límite, resultado); no ve la bandeja de conversaciones ni funciones administrativas. `SUPPRESSION_EXECUTOR_ROLES` admite el rol nuevo y su valor por defecto no cambia en esta feature.",
+        "Los permisos se comprueban en el servidor en cada ruta; el rol sale de la sesión, nunca de un campo del formulario.",
+        "Supuesto (confirmar): el supervisor reasigna solo a asesores con presencia `available`, igual que la transferencia de #41.",
+        "Pruebas (incluida una de seguridad obligatoria: un asesor no puede ver casos ajenos ni reasignar forzando la URL o el formulario) cubren la matriz de permisos de los cinco roles, reasignación concurrente, auditoría y CSRF; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41,
+        42,
+        48
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 50,
+      "name": "notas_internas_y_etiquetas",
+      "title": "Notas internas y etiquetas en los casos",
+      "description": "docs/especificacion.md pide notas internas en la vista de conversación y filtro por etiqueta en la bandeja; quedaron fuera de la #41 (specs/panel_asesores_multicanal/design.md S8).",
+      "acceptance": [
+        "Un asesor con permiso sobre un caso añade notas internas desde la vista de conversación; se muestran diferenciadas de los mensajes, con autor y fecha, solo a personal con permiso sobre ese caso.",
+        "Prueba de seguridad obligatoria: una nota interna nunca se envía por ningún adaptador de canal ni se entrega a la IA, al resumen o a la memoria del cliente.",
+        "El administrador crea, renombra y desactiva etiquetas; un asesor pone y quita etiquetas activas en los casos que puede gestionar, y la bandeja filtra por etiqueta junto con los filtros existentes.",
+        "Notas y etiquetas se escapan al mostrarse, exigen sesión y CSRF, y su creación y borrado quedan en la auditoría del panel sin copiar el texto de la nota.",
+        "La supresión ejecutada por una persona elimina las notas de los casos del cliente; la retención automática las trata como el resto del historial del caso.",
+        "Pruebas cubren permisos por caso, aislamiento entre asesores, filtro por etiqueta, etiqueta desactivada, supresión y longitudes máximas configurables; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41,
+        49
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 51,
+      "name": "respuestas_guardadas",
+      "title": "Respuestas guardadas para asesores",
+      "description": "docs/especificacion.md pide respuestas guardadas en la vista de conversación; quedaron fuera de la #41 (specs/panel_asesores_multicanal/design.md S8).",
+      "acceptance": [
+        "El administrador crea, edita y desactiva respuestas guardadas (título y texto) desde el panel; los cambios se aplican sin redeploy y quedan en la auditoría.",
+        "En la vista de conversación el asesor elige una respuesta guardada activa, el texto se carga en el campo de respuesta y puede editarlo antes de enviar; nada llega al cliente sin que el asesor confirme el envío.",
+        "El envío de una respuesta guardada sigue las reglas de cualquier respuesta: autorización por caso, adaptador del canal y ventana de WhatsApp. Con la ventana cerrada no se ofrecen respuestas guardadas, solo plantillas aprobadas.",
+        "Las respuestas guardadas son texto plano: no admiten variables con datos de clientes y se escapan al mostrarse.",
+        "Pruebas cubren permisos de administración, respuesta desactivada, edición antes de enviar, ventana cerrada, CSRF y escapado; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41,
+        42
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 52,
+      "name": "asignacion_automatica_carga",
+      "title": "Asignación automática de casos por carga",
+      "description": "docs/especificacion.md: «Asignación automática por carga, o manual por el supervisor». Hoy la asignación es manual: el primer asesor que responde o asigna se queda el caso. Quedó fuera de la #41 (design.md S8).",
+      "acceptance": [
+        "Un parámetro operativo editable desde el panel de administración elige el modo de asignación: `manual` (por defecto, comportamiento actual) o `automatica`; el cambio se aplica sin redeploy.",
+        "En modo `automatica`, al escalar un caso se asigna al asesor con presencia `available` que tenga menos casos asignados sin cerrar, con desempate estable; si no hay ningún asesor disponible, el caso queda en cola sin asignar y sigue el flujo actual de espera y vencimiento.",
+        "La asignación automática es atómica: dos escalamientos simultáneos no asignan el mismo caso dos veces y nunca pisa una asignación, respuesta o cierre hechos por una persona.",
+        "Los casos de supresión y los casos fuera del horario de atención no se asignan automáticamente; quedan en su cola como hoy.",
+        "Cada asignación automática queda registrada (caso, asesor, motivo `auto`) y el asesor la ve en su bandeja; el supervisor puede reasignarla.",
+        "Supuesto (confirmar): un caso que quedó en cola por falta de asesores disponibles no se asigna solo cuando un asesor vuelve a estar disponible; lo toma un asesor o lo asigna el supervisor.",
+        "Pruebas cubren modo manual sin cambios, reparto por carga, desempate, sin asesores disponibles, concurrencia, supresión y fuera de horario; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        48,
+        49
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 53,
+      "name": "panel_tiempo_real",
+      "title": "Panel de asesores en tiempo real",
+      "description": "docs/especificacion.md pide la bandeja en tiempo real por websockets. Hoy el panel es HTML sin JavaScript y se actualiza con recarga periódica (`<meta refresh>`, #41).",
+      "acceptance": [
+        "La bandeja y la vista de conversación muestran casos nuevos, mensajes nuevos y cambios de asignación o estado sin recargar la página, mediante un websocket del orchestrator autenticado con la sesión del panel.",
+        "Prueba de seguridad obligatoria: el websocket rechaza conexiones sin sesión válida o con `Origin` ajeno, y un asesor nunca recibe eventos de casos que las reglas de autorización no le permiten ver.",
+        "El JavaScript es propio y se sirve desde el mismo origen (sin CDN); la CSP sigue siendo estricta, sin scripts inline ni `unsafe-eval`. Los eventos no llevan tokens, secretos ni datos de otros clientes.",
+        "Sin JavaScript o si el websocket falla, el panel sigue funcionando con la recarga periódica actual; las acciones (responder, transferir, cerrar) siguen siendo formularios con CSRF.",
+        "Los eventos llegan aunque haya más de una instancia del orchestrator o el mensaje lo procese otro proceso; al reconectar, el panel recupera el estado actual sin perder ni duplicar mensajes.",
+        "Pruebas cubren autenticación, autorización por caso, `Origin`, reconexión, degradación sin websocket y cabeceras CSP; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41,
+        49
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 54,
+      "name": "segundo_factor_panel",
+      "title": "Segundo factor en el acceso del personal al panel",
+      "description": "docs/especificacion.md: acceso del personal «con inicio de sesión individual y segundo factor, o con la cuenta corporativa de Google o Microsoft». Hoy el panel solo pide usuario y contraseña. El login web de clientes (#38) no cambia.",
+      "acceptance": [
+        "Supuesto (confirmar): el segundo factor es TOTP (aplicación autenticadora, RFC 6238), sin proveedor externo. El acceso con cuenta corporativa de Google o Microsoft queda fuera hasta que el dueño lo pida como feature propia.",
+        "Un perfil de personal (admin, asesor y los roles de #49) registra su segundo factor desde el panel confirmando un código válido; desde entonces el inicio de sesión exige contraseña y código, y sin el código no se crea sesión.",
+        "`PANEL_2FA_REQUIRED` decide si el segundo factor es obligatorio; cuando lo es, un perfil sin segundo factor solo puede entrar a registrarlo. Supuesto (confirmar): es obligatorio por defecto en producción.",
+        "El secreto TOTP se guarda cifrado con una clave del entorno y nunca aparece en logs, auditoría ni respuestas después del registro; un código ya usado no se acepta de nuevo y los intentos fallidos de código cuentan en el límite de intentos del login.",
+        "Existen códigos de recuperación de un solo uso guardados como hash, y un administrador puede restablecer el segundo factor de otro perfil; ambas acciones quedan en la auditoría.",
+        "Pruebas cubren registro, login con y sin código, código repetido, desfase de reloj acotado, límite de intentos, recuperación, restablecimiento y arranque en producción; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        21,
+        29,
+        49
+      ],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 55,
+      "name": "evaluacion_ataques_y_preguntas_reales",
+      "title": "Evaluación con casos de ataque y preguntas reales",
+      "description": "docs/especificacion.md pide un conjunto de 50 a 100 preguntas reales más casos de ataque, que se corre cada vez que cambia el prompt, el modelo o la base de conocimiento. Hoy `eval/preguntas.json` tiene 19 preguntas sobre un manual de ejemplo y ningún caso de ataque.",
+      "acceptance": [
+        "Existe `eval/ataques.json` con casos de ataque y su resultado esperado: pedir datos de otro cliente, saltarse el consentimiento, pedir al bot que borre datos e inyección de instrucciones; al menos 3 casos por categoría.",
+        "`run_eval.py` en modo orquestador ejecuta los ataques, los puntúa aparte de las preguntas normales y termina con código distinto de 0 si algún ataque no es resistido; el informe lista cada ataque con su resultado sin copiar datos personales.",
+        "La puntuación de ataques está separada de la red y tiene tests con resultados de ejemplo, como el resto de `eval/scoring.py`.",
+        "Las preguntas reales van en un archivo aparte que se pasa con `--preguntas`; existe una plantilla documentada y una validación que avisa si el conjunto real tiene menos de 50 preguntas. Las preguntas reales las aporta el dueño con los manuales de producción: esta feature no las inventa.",
+        "`docs/verification.md` explica cuándo correr la evaluación (cambio de prompt, modelo o base de conocimiento) y cómo recalibrar `RAG_SIMILARITY_THRESHOLD` con el conjunto real.",
+        "Pruebas cubren carga y validación de ataques, puntuación, código de salida y archivo real ausente o incompleto; `./init.sh` queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        8,
+        39
+      ],
+      "sdd": true,
+      "status": "pending"
     }
   ]
 }

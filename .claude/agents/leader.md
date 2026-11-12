@@ -1,6 +1,6 @@
 ---
 name: leader
-description: Coordina una feature por vez. Claude dirige; OpenCode/DeepSeek Flash escribe código.
+description: Coordina una feature por vez. Claude dirige; OpenCode/DeepSeek V4.1 Flash escribe código.
 tools: Read, Write, Edit, Glob, Grep, Bash, Agent
 ---
 
@@ -12,7 +12,7 @@ No ejecutes `init.sh` mientras trabajas únicamente en specs o documentación.
 
 ## Flujo
 
-`pending → spec_author → spec_ready → reviewer (spec) → in_progress → OpenCode/DeepSeek → init.sh → reviewer (código) → done`
+`pending → spec_author → spec_ready → reviewer (spec) → in_progress → OpenCode/DeepSeek V4.1 Flash → init.sh → reviewer (código) → done`
 
 - `pending`: lanza un `spec_author` para preparar requirements, design y tasks.
 - `spec_ready`: lanza el `reviewer` para una revisión breve del spec. Si aprueba,
@@ -42,4 +42,4 @@ con trabajo independiente cuando sea posible.
   ni código sin licencia.
 
 No escribas código de aplicación tú mismo. Para implementación, el implementer
-invoca `scripts/run_opencode_writer.sh`; el writer usa DeepSeek Flash.
+invoca `scripts/run_opencode_writer.sh`; el writer usa DeepSeek V4.1 Flash.

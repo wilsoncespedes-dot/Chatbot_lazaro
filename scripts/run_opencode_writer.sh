@@ -72,7 +72,7 @@ if missing:
 PY
 
 if ! opencode auth list 2>&1 | grep -Eqi 'OpenCode Go|opencode-go'; then
-  echo "No hay credencial OpenCode Go en OpenCode. En la TUI ejecuta /connect, selecciona Other, usa el id 'opencode-go' y pega allí tu API key de OpenCode Go. No la guardes en el repositorio." >&2
+  echo "No hay credencial OpenCode Go en OpenCode. En la TUI ejecuta /connect, selecciona Other, usa el id 'opencode-go' y configura tu API key. No la guardes en el repositorio." >&2
   exit 3
 fi
 
