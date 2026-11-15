@@ -9,7 +9,7 @@ Un solo núcleo con IA atiende Telegram y WhatsApp. El cliente acepta el tratami
 | Tema | Decisión |
 | --- | --- |
 | Canales | Telegram y WhatsApp con la misma lógica. Nada exclusivo de un canal sin su equivalente en el otro. |
-| Proveedor de WhatsApp | Capa de abstracción que soporte Cloud API de Meta, Twilio y 360dialog. Se elige uno después. |
+| Proveedor de WhatsApp | Capa de abstracción que soporte Cloud API de Meta, Twilio y 360dialog. La implementación de producción es **Meta Cloud API** (decisión del dueño, 2026-11-03). |
 | Identidad | Usuario y contraseña que entrega la empresa. Una credencial solo puede tener una sesión activa, en un solo chat. |
 | Vigencia | 1 mes. La renueva el administrador cuando el cliente paga. Aviso al cliente 5 días antes. |
 | Credencial vencida | El bot avisa que debe pagar para reactivar el servicio, o que puede hablar con un asesor para borrar sus datos. |
@@ -27,11 +27,11 @@ Un solo núcleo con IA atiende Telegram y WhatsApp. El cliente acepta el tratami
 
 El núcleo nunca sabe de qué canal viene un mensaje. Dos capas de adaptadores traducen todo a un formato común: una por canal y, dentro de WhatsApp, una por proveedor.
 
-&#91;embedded content: arquitectura · canales, adaptadores, núcleo y servicios\]
+*(Diagrama de arquitectura: canales, adaptadores, núcleo y servicios. No se conserva al exportar; su contenido está en la lista de abajo.)*
 
 Agregar un canal o cambiar de proveedor de WhatsApp solo toca la columna de adaptadores; el núcleo y los servicios no cambian.
 
-En texto (el diagrama no se conserva al exportar):
+En texto:
 
 - Telegram (Bot API) ↔ Adaptador Telegram ↔ Núcleo
 - WhatsApp (Cloud API, Twilio o 360dialog) ↔ Adaptador WhatsApp (un plugin por proveedor, ventana de 24 horas) ↔ Núcleo
@@ -114,7 +114,7 @@ El cliente se identifica con usuario y contraseña en una página web externa, n
 
 ### Seguridad mínima
 
-- Contraseñas guardadas con hash (Argon2 o bcrypt), nunca en texto plano.
+- Contraseñas guardadas con hash y sal, nunca en texto plano (la implementación usa scrypt para clientes y PBKDF2-SHA256 para perfiles del panel).
 - Bloqueo temporal tras 5 intentos fallidos (valor propuesto).
 - El administrador puede revocar una credencial o cerrar una sesión activa.
 - Cada inicio de sesión, cierre y revocación queda registrado.
@@ -124,11 +124,11 @@ El cliente se identifica con usuario y contraseña en una página web externa, n
 
 El orden es: saludo, tratamiento de datos, inicio de sesión, bienvenida con temas y conversación libre. El consentimiento va antes del inicio de sesión porque desde el primer mensaje ya se recogen datos personales (número, ID de Telegram, lo que escribe).
 
-&#91;embedded content: estados de la conversación · 7 estados\]
+*(Diagrama de los 7 estados de la conversación. No se conserva al exportar; su contenido está en la tabla de transiciones de abajo.)*
 
 El único camino a la conversación libre pasa por el consentimiento y el inicio de sesión; rechazar los datos termina la conversación.
 
-Transiciones en texto (el diagrama no se conserva al exportar):
+Transiciones en texto:
 
 | Desde | Evento | Hacia |
 | --- | --- | --- |
@@ -144,6 +144,12 @@ Transiciones en texto (el diagrama no se conserva al exportar):
 | Con asesor | El asesor resuelve o devuelve | Activa |
 | Sin acceso | El admin renueva tras el pago | Activa |
 | Sin acceso | Pide asesor o borrar datos | Con asesor |
+
+> **Consentimiento en Telegram (decisión vigente, `docs/proyecto.md` §13.5):**
+> Telegram no usa botones. La persona acepta escribiendo exactamente la frase
+> configurada (por defecto `ACEPTO`) y rechaza con `NO ACEPTO`; esa respuesta es
+> la prueba (evidencia `text`). Donde esta sección dice «toca Acepto / No
+> acepto» o «botón», aplica tal cual solo a WhatsApp (evidencia `button`).
 
 ### Qué pasa en cada estado
 
@@ -316,17 +322,17 @@ Todos los valores de tiempo (1 hora, 1 mes, 5 días, horario) y los textos legal
 
 ## Puntos abiertos
 
-El proveedor real de WhatsApp se elegirá antes de iniciar la feature #43. La
-calibración de embeddings requiere manuales de producción. También queda la
+El proveedor de WhatsApp ya está elegido (Meta Cloud API, feature #43). Quedan
+la calibración de embeddings, que requiere manuales de producción, y la
 validación legal.
 
 - [ ] Validar con el área legal: orden del consentimiento, texto de la política, plazos de supresión, registro del rechazo y memoria permanente.
-- [ ] Elegir proveedor WhatsApp para la feature #43: Cloud API de Meta, Twilio o 360dialog.
+- [x] Elegir proveedor WhatsApp para la feature #43: Cloud API de Meta (2026-11-03).
 - [ ] Calibrar el modelo de embeddings y el umbral con un manual real.
 
 ### Fuentes
 
 - [Concepto SIC sobre el Decreto 1377 de 2013 (autorización y prueba)](https://www.ambitojuridico.com/sites/default/files/BancoMedios/Archivos/cpto-201811400676461-18.pdf)
-- [WhatsApp Cloud API: envío de mensajes y ventana de 24 horas](https://scriptagc.wasmer.app/https_developers_facebook_com/docs/whatsapp/cloud-api/guides/send-messages)
+- [WhatsApp Cloud API: envío de mensajes y ventana de 24 horas](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages)
 - [Límites de mensajes interactivos de WhatsApp](https://singhamandeep.com/whatsapp-interactive-messages-api/)
 - [Chatwoot (repositorio)](https://github.com/chatwoot/chatwoot)

@@ -9,8 +9,10 @@
 > repositorios, diseño y preparación del harness.
 >
 > **Nota del arnés:** este documento es el contexto de negocio para los
-> agentes. Donde dice OpenCode, el equipo pasó después a **Claude Code**. Los
-> cambios de la sección 9 ya están aplicados en este repositorio. Las reglas
+> agentes. El desarrollo lo coordina **Claude Code** y el código lo escribe
+> OpenCode con DeepSeek (ver `README.md`). Las secciones 3, 4, 7, 8 y 10 son
+> históricas (versión mínima de octubre de 2026). No hay sección 9: sus cambios
+> ya se aplicaron al repositorio y se conserva la numeración. Las reglas
 > técnicas obligatorias están en `docs/architecture.md` y
 > `docs/conventions.md`; si algo de aquí choca con ellas, mandan ellas.
 
@@ -65,8 +67,9 @@ documento completo. La decisión central es:
 3. **Consultas de datos.** El cliente consulta sus propios datos mediante
    vistas con RLS; el personal usa las vistas y permisos autorizados.
 4. **Paso a un asesor.** Un servicio aparte avisa a los asesores (unos 3) y
-   registra a quién avisó y por qué. Si ninguno se conecta dentro de un tiempo
-   de espera (por definir), el bot avisa al cliente.
+   registra a quién avisó y por qué. Si ninguno se conecta dentro del tiempo de
+   espera configurable (`HANDOVER_TIMEOUT_SECONDS`, 300 s por defecto), el bot
+   avisa al cliente.
 
 ### Roles y verificación
 
@@ -161,6 +164,10 @@ usuario logra que el sistema ejecute código que él escribió.
 
 ## 7. Contratos entre servicios (borrador de la versión mínima)
 
+> **Histórico.** El contrato vigente y completo es `contracts/CONTRATOS.md`
+> (con sus modelos en `contracts/lazaro_contracts`). Esta tabla es el borrador
+> inicial y ya no describe todas las rutas ni los campos actuales.
+
 Cada servicio habla con los demás por HTTP y JSON.
 
 | De → a                  | Ruta                     | Envía                                                   | Devuelve |
@@ -192,23 +199,25 @@ Features del harness (ver `feature_list.json`):
 7. Traspaso a asesor
 8. Evaluación con preguntas de ejemplo
 
-**Quedan para después:** consulta a la base de datos, paneles, clasificador,
-edición de fragmentos y verificación de cuentas (enlace Telegram ↔ perfil).
+**Estado (2026-11-15):** la versión mínima y todo lo que quedaba para después
+(consulta a la base de datos, paneles, clasificador, edición de fragmentos,
+verificación de cuentas, núcleo multicanal con WhatsApp, identidad, memoria y
+administración) están implementados: las 57 features de `feature_list.json`
+están `done`.
 
-## 10. Cambios propuestos al documento original (pendientes de confirmar)
+## 10. Cambios propuestos al documento original (resueltos)
 
-- **Un bot o dos.** Alternativa más segura: un bot para clientes (RAG y
-  traspaso) y otro para personal (consulta a la base de datos).
-- **Datos propios del cliente.** No está en el documento; sería funcionalidad nueva.
-- **Clasificador.** Una llamada barata al modelo con la lista de categorías, o
-  un clasificador por similitud (habría que reescribir el de rag-support-bot).
-- **Edición de fragmentos.** Ningún repositorio la resuelve bien; hay que construirla.
+- **Un bot o dos.** Resuelto: un solo núcleo multicanal; las capacidades
+  dependen de la identidad autenticada y del estado (§13).
+- **Datos propios del cliente.** Aprobado e implementado con vistas con RLS (§6, §13.4).
+- **Clasificador.** Implementado (#25) con categorías administrables y umbral.
+- **Edición de fragmentos.** Implementada (#19, #22) en el servicio RAG y el panel.
 
 ## 11. Riesgos principales
 
 | Riesgo | Mitigación |
 |--------|------------|
-| Un cliente consulta la base de datos | Acceso solo a personal verificado, usuario de solo lectura, pruebas obligatorias |
+| Un cliente consulta datos de otra persona | Vistas con RLS y `cliente_id` tomado de la sesión, usuario SQL de solo lectura, pruebas obligatorias |
 | Inyección de instrucciones desde manuales o mensajes | Tratar el texto como datos; el modelo no tiene herramientas que escriban en la base |
 | Datos personales (Ley 1581, sin verificar con abogado) | Consentimiento antes de cualquier dato salvo el personal vinculado; guardar lo mínimo, aviso y autorización antes de producción, poder borrar datos. Tratamiento técnico mínimo para responder: deduplicación en Redis con `DEDUP_TTL_SECONDS`, búfer de agrupación con `MESSAGE_GROUPING_BUFFER_TTL_SECONDS` y `processed_updates` solo con `update_id` |
 | La base gratuita de Render expira y no tiene copias | Plan de pago o exportar periódicamente |

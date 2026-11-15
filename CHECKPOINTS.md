@@ -53,11 +53,13 @@
 
 ## C6 — Spec Driven Development
 
-- [ ] Toda feature `sdd: true` en `spec_ready`, `in_progress` o `done` tiene
-      `specs/<name>/` con `requirements.md`, `design.md`, `tasks.md`.
+- [ ] Toda feature `sdd: true` en `spec_ready` o `in_progress` tiene
+      `specs/<name>/` con `requirements.md`, `design.md`, `tasks.md`. Al cerrar
+      una tanda de features `done`, sus specs e informes se archivan con un tag
+      git y se borran del árbol (ver `progress/history.md`).
 - [ ] `requirements.md` usa EARS estricto (ver `docs/specs.md`).
 - [ ] `design.md` lista dependencias nuevas y «Supuestos a confirmar».
-- [ ] Toda feature `done` tiene todas sus tasks en `[x]`.
+- [ ] Toda feature que se cierra como `done` tiene todas sus tasks en `[x]`.
 - [ ] Cada `R<n>` está cubierto por al menos un test concreto.
 
 ---

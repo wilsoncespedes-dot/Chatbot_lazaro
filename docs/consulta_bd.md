@@ -4,7 +4,7 @@ Esta guía la ejecuta el dueño de la base de datos, no el código. El orquestad
 solo lee por una conexión separada (`DB_QUERY_DATABASE_URL`) con un rol de
 PostgreSQL de solo lectura. Mientras `DB_QUERY_ENABLED=false` (valor por
 defecto) no se ejecuta ninguna consulta ni se envía el esquema al proveedor de
-IA (supuesto S1 de `specs/consulta_bd_lenguaje_natural/design.md`).
+IA (supuesto S1, descrito junto a `DB_QUERY_ENABLED` en `.env.example`).
 
 ## 1. Rol de solo lectura
 

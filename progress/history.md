@@ -1,626 +1,80 @@
 # Bitácora histórica (append-only)
 
-> Cada vez que se cierra una sesión, su resumen se añade aquí.
-> No edites entradas anteriores. Solo añades al final.
+> Cada vez que se cierra una sesión, su resumen se añade aquí, al final.
+> El detalle de las sesiones anteriores al 2026-11-15 (bitácora completa,
+> specs e informes `impl_`/`review_`/`specreview_` de cada feature) está en el
+> tag git `archivo-antes-limpieza-2026-11-15`. Para consultarlo:
+> `git show archivo-antes-limpieza-2026-11-15:progress/history.md`.
 
 ---
 
-## 2026-10-30 — Bootstrap del arnés para el chatbot Lázaro
-- **Agente:** humano + Claude (preparación del arnés).
-- **Cambios:** arnés SDD adaptado desde el ejemplo de notas: se quitó la app
-  de ejemplo; docs reescritos para Python + FastAPI en monorepo de
-  microservicios (`docs/architecture.md`, `conventions.md`, `verification.md`);
-  contexto del proyecto en `docs/proyecto.md`; `feature_list.json` con las 8
-  features de la versión mínima; pytest en lugar de unittest; bloqueo de
-  lectura de `.env` para los agentes; rutas `services/` protegidas para el leader.
-- **Resultado:** `./init.sh` verde (aún sin tests: normal antes de la feature 2).
-
-## 2026-10-30 — Feature #1 contratos_servicios (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec revisión 1 SPEC_CHANGES_REQUESTED → corregido; revisión 2
-  SPEC_APPROVED (`progress/specreview_contratos_servicios.md`) → `in_progress`
-  con `auto_approved: true` → implementer T1–T19 → review APPROVED
-  (`progress/review_contratos_servicios.md`).
-- **Cambios:** `contracts/CONTRATOS.md` (8 rutas + reglas comunes + supuestos
-  S1–S10), paquete `contracts/lazaro_contracts/` (20 modelos Pydantic v2,
-  incluido `ErrorResponse`), `contracts/examples/` (21 JSON),
-  `contracts/tests/`, `contracts/requirements.txt` (`pydantic>=2.12,<3`) y una
-  línea en `requirements-dev.txt`. Informe: `progress/impl_contratos_servicios.md`.
-- **Resultado:** `./init.sh` verde, 273 tests pasan. R1–R52 cubiertos.
-- **Pendiente humano:** revisar el spec auto-aprobado; confirmar que los
-  cambios de `.claude/settings.json` (modo nocturno) se restauran con
-  `./modo.sh` y no se commitean con la feature; decidir en la feature 2 cómo
-  llega `lazaro_contracts` a las imágenes Docker.
-
-## 2026-10-30 — Feature #2 esqueleto_servicios (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec vuelta 1 SPEC_CHANGES_REQUESTED, vuelta 2 SPEC_APPROVED →
-  `in_progress` con `auto_approved: true` → implementer T1–T19 → review APPROVED
-  (`progress/review_esqueleto_servicios.md`).
-- **Cambios:** 4 servicios FastAPI en `services/` (telegram_gateway,
-  orchestrator, rag, handover) con `/health`, auth por `X-Service-Token`,
-  Dockerfile y tests; `docker-compose.yml` (postgres con pgvector, redis, 4
-  servicios), script SQL de init, `.env.example`, `.github/workflows/ci.yml`,
-  `.dockerignore`, `scripts/`. Informe: `progress/impl_esqueleto_servicios.md`.
-- **Resultado:** `./init.sh` verde, 386 tests pasan.
-- **Pendiente humano:** revisar el spec auto-aprobado.
-
-## 2026-10-30 — Feature #3 telegram_gateway (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec aprobado (`progress/specreview_telegram_gateway.md`) →
-  `in_progress` con `auto_approved: true` → implementer → review APPROVED
-  (`progress/review_telegram_gateway.md`).
-- **Cambios:** `services/telegram_gateway/` con webhook protegido por secreto,
-  dedup en Redis, cliente del orquestador, envío a Telegram (`POST /send`),
-  adaptadores con versiones falsas y tests. Informe: `progress/impl_telegram_gateway.md`.
-- **Resultado:** `./init.sh` verde.
-- **Pendiente humano:** revisar el spec auto-aprobado.
-
-## 2026-10-30 — Feature #4 orquestador_basico (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec aprobado (`progress/specreview_orquestador_basico.md`) →
-  `in_progress` con `auto_approved: true` → implementer T1–T29 → review APPROVED
-  (`progress/review_orquestador_basico.md`).
-- **Cambios:** `services/orchestrator/` con `POST /messages` (202, dedup por
-  `update_id`), contactos e historial, eventos de decisión, búsqueda en RAG,
-  respuesta con LLM, `NO_ANSWER_REPLY` + traspaso sin resultados, traspaso por
-  palabras clave, adaptadores con versiones falsas y tests. Informe:
-  `progress/impl_orquestador_basico.md`.
-- **Resultado:** `./init.sh` verde, 460 tests pasan.
-- **Pendiente humano:** revisar el spec auto-aprobado.
-
-## 2026-10-30 — Feature #5 rag_ingesta_busqueda (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec revisado (`progress/specreview_rag_ingesta_busqueda.md`) →
-  `in_progress` con `auto_approved: true` → implementer T1–T17 → review APPROVED
-  (`progress/review_rag_ingesta_busqueda.md`).
-- **Cambios:** servicio RAG: `POST /manuals` (PDF/DOCX, extracción, chunking,
-  embeddings), `POST /search` con umbral y `top_k`, adaptadores de embeddings y
-  repositorio (falso en memoria + pgvector), `scripts/cargar_manual.py`, variables
-  nuevas en `.env.example` y tests. Informe: `progress/impl_rag_ingesta_busqueda.md`.
-- **Resultado:** `./init.sh` verde, 498 tests pasan.
-- **Pendiente humano:** revisar el spec auto-aprobado; calibrar umbral 0.75 y modelo de embeddings con un manual real.
-
-## 2026-10-30 — Feature #6 no_inventar (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec revisado (`progress/specreview_no_inventar.md`) →
-  `in_progress` con `auto_approved: true` → implementer → review APPROVED
-  (`progress/review_no_inventar.md`).
-- **Cambios:** barrera anti-alucinaciones en el orquestador: salida JSON del LLM
-  `{answer, citations}`, validación de citas (chunk_id, quote literal) y números,
-  rechazo fijo `NO_ANSWER_REPLY` con evento `invalid_answer`, tests de seguridad.
-  Informe: `progress/impl_no_inventar.md`.
-- **Resultado:** `./init.sh` verde, 527 tests pasan.
-- **Pendiente humano:** revisar el spec auto-aprobado.
-
-## 2026-10-30 — Feature #8 evaluacion (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec revisado (`progress/specreview_evaluacion.md`) →
-  `in_progress` con `auto_approved: true` → implementer → review APPROVED
-  (`progress/review_evaluacion.md`).
-- **Cambios:** `eval/` con `preguntas.json` (>=15 preguntas), manual de ejemplo,
-  `scoring.py`, `run_eval.py` (informe `eval/resultados_<fecha>.md`), tests y
-  `EVAL_SINK_PORT` en `.env.example`. Informe: `progress/impl_evaluacion.md`.
-- **Resultado:** `./init.sh` verde, 565 tests pasan.
-- **Pendiente humano:** revisar el spec auto-aprobado.
-
-## 2026-10-30 — Feature #9 contrato_asignar_caso (done)
-- **Agente:** leader (modo supervisado) + spec_author, reviewer, implementer.
-- **Modo:** supervisado (spec aprobado por el humano)
-- **Flujo:** spec (`specs/contrato_asignar_caso/`) revisado
-  (`progress/specreview_contrato_asignar_caso.md`) → aprobación humana **sin R13**
-  (el humano retiró R13: no se toca la fila 404 existente de Reglas comunes) →
-  `in_progress` → implementer → review APPROVED
-  (`progress/review_contrato_asignar_caso.md`).
-- **Cambios:** ruta aditiva `POST /cases/{id}/assign` en `contracts/CONTRATOS.md`
-  (con supuesto S11), modelos `CaseAssignRequest` y `CaseAssignResponse` en
-  `lazaro_contracts/cases.py` exportados en `__init__.py`, ejemplos
-  `case_assign_request.json` y `case_assign_response.json`, y tests de contrato.
-  Informe: `progress/impl_contrato_asignar_caso.md`.
-- **Resultado:** `./init.sh` verde, 598 tests pasan.
-- **Siguiente:** desbloquea la #7 `traspaso_asesor`.
-
-## 2026-10-31 — Feature #7 traspaso_asesor (done)
-- **Agente:** leader + spec_author, reviewer, implementer.
-- **Modo:** spec auto-aprobado en nocturno; bloqueada allí
-  (`progress/blocked_traspaso_asesor.md`) y retomada en supervisado.
-- **Flujo:** dependía de la #9 `contrato_asignar_caso` (ruta
-  `POST /cases/{id}/assign`); con la #9 cerrada → implementer → review APPROVED
-  (`progress/review_traspaso_asesor.md`). El humano confirmó los supuestos
-  R10 y R11.
-- **Cambios:** servicio handover con `POST /handover` (crea/reutiliza caso, avisa
-  a `ADVISOR_CHAT_IDS`, registra avisos, `no_advisors`), `POST /cases/{id}/assign`,
-  `POST /cases/{id}/close`, `POST /cases/check-timeouts` con reloj inyectado,
-  adaptadores gateway y repositorio con versiones falsas; en el orquestador
-  `POST /cases/{id}/reply` y `NO_ADVISORS_REPLY`; tests de seguridad.
-  Spec: `specs/traspaso_asesor/`. Informe: `progress/impl_traspaso_asesor.md`.
-- **Resultado:** `./init.sh` verde, 674 tests pasan.
-
-## 2026-10-31 — Claude coordina y OpenCode/DeepSeek escribe
-- **Agente:** Claude + OpenCode/DeepSeek.
-- **Cambios:** OpenCode configurado con proveedor DeepSeek y un agente
-  `implementer` con permisos acotados; `scripts/run_opencode_writer.sh` valida
-  que la feature esté `in_progress` y delega escritura. Claude conserva SDD,
-  revisión y ejecución de `./init.sh` en modo supervisado y nocturno.
-  Documentación actualizada en `AGENTS.md`, `CLAUDE.md` y `README.md`.
-- **Verificación:** `./init.sh` verde (674 tests); `opencode debug agent`
-  confirma el modelo DeepSeek y que Bash y la edición de `feature_list.json`
-  están denegados al writer; sintaxis de scripts verificada.
-- **Pendiente:** conectar la credencial DeepSeek en OpenCode. La lista local de
-  credenciales aún solo muestra Anthropic; no se ejecutó una llamada real al
-  modelo. Las features #10–#16 continúan `blocked` y el puente se niega a
-  escribirlas hasta que una esté aprobada y pase a `in_progress`.
-
-## 2026-10-31 — Feature #13 contrato_autorizacion_asesores (done)
-- **Agente:** leader (modo supervisado) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek Flash como writer.
-- **Modo:** supervisado (spec aprobado por el humano).
-- **Flujo:** spec (`specs/contrato_autorizacion_asesores/`) revisado
-  (`progress/specreview_contrato_autorizacion_asesores.md`) → decisiones del
-  humano → `in_progress` → OpenCode T1–T53 → review APPROVED
-  (`progress/review_contrato_autorizacion_asesores.md`).
-- **Decisiones del humano (2026-10-31):** C1 precedencia 403 → 404 → 409 → 403
-  (otro asesor); C2 `close` sobre `closed` mantiene S8 (200 sin cambios);
-  C3 fallo cerrado con la fila `502 upstream_error` ya publicada de reply;
-  C5 reply sobre `closed` → `409 case_closed` sin enviar nada (descarta
-  `403 forbidden`); C6 el orquestador autoriza antes de comprobar el caso;
-  (d) `assign` de un caso `assigned` por otro asesor → 403; D4 de la #16
-  opción (a): la línea `Llama` de `authorize` nombra `/cerrar`.
-- **Excepciones a «no editar lo publicado»:** E1, la «Dónde» de la fila común
-  `409 | case_closed` añade `/cases/{id}/reply` (C5); E2, la fila S11 cambia
-  para que otro asesor reciba 403 (d). S12 documenta ambos cambios.
-- **Cambios:** ruta `POST /cases/{id}/authorize` en `contracts/CONTRATOS.md`,
-  filas `403 forbidden` (común, reply, close, assign), fila `409 case_closed`
-  en reply, supuesto S12; modelos de autorización en `lazaro_contracts/cases.py`
-  exportados en `__init__.py`; ejemplos `case_authorize_request.json` y
-  `case_authorize_response.json`; tests de contrato. Informe:
-  `progress/impl_contrato_autorizacion_asesores.md`.
-- **Resultado:** `./init.sh` verde, 742 tests pasan (antes 674; 374 en
-  `contracts`). R1–R53 cubiertos.
-- **Pendiente:** C5 deja desalineados los specs de la #14 (D5, D7) y la #16
-  (R14, Rec. 2, D6); ver design §9 de la #13.
-
-## 2026-10-31 — Feature #10 validacion_config_asesores (done)
-- **Agente:** leader (modo supervisado) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek Flash como writer.
-- **Modo:** supervisado (spec aprobado por el humano).
-- **Flujo:** spec (`specs/validacion_config_asesores/`) revisado
-  (`progress/specreview_validacion_config_asesores.md`) → decisiones del humano
-  → `in_progress` → OpenCode T1–T22 → review APPROVED
-  (`progress/review_validacion_config_asesores.md`).
-- **Decisiones del humano (2026-10-31):** S1 la posición se cuenta desde 1 sobre
-  todos los trozos, incluidos los vacíos; S2 solo `-?[0-9]+` es entero (se
-  rechazan `+5`, `1_000`, `1.0`, `1e3`, dígitos no ASCII); S3 duplicado por
-  valor entero (`7` = `007`); S4 el mensaje de duplicado da las posiciones sin
-  el id; S5 `hide_input_in_errors=True` en `Settings`; S6 `advisors_configured`
-  a INFO y `no_advisors_configured` a WARNING; S7 solo se informa del primer
-  error. Ids negativos siguen válidos.
-- **Cambio sobre la #7:** R23 modificada (autorizado por el humano): las
-  entradas vacías se siguen descartando, pero una no numérica o un id repetido
-  hacen fallar `Settings()` y handover no arranca. Nota añadida en
-  `specs/traspaso_asesor/requirements.md` §R23; el test
-  `test_advisor_ids_discards_blank_and_non_numeric` se ajustó sin quitar
-  aserciones.
-- **Cambios:** `services/handover/handover/config.py` (validación de
-  `ADVISOR_CHAT_IDS`), `handover/main.py` (log de arranque con el número de
-  asesores, sin ids), `tests/test_config.py` y `tests/test_startup.py`.
-  Informe: `progress/impl_validacion_config_asesores.md`.
-- **Writer verificado:** `deepseek/deepseek-flash` (OpenCode 1.19.0; solo ese
-  proveedor y modelo en la sesión).
-- **Resultado:** `./init.sh` verde, 766 tests pasan (antes 742; +24).
-
-## 2026-10-31 — Feature #17 contrato_cierre_casos_huerfanos (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek Flash como writer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec (`specs/contrato_cierre_casos_huerfanos/`) revisado
-  (`progress/specreview_contrato_cierre_casos_huerfanos.md`) → `in_progress` con
-  `auto_approved: true` → OpenCode T2–T13 (T1, T14–T17 el puente) → review
-  APPROVED (`progress/review_contrato_cierre_casos_huerfanos.md`).
-- **Cambios:** única línea publicada editada: la fila S12 de
-  `contracts/CONTRATOS.md` (excepción cerrada H1, solo tres inserciones, nada
-  borrado). Define caso huérfano (`assigned` cuyo `advisor_id` es nulo o ya no
-  está en `ADVISOR_CHAT_IDS`): lo cierra cualquier asesor registrado (`close` y
-  `authorize(close)` → `200 allowed=true`, sin reasignar), pero `reply`,
-  `authorize(reply)` y `assign` siguen dando `403 forbidden`; el cuarto escalón
-  de la precedencia no aplica a `close`/`authorize(close)` sobre un huérfano;
-  procedimiento de retirada (el asesor cierra sus casos antes; handover
-  registrará al arrancar cuántos huérfanos hay, sin ids, lo implementa la #14).
-  11 tests nuevos al final de `contracts/tests/test_contratos_doc.py`, sin borrar
-  ni debilitar ninguno. Informe: `progress/impl_contrato_cierre_casos_huerfanos.md`.
-- **Regla del `advisor_id` nulo:** decidida por el humano (2026-10-31): un
-  `assigned` con `advisor_id` nulo es huérfano (R1).
-- **Dudas abiertas (design §7):** reenvío de mensajes del cliente a un asesor
-  retirado (Ley 1581, S13/#15); momento en que un asesor deja de estar en la
-  lista (tras reiniciar handover); `closed_by` al cerrar un huérfano (lo
-  confirma la #14); detalles del recuento al arrancar (#14); aviso al cliente o
-  al asesor que cierra (A12 de la #16); caso `assigned` de un asesor activo que
-  nunca lo cierra (opción F).
-- **Writer verificado:** `deepseek/deepseek-flash` (`opencode export` de la
-  sesión: solo ese proveedor y modelo).
-- **Resultado:** `./init.sh` verde, 777 tests pasan (antes 766; +11; 385 en
-  `contracts`). R1–R15 cubiertos.
-- **Pendiente humano:** revisar el spec auto-aprobado y las dudas de design §7.
-
-## 2026-11-01 — Feature #14 autorizacion_asesores (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek Flash como writer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec (`specs/autorizacion_asesores/`) revisado
-  (`progress/specreview_autorizacion_asesores.md`) → `in_progress` con
-  `auto_approved: true` → OpenCode → review APPROVED
-  (`progress/review_autorizacion_asesores.md`).
-- **Cambios:** handover implementa `POST /cases/{id}/authorize` y aplica las
-  reglas de S12 a `assign` y `close` (`403 forbidden` sin modificar el caso,
-  denegación registrada); el orquestador pide autorización antes de enviar
-  `reply` (`403` sin envío + `advisor_forbidden`; handover caído → `502`).
-  Informe: `progress/impl_autorizacion_asesores.md`.
-- **Decisiones aplicadas:** solo `ADVISOR_CHAT_IDS`; C5 (`409 case_closed`
-  sin evento); assign/close condicionales; `threading.Lock` en
-  `PostgresCaseRepository`; huérfanos se cierran pero no se responden ni
-  asignan; recuento de huérfanos en el `lifespan`.
-- **Pendiente:** T7b (`test_timeout_races.py`) se aplica al implementar la #12.
-- **Writer verificado:** `deepseek/deepseek-flash` (`opencode export` de la
-  sesión `ses_e6a8ab727ffes1iFGtW33EjFUR`: ningún otro modelo).
-- **Resultado:** `./init.sh` verde, 887 tests pasan (antes 777; +110).
-
-## 2026-11-01 — Feature #11 registro_solicitudes_traspaso (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek como writer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec (`specs/registro_solicitudes_traspaso/`) revisado →
-  `in_progress` con `auto_approved: true` → OpenCode sin ciclos de corrección
-  → review APPROVED (`progress/review_registro_solicitudes_traspaso.md`).
-- **Cambios:** handover guarda un registro por cada `POST /handover` (nuevo,
-  reutilización, `no_advisors`, avisos fallidos y `error`) con repositorio
-  falso y Postgres (SQL parametrizado, `CREATE TABLE IF NOT EXISTS`); sin
-  copia de textos de mensajes. Solo `services/handover/`; contratos y
-  orquestador sin cambios. Informe: `progress/impl_registro_solicitudes_traspaso.md`.
-- **Resultado:** `./init.sh` verde, 912 tests pasan (antes 887; +25). R1–R21 cubiertos.
-- **Pendiente humano:** revisar el spec auto-aprobado y los supuestos S1–S4,
-  S6 y Retención del design marcados «REVISAR»; abrir una feature de
-  retención y borrado de registros antes de producción.
-
-## 2026-11-01 — Feature #12 vencimiento_automatico (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek como writer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec (`specs/vencimiento_automatico/`) auto-aprobado en la quinta
-  vuelta (`progress/specreview_vencimiento_automatico.md`) → `in_progress` con
-  `auto_approved: true` → OpenCode → review APPROVED
-  (`progress/review_vencimiento_automatico.md`).
-- **Cambios:** `scripts/vencer_casos.py` (llamada única o bucle con
-  `--intervalo`, sin registrar `SERVICE_TOKEN`); servicio `timeouts_worker` en
-  `docker-compose.yml` sin puertos; variables `CHECK_TIMEOUTS_INTERVAL_SECONDS`
-  y `CHECK_TIMEOUTS_HTTP_TIMEOUT_SECONDS` en `.env.example`; en handover,
-  reclamación condicional del vencimiento (`timeout_claimed_at`, `ALTER TABLE
-  ... ADD COLUMN IF NOT EXISTS`), `UPDATE` condicionales para `timed_out` y
-  reutilización, sin dobles envíos de `HANDOVER_TIMEOUT_REPLY`. Informe:
-  `progress/impl_vencimiento_automatico.md`.
-- **T7b de la #14:** aplicada (`test_timeout_races.py` usa la firma con
-  `env.settings`); marcada `[x]` en `specs/autorizacion_asesores/tasks.md`.
-- **Resultado:** `./init.sh` verde, 965 tests pasan (antes 912; +53). R1–R30 cubiertos.
-- **Pendiente humano:** revisar el spec auto-aprobado; decidir D3
-  (`CHECK_TIMEOUTS_HTTP_TIMEOUT_SECONDS=120`), D4 (caducidad de la reclamación
-  = `HANDOVER_TIMEOUT_SECONDS`), D5 (`restart: unless-stopped`, sin reintento
-  rápido) y D6: despliegue en Render sigue PENDIENTE (Cron Job, worker o
-  GitHub Actions `schedule`; no se desplegó nada). Observaciones no
-  bloqueantes del review: `_parse_positive` acepta `nan`/`inf`; otra excepción
-  del gateway distinta de `ServiceUnavailable` deja la reclamación hasta que
-  caduque.
-
-## 2026-11-01 — Feature #15 contrato_conversacion_caso (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer
-  (puente) con OpenCode/DeepSeek como writer.
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec (`specs/contrato_conversacion_caso/`) auto-aprobado →
-  `in_progress` con `auto_approved: true` → OpenCode → review APPROVED
-  (`progress/review_contrato_conversacion_caso.md`).
-- **Cambios:** solo `contracts/`. `CaseClientMessageRequest` y
-  `CaseClientMessageResponse` (`status: forwarded | not_assigned`) en
-  `lazaro_contracts/cases.py`, exportados en `__all__`; 3 ejemplos JSON
-  nuevos; sección `### POST /cases/{id}/client-message` en `CONTRATOS.md`
-  (expone `handover`, llama `orchestrator`; errores 401/422/404/502/500);
-  línea `- **Llama:**` de `POST /cases/{id}/close` ampliada con
-  `orchestrator`; supuesto `S13`. `POST /messages` y `## Reglas comunes`
-  intactos. Informe: `progress/impl_contrato_conversacion_caso.md`.
-- **Resultado:** `./init.sh` verde, 1014 tests pasan; `contracts` 434
-  (antes 385; +49). R1–R39 cubiertos.
-- **Pendiente humano:** revisar el spec auto-aprobado; la #16 sigue
-  bloqueada hasta alinear su spec con C5 de la #13.
-
-## 2026-11-01 — Feature #18 candado_repositorio_orquestador (done)
-- **Agente:** leader (modo nocturno) + spec_author, reviewer, implementer (puente a OpenCode/DeepSeek).
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- **Flujo:** spec SPEC_APPROVED (`progress/specreview_candado_repositorio_orquestador.md`) →
-  `in_progress` con `auto_approved: true` → primer intento bloqueado (OpenCode colgado al
-  arrancar, probable `opencode.exe` huérfano) → relanzado, OpenCode completó T1–T5 →
-  review APPROVED (`progress/review_candado_repositorio_orquestador.md`); T6 marcada al cerrar.
-- **Cambios:** `services/orchestrator/orchestrator/adapters/repository.py` (`import threading`,
-  `self._lock`, `with self._lock:` en `_run`; SQL, firmas y `_SCHEMA` sin tocar) y nuevo
-  `services/orchestrator/tests/test_repository_lock.py`. Informe:
-  `progress/impl_candado_repositorio_orquestador.md`. Se eliminó
-  `progress/blocked_candado_repositorio_orquestador.md` (bloqueo resuelto).
-- **Resultado:** `./init.sh` verde, 1017 tests pasan. R1–R7 cubiertos; ningún test eliminado
-  ni debilitado.
-- **Pendiente humano:** revisar el spec auto-aprobado; la #16 sigue bloqueada hasta alinear
-  su spec con C5 (ya no depende de la #18).
-
-## 2026-11-01 — Feature #16 conversacion_cliente_asesor (done)
-- Implementación completada por OpenCode/DeepSeek Flash; tests T0 y T69 verificados con `./init.sh`.
-- Reviewer: APPROVED (`progress/review_conversacion_cliente_asesor.md`).
-- Resultado: 1185 tests pasan; feature #16 marcada `done`.
-
-## 2026-11-01 — Feature #19 edicion_fragmentos (done)
-- API `PATCH /chunks/{id}` para editar texto con embedding recalculado y metadatos preservados.
-- Writer: OpenCode / DeepSeek Flash. Reviewer: APPROVED (`progress/review_edicion_fragmentos.md`).
-- `./init.sh`: 1232 tests pasan. Spec aprobado automáticamente en modo nocturno; pendiente de revisión humana.
-
-## 2026-11-01 — Feature #20 verificacion_cuentas (done)
-- Perfiles internos con roles, contraseñas PBKDF2 y vínculo Telegram por token aleatorio de un solo uso y expiración.
-- Writer: OpenCode / DeepSeek Flash. Reviewer: APPROVED (`progress/review_verificacion_cuentas.md`).
-- `./init.sh`: 1268 tests pasan. Spec auto-aprobado en modo nocturno; pendiente de revisión humana.
-
-
-## 2026-11-01 — Feature #21 panel_administracion (done)
-- Panel administrativo del orquestador con login de administrador, sesiones/CSRF, alta y gestión de perfiles, enlaces de vinculación Telegram, eventos recientes redactados y limitación persistente de intentos.
-- Writer: OpenCode / DeepSeek Flash. Reviewer: APPROVED (`progress/review_panel_administracion.md`).
-- Revisión corrigió el tiempo del login para que usuario inexistente, contraseña incorrecta y rol no administrador hagan un PBKDF2; prueba nueva lo verifica.
-- `./init.sh`: 1310 tests pasan. Docker: orquestador reconstruido; servicios del proyecto levantados y PostgreSQL healthy.
-
-
-## 2026-11-01 — Feature #22 panel_fragmentos (done)
-- El panel permite cargar manuales, listar sus fragmentos, editar texto y activar/desactivar fragmentos. Se añadieron 3 rutas al contrato del RAG y modelos/ejemplos.
-- Writer: OpenCode / DeepSeek Flash. Reviewer: APPROVED (`progress/review_panel_fragmentos.md`).
-- `./init.sh`: 1398 tests pasan. Docker reconstruido para RAG y orquestador; los cuatro `/health` y `/admin/login` responden HTTP 200; PostgreSQL healthy.
-
-
-## 2026-11-01 — Feature #23 bootstrap_administrador (done)
-- Comando local `python -m orchestrator.bootstrap_admin --username <nombre>` crea el primer admin con contraseña oculta, PBKDF2 y sin endpoint público ni credenciales por defecto.
-- Claude reviewer: APPROVED (`progress/review_bootstrap_administrador.md`). `./init.sh`: 1416 tests pasan.
-
-## 2026-11-01 — Feature #24 despliegue_produccion (done)
-- Preparación Render: Blueprint, secretos/configuración de producción, webhook Telegram, build Docker en CI y procedimiento de despliegue; no se crearon recursos ni se desplegó.
-- Writer: OpenCode / DeepSeek Flash; Claude revisó y aprobó (`progress/review_despliegue_produccion.md`).
-- `./init.sh`: 1561 tests pasan. Se corrigió validación de Settings snake_case y los tests de variables ausentes.
-
-## 2026-11-01 — Feature #25 clasificador_consultas (done)
-- Panel para categorías/keywords y umbral; clasificador local determinista registra puntuación/confianza y deja intactos RAG, respuestas y permisos.
-- Spec redactado por Claude; revisión enfocada Codex `SPEC_APPROVED`; código writer OpenCode/DeepSeek Flash; revisión Codex `APPROVED` (`progress/review_clasificador_consultas.md`).
-- `./init.sh`: 1658 tests pasan.
-
-## 2026-11-01 — Feature #26 consulta_bd_lenguaje_natural (done)
-- `/consultar` solo en chat privado para asesor con perfil Telegram vinculado; SQL restringido a vistas/columnas allowlisted y conexión PostgreSQL read-only con timeout, límite de filas y rollback. Auditoría guarda hash, estado, vistas y conteo.
-- `DB_QUERY_ENABLED=false` por defecto. Habilitarla requiere que el dueño acepte compartir el esquema estático permitido con el proveedor, configure vistas y DSN de rol read-only.
-- Spec y revisiones de seguridad: Claude APPROVED (`progress/specreview_consulta_bd_lenguaje_natural.md`, `progress/review_consulta_bd_lenguaje_natural.md`). Writer OpenCode/DeepSeek Flash.
-- `./init.sh`: 1777 tests pasan; hardening final de cierre de conexión y parser ASCII revisado por Claude.
-
-
-## 2026-11-01 — Feature #27 privacidad_y_retencion_datos (done)
-- Consentimiento explícito antes de procesar mensajes de cliente; purga transaccional de casos y contactos por retención, con worker periódico en Docker Compose.
-- Writer: OpenCode / DeepSeek Flash; revisión de código Claude APPROVED (`progress/review_privacidad_y_retencion_datos.md`). `./init.sh`: 1854 tests pasan (1 warning de Starlette/httpx).
-- La producción sigue requiriendo valores definidos por el dueño para el aviso, versión, frase de aceptación y plazos. La revisión detectó que falta integrar el worker y las variables en Render; seguimiento #28.
-
-
-## 2026-11-01 — Feature #28 despliegue_retencion (done)
-- Añadido `retention-worker` privado en Render, configuración `PRIVACY_*` con fuente única del plazo, y documentación de despliegue/bloqueos del dueño.
-- Spec y revisión de código Claude APPROVED (`progress/specreview_despliegue_retencion.md`, `progress/review_despliegue_retencion.md`); writer OpenCode / DeepSeek Flash. `./init.sh`: 1877 tests pasan (1 warning).
-- No se desplegó; queda validar `envVarKey` al crear el Blueprint y completar los valores legales/operativos del dueño antes de producción.
-
-
-## 2026-11-01 — Feature #33 contrato_listar_casos_asesor (done)
-- Añadido GET /cases en handover con contrato tipado; el listado reutiliza can_act_on_case, filtra por advisor_id y expone solo case_id/status/created_at/actions.
-- Spec y revisión de código Claude APPROVED (progress/specreview_contrato_listar_casos_asesor.md, progress/review_contrato_listar_casos_asesor.md). ./init.sh: 1924 tests pasan (1 warning).
-
-
-## 2026-11-01 — Feature #29 panel_asesores (done)
-- Añadido panel con login separado por rol, vista de casos permitidos, responder/asignar/cerrar mediante autorización de handover y protección CSRF; no expone datos del cliente.
-- Spec y revisión de código Claude APPROVED (progress/specreview_panel_asesores.md, progress/review_panel_asesores.md). Writer OpenCode/DeepSeek Flash. ./init.sh: 1979 tests pasan (1 warning).
-
-
-## 2026-11-02 — Feature #30 agrupacion_mensajes (done)
-- El telegram-gateway agrupa mensajes consecutivos por chat en Redis con ventana/max wait configurables; comandos y frase de aceptación se envían individualmente. Se añadieron leases, reintentos, TTL y worker de ciclo de vida.
-- Claude reviewer aprobó en segunda revisión tras corregir el parseo de `claim_due` y añadir cobertura stub para payloads Lua, ack y release.
-- Writer OpenCode/DeepSeek Flash. `./init.sh`: 2041 passed, 1 skipped.
-
-
-## 2026-11-02 — Feature #31 busqueda_hibrida_rag (done)
-- Añadida búsqueda híbrida Postgres full-text español + pgvector, fusión RRF y umbral/score semánticos originales. `POST /search` y el modo legado se mantienen.
-- Comparador de evaluación para dos endpoints; modo híbrido queda apagado hasta ejecutar evaluación con mismo corpus.
-- Claude reviewer APPROVED; `./init.sh`: 2063 passed, 1 skipped. Writer OpenCode/DeepSeek Flash.
-
-
-## 2026-11-02 — Feature #32 traspaso_automatico_fallos (done)
-- El orquestador ahora cuenta fallos RAG configurables, reinicia la racha con respuesta válida y deriva una sola vez al umbral. La racha es persistente/idempotente por contacto y update; fallos transitorios reintentan y `/handover` reutiliza caso activo.
-- Claude reviewer APPROVED. OpenCode/DeepSeek Flash. `./init.sh`: 2088 passed, 1 skipped.
-- Seguimientos: añadir purga de outcomes/streaks de retención, cubrir excepciones inesperadas al enlazar caso y coordinar si se opera con varias instancias.
-
-
-## 2026-11-02 — Feature #34 robustez_estado_traspaso_automatico (done)
-- La purga de privacidad ahora elimina outcomes vencidos y estado de rachas de contactos purgados, dentro de la transacción y con conteos auditados. Excepciones durante handover automático dejan la racha reintentable.
-- Claude reviewer APPROVED; OpenCode/DeepSeek Flash. Suite final con Redis real temporal: 2093 passed, 0 skipped, 1 warning deprecado Starlette/httpx.
-
-
-## 2026-11-03 — Feature #35 consentimiento_antes_de_datos (done)
-- El orquestador ya no persiste datos de la persona (contacts, messages, events, db_query_audit, case_links, auto_handover_*, telegram_user_id en profiles) antes del consentimiento vigente; la única escritura previa es `privacy_consents`. El personal vinculado (asesor/admin) conserva `/consultar`, `/responder`, `/cerrar` y `/start` sin compuerta; `/start <token>` de cliente no consume el token hasta aceptar.
-- Archivos principales: `services/orchestrator/orchestrator/domain.py` (`_is_linked_staff`, `process_message` reordenado: lecturas → compuerta → escrituras), `services/orchestrator/orchestrator/adapters/repository.py` (`get_link_token_role` de solo lectura), `docs/proyecto.md` §11 (tratamiento técnico mínimo: Redis dedup, búfer, `processed_updates`), R19 de `specs/privacidad_y_retencion_datos/requirements.md` marcado como reemplazado.
-- Tests: nuevo `services/orchestrator/tests/test_consent_before_data.py`; ajustes en `test_accounts.py`, `test_privacy.py`, `test_security.py` (nuevo `test_security_unconsented_client_responder_reaches_no_other_client`) y fixture autouse en `conftest.py` que aísla `Settings` del entorno del shell. `./init.sh`: 2143 passed, 1 skipped.
-- Revisión: spec y código Claude reviewer APPROVED (`progress/specreview_consentimiento_antes_de_datos.md`, `progress/review_consentimiento_antes_de_datos.md`). Writer OpenCode/DeepSeek: la primera ejecución terminó sin hacer cambios; una ejecución concurrente sí escribió el código. Un intento de corrección por 3 fallos de `init.sh` (2 por fuga de entorno en tests, 1 expectativa cambiada a propósito por R10/R11/R18).
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-## 2026-11-03 — Feature #36 nucleo_multicanal (done)
-- Mensaje y respuesta normalizados, compatibilidad Telegram legacy, `FakeWhatsAppAdapter`, bloques abstractos y reglas de ventana/plantillas. Deduplicación compuesta preserva las claves legacy.
-- Identidad y consentimiento prelogin aislados por `(channel, external_user_id)`; backfill idempotente de contactos/consentimientos Telegram conserva IDs, mensajes, relaciones y evidencia. La compuerta preconsentimiento evita persistir contactos/datos y nuevas claves de dedup; solo Telegram legacy conserva `processed_updates(update_id)` según #35.
-- Writer OpenCode/DeepSeek; spec y revisión final aprobados. T1–T14 completas; trazabilidad en `progress/impl_nucleo_multicanal.md`.
-- `./init.sh`: 2243 passed, 1 skipped, 1 warning de deprecación Starlette/httpx.
-- La integración real de WhatsApp queda para #43; login y vínculo de identidad entre canales para #38.
-
-
-## 2026-11-03 — Feature #37 estados_y_consentimiento (done)
-- Implementada la máquina de estados de conversación, consentimiento versionado mediante botones, rechazo/cierre/reinicio, textos dinámicos desde el panel y respuestas fuera del LLM para estados no activos.
-- Telegram presenta botones inline y normaliza `callback_query`. La prueba HMAC se vincula a canal, usuario, chat, botón y aviso; un nonce aleatorio por presentación se consume de forma atómica en memoria. Clics viejos, repetidos, manipulados o de otro chat no registran decisión ni borran contenido.
-- El panel admin edita texto y versión legal en `app_settings`; si faltan textos requeridos, el orquestador falla cerrado. La evidencia de consentimiento conserva versión, hash, resultado, mensaje/botón y fecha; rechazar borra el contenido personal asociado.
-- Requisitos R1–R40 trazados en `progress/impl_estados_y_consentimiento.md`. Spec aprobado; revisión de código final `APPROVED` en `progress/review_estados_y_consentimiento.md`.
-- `./init.sh`: 2298 passed, 1 skipped, 2 warnings (deprecación Starlette/httpx y acceso Pydantic a `model_fields`).
-- Writer OpenCode Go / DeepSeek V4.1 Flash. #38 implementará login/credenciales; proveedor real WhatsApp queda en #43.
-
-
-## 2026-11-03 — Feature #38 identidad_credenciales (done)
-- Spec aprobado tras 1 corrección (R25: log de acceso); revisión en `progress/review_spec_identidad_credenciales.md`.
-- Implementación por el writer OpenCode/DeepSeek; 3 fallos de tests corregidos (`progress/fallos_identidad_credenciales.txt`).
-- 1 ciclo de revisión de código: R28, R30 y detección de SQLSTATE 23505 con pg8000; re-revisión `APPROVED` en `progress/review_identidad_credenciales.md`.
-- Trazabilidad e informe en `progress/impl_identidad_credenciales.md`.
-- `./init.sh`: 2405 passed, 1 skipped.
-- Decisión abierta (default seguro): renovar una credencial revocada responde 409; la reactivación queda para #42.
-
-
-## 2026-11-04 — Feature #39 harness_ia_por_estado (done)
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- Matriz explícita estado → herramientas (`orchestrator/harness.py`) aplicada en código antes de ejecutar; máquina de estados extraída a `orchestrator/states.py`. Router LLM opcional con parser estricto y fallback seguro; guardrails de longitud e inyección.
-- Datos propios del cliente vía `PostgresClientDataQuery` (READ ONLY, `cliente_id` de la sesión solo como parámetro, catálogo de vistas, rol sin superuser/BYPASSRLS y sonda RLS; falla cerrado). Las filas nunca vuelven al LLM.
-- Supresión solo crea `suppression_requests` y caso; ninguna herramienta borra datos. Auditoría `tool_calls` con hashes (sin texto/SQL/filas), purgada por retención. Escalamiento por solicitud, fallo repetido y frustración configurable; RAG conserva validación de fuentes y citas.
-- Writer OpenCode/DeepSeek; 3 intentos de corrección de tests (import `LinkBlock`, `Profile.id`, aserciones sobre el `ScriptedLLM` instalado; evento `escalation:user_request` en re-traspaso). Trazabilidad R1–R63 en `progress/impl_harness_ia_por_estado.md`; revisión `APPROVED` en `progress/review_harness_ia_por_estado.md`.
-- `./init.sh`: 2573 passed, 1 skipped, 2 warnings.
-
-
-## 2026-11-04 — Feature #40 memoria_por_cliente (done)
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- Nuevo `orchestrator/memory.py` (puro): ventana de sesión, filtro de datos sensibles, depuración de resumen/memoria, prompt del resumidor y parser estricto. Resumen al cerrar sesión y al escalar; contexto `<memoria>`/`<historial>` solo para el RAG del cliente autenticado (router y SQL no la reciben).
-- Repositorio: tablas `client_memory` y `conversation_summaries`, `profile_id` en `case_links`, columnas de ejecución en `suppression_requests` (`removed_counts`). La purga por retención borra resúmenes, nunca memoria permanente; `execute_suppression` (roles `SUPPRESSION_EXECUTOR_ROLES`) borra solo lo del cliente solicitado, de forma atómica.
-- Panel asesor: `GET /asesor/cases/{case_id}/memoria` con autorización por caso antes de leer, plantilla escapada y enlace desde la lista de casos.
-- Config `MEMORY_*` validada al arrancar; `MEMORY_ENABLED=false` por defecto (prompt RAG idéntico byte a byte). `.env.example`, `render.yaml` y `docs/architecture.md` actualizados.
-- Writer OpenCode/DeepSeek; 1 intento de corrección (aserción del test R9 sobre `</historial>`; columna renombrada `deleted_counts` → `removed_counts` para no romper la prueba de migraciones de #37). Trazabilidad R1–R56 en `progress/impl_memoria_por_cliente.md`; revisión `APPROVED` en `progress/review_memoria_por_cliente.md`.
-- `./init.sh`: 2663 passed, 1 skipped, 0 failed.
-
-
-## 2026-11-04 — Feature #41 panel_asesores_multicanal (done)
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- Panel de asesores multicanal: bandeja con conversaciones Telegram/WhatsApp (canal, estado, espera, asignación, ventana WhatsApp), filtros validados y refresco configurable, respetando roles y autorización por caso.
-- Respuesta por el adaptador del canal con control de ventana/plantilla WhatsApp (409 si la ventana está cerrada; plantillas validadas), transferencia, resolución y devolución de casos; historial, resumen, datos permitidos y memoria; auditoría de acciones sin exponer otros clientes; cola de supresión con prioridad y fecha límite.
-- Writer OpenCode/DeepSeek; 4 correcciones de tests (la última: ventana WhatsApp de la bandeja calculada con `last_user_message_at`). Spec revisado en `progress/specreview_panel_asesores_multicanal.md`; trazabilidad R1–R74 en `progress/impl_panel_asesores_multicanal.md`; revisión `APPROVED` en `progress/review_panel_asesores_multicanal.md`.
-- `./init.sh`: 2789 passed, 1 skipped.
-
-
-## 2026-11-04 — Feature #42 administracion_y_avisos (done)
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- Panel administrativo ampliado: clientes y credenciales (crear, renovar por periodo configurado, revocar, cerrar sesión; días restantes calculados desde fechas), textos fijos/legales versionados con historial, plantillas con flujo de aprobación, horarios de atención y parámetros operativos en `app_settings` efectivos sin redeploy; auditoría de acciones sin contraseñas ni valores.
-- Avisos de vencimiento: endpoint protegido por token de servicio con reclamo atómico (un solo aviso por periodo, filas `sending` huérfanas visibles y no reintentadas), plantilla aprobada si la ventana WhatsApp está cerrada, reintentos hasta el máximo; worker `avisar_vencimientos` en `render.yaml`.
-- Métricas: tiempo de primera respuesta (media/mediana), conversaciones por asesor, motivos de escalamiento y preguntas sin respuesta (muestras truncadas y escapadas).
-- Writer OpenCode/DeepSeek; terminó en un solo intento, sin correcciones. Observaciones del spec review atendidas (partes dobles de R42/R47/R48/R53/R69 con test propio, R22, S2). Spec revisado en `progress/specreview_administracion_y_avisos.md`; trazabilidad R1–R74 en `progress/impl_administracion_y_avisos.md`; revisión `APPROVED` en `progress/review_administracion_y_avisos.md`.
-- `./init.sh`: 2951 passed, 1 skipped, 2 warnings.
-
-
-## 2026-11-04 — Feature #43 proveedor_whatsapp_real (done)
-- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
-- Adaptador de producción de WhatsApp Cloud API (Meta) en `telegram_gateway`, detrás de la interfaz de #36: desactivado por defecto (sin adaptador, webhook 404), secretos por entorno validados al arrancar y fuera de `repr`/logs.
-- Webhook: suscripción GET con verify token; POST con firma HMAC sobre bytes crudos (401 si inválida), sin token de servicio; normaliza texto, respuestas interactivas y botones de plantilla, reenvía tipos no soportados, descarta inválidos sin perder los válidos, deduplica por `wamid` separado de Telegram, registra estados de entrega sin reenviarlos.
-- Envío: ventana de 24 h por último mensaje entrante; texto solo dentro de ventana (422 sin petición fuera), plantillas con variables en orden, opciones como mensajes interactivos, bloques en orden con corte al primer fallo; traducción de errores de Meta (ventana cerrada, plantilla no aprobada, fallo de envío) sin exponer secretos ni cuerpos.
-- Writer OpenCode/DeepSeek. Trazabilidad R1–R62 y tasks T1–T22; revisión `APPROVED` en `progress/review_proveedor_whatsapp_real.md` (observaciones no bloqueantes: ampliar test R55; mantener `OrchestratorError` sin texto de usuario).
-- `./init.sh`: 3031 passed, 1 skipped, 2 warnings.
-
-
-## 2026-11-04 — Feature #44 confirmar_callback_telegram (done)
-- **Modo:** supervisado (spec aprobado por reviewer en `progress/review_spec_confirmar_callback_telegram.md`).
-- Bug corregido: al pulsar un botón inline (p. ej. "Acepto" del consentimiento #37) el indicador quedaba girando porque `telegram_gateway` nunca llamaba a `answerCallbackQuery`.
-- `telegram_gateway`: el webhook confirma el `callback_query` al principio con el id real de Telegram, también si es duplicado o inválido; nunca usa ids sintéticos sacados de `update_id`. Si la confirmación falla, se registra solo el tipo de error, sin secretos, y el botón se deduplica y se reenvía al orquestador igual (200). Hay un timeout nuevo `TELEGRAM_ANSWER_CALLBACK_TIMEOUT_SECONDS` (3 s, debe ser > 0).
-- Writer OpenCode/DeepSeek; tasks T1–T6. Informe en `progress/impl_confirmar_callback_telegram.md`; revisión `APPROVED` en `progress/review_confirmar_callback_telegram.md`, con trazabilidad R1–R8.
-- `./init.sh`: 3048 passed, 1 skipped, 2 warnings.
-
-
-## 2026-11-04 — Feature #45 corregir_foreign_session_windows (done)
-- **Modo:** supervisado (spec aprobado por reviewer en `progress/specreview_corregir_foreign_session_windows.md`).
-- Bug corregido: `GET /asesor/cases/<id>` respondía 500 porque PostgreSQL lanzaba 42P18 en `PostgresRepository.foreign_session_windows` (`(%s IS NULL OR profile_id <> %s)` con `profile_id` None).
-- `orchestrator`: la consulta usa SQL distinto por rama. Sin perfil filtra solo por `contact_id`; con perfil añade `profile_id <> %s`. Nunca envía `None` como parámetro y el mapeo a `session_window` y el repositorio en memoria no cambian.
-- Writer OpenCode/DeepSeek; tasks T1–T5. Tests nuevos en `services/orchestrator/tests/test_foreign_session_windows.py` (Conn/Cursor falsos que emulan 42P18). Informe en `progress/impl_corregir_foreign_session_windows.md`; revisión `APPROVED` en `progress/review_corregir_foreign_session_windows.md`, con trazabilidad R1–R6.
-- `./init.sh`: 3052 passed, 1 skipped, 2 warnings.
-
-## 2026-11-04 — Feature #46 consentimiento_texto_telegram (done)
-- **Modo:** supervisado; spec aprobado en `progress/specreview_consentimiento_texto_telegram.md` y código `APPROVED` en `progress/review_consentimiento_texto_telegram.md`.
-- Telegram presenta el aviso sin botones inline; acepta con `ACEPTO` y rechaza con `NO ACEPTO` (configurables), con desafío ligado a versión/hash/chat y evidencia de consentimiento por texto. Los botones antiguos de Telegram no registran consentimiento. WhatsApp mantiene los botones.
-- El rechazo guarda solo la decisión mínima de privacidad; la compuerta sigue antes de persistir otros datos personales, conforme a #35. El gateway entrega inmediatamente la frase de rechazo.
-- Writer OpenCode/DeepSeek; tasks T1–T24. Trazabilidad R1–R32 en `progress/impl_consentimiento_texto_telegram.md`.
-- `./init.sh`: 3098 passed, 1 skipped, 0 failed. Reviewer volvió a ejecutar la suite y aprobó.
-
-## 2026-11-11 — Feature #47 healthcheck_dependencias (done)
-- Writer OpenCode con `opencode-go/deepseek-v4.1-flash`. Añadió probes de Redis/PostgreSQL con timeout, respuestas `200/503` seguras para los cuatro servicios y healthchecks de Compose.
-- Revisión de código aprobada en `progress/review_healthcheck_dependencias.md`; ajuste de consistencia de `HealthResponse` incorporado tras la primera revisión.
-- `./init.sh`: 3155 passed, 1 skipped, 2 warnings de deprecación, 0 fallos. Trazabilidad R1–R9 en `progress/impl_healthcheck_dependencias.md`.
-
-## 2026-11-11 — Registro de features #48–#55 (pending)
-- Revisión de brechas entre `docs/especificacion.md` y el código, a petición del dueño. Las 47 features anteriores estaban `done`; se registran como `pending` las piezas de la especificación que no tenían feature. Sin cambios de código.
-- #48 `retirar_asesores_telegram`, #49 `roles_supervisor_responsable_datos`, #50 `notas_internas_y_etiquetas`, #51 `respuestas_guardadas`, #52 `asignacion_automatica_carga`, #53 `panel_tiempo_real`, #54 `segundo_factor_panel`, #55 `evaluacion_ataques_y_preguntas_reales`.
-- Supuestos por confirmar recogidos en el acceptance: `no_advisors` sin aviso Telegram (#48), reasignación solo a asesores disponibles (#49), casos en cola sin reasignación automática posterior (#52), TOTP como segundo factor y obligatorio en producción (#54).
-- Siguen fuera del repositorio y a cargo del dueño: validación legal, manuales reales para calibrar embeddings y umbral, costo de plantillas de Meta y despliegue en Render.
-
-## 2026-11-12 — Feature #48 retirar_asesores_telegram (done)
-- **Modo:** supervisado; spec aprobado en `progress/specreview_retirar_asesores_telegram.md` y código `APPROVED` en `progress/review_retirar_asesores_telegram.md`.
-- Se retiraron los comandos de asesor por Telegram y `ADVISOR_CHAT_IDS`; handover usa el roster de perfiles sincronizado con generación compartida y la bandeja del panel.
-- Writer OpenCode Go con `deepseek-v4.1-flash`; T1–T12 completas. Trazabilidad R1–R52 en `progress/impl_retirar_asesores_telegram.md`.
-- `bash ./init.sh`: 3076 passed, 1 skipped, 2 warnings; Claude reviewer repitió la suite y aprobó.
-
-## 2026-11-12 — Revisión del harness Claude/OpenCode
-- El writer queda fijado a `opencode-go/deepseek-v4.1-flash`; `opencode-go` es el único proveedor del proyecto. El puente supervisado y `nocturno.sh` comparten el mismo preflight de autenticación.
-- Claude usa `sonnet` como modelo del proyecto y tiene `Agent` permitido en ambos modos. Se aclaró quién marca `done` y que el writer largo debe continuar en segundo plano sin duplicarse.
-- Se actualizó la guía de conexión, se arregló la invocación del fallback `py -3` de Windows, se añadieron finales LF a los scripts, se protegieron los tests del harness frente al writer y se añadieron pruebas para modelo, invocación y credenciales.
-- Verificación: `claude doctor` sin problemas; prueba de modelo Claude y de subagente Explore correctas; OpenCode listó y respondió con `opencode-go/deepseek-v4.1-flash`; tests de preflight y shell correctos; `bash ./init.sh`: 3081 passed, 1 skipped, 2 warnings de deprecación.
-- `nocturno.sh` muestra avisos si no hay GNU `timeout` o inhibidor de suspensión. No se ejecutó el bucle nocturno: el árbol conserva cambios locales y la siguiente feature no está aprobada para implementación.
-
-## 2026-11-12 — Revisión final del harness
-- Claude leader lanzó un subagente Explore en solo lectura; resultado `REVIEW_OK`, sin hallazgos funcionales pendientes en los 12 archivos del harness revisados.
-- La ejecución del reviewer fue separada de `./init.sh`: 3081 passed, 1 skipped y 2 warnings de deprecación. No se ejecutó una feature del writer porque la siguiente (#49) sigue pending y el puente exige `in_progress` con spec aprobada.
-
-## 2026-11-12 — #49 roles_supervisor_responsable_datos
-- **Modo:** supervisado; reviewer `APPROVED` (`progress/review_roles_supervisor_responsable_datos.md`). Writer OpenCode `deepseek-v4.1-flash`; T1–T11 completas, trazabilidad R1–R30 en `progress/impl_roles_supervisor_responsable_datos.md`.
-- Añade los roles `supervisor` y `responsable_datos`; reasignación decidida por handover (escritura condicional y auditada, 403 para asesores) y cola de supresión restringida.
-- Dos correcciones de review: 403 sin revelar ids/nombres en caso ajeno y rechazo de login de `cliente` con credenciales válidas.
-- `bash ./init.sh` verde (3214 passed, 1 skipped al cierre de la primera pasada; repetido tras las correcciones).
-
-## 2026-11-13 — Harness Claude + DeepSeek y feature #50 (done)
-- Verificado el flujo supervisado de extremo a extremo: Claude Code `leader` coordinó, DeepSeek V4.1 Flash implementó mediante `scripts/run_opencode_writer.sh`, y Claude `reviewer` aprobó la feature #50.
-- Revisión detectó falta de auditoría en fallos CSRF para las siete rutas POST nuevas; DeepSeek la corrigió y añadió pruebas de regresión. Informe: `progress/review_notas_internas_y_etiquetas.md`; trazabilidad R1–R40: `progress/impl_notas_internas_y_etiquetas.md`.
-- `bash ./init.sh`: 3274 passed, 1 skipped, 2 warnings de deprecación, exit 0.
-- Se preservó el resto de los cambios locales existentes; no se hizo commit.
-
-## 2026-11-13 — Feature #51 respuestas_guardadas (done)
-- Modo supervisado: Claude `spec_author` y `reviewer` aprobaron el spec (`progress/specreview_respuestas_guardadas.md`); DeepSeek V4.1 Flash implementó T1–T12 y Claude aprobó el código (`progress/review_respuestas_guardadas.md`).
-- Añade gestión administrativa de respuestas guardadas y carga editable desde el panel de asesores; el envío conserva autorización y reglas de canal existentes.
-- Trazabilidad R1–R24 en `progress/impl_respuestas_guardadas.md`. `bash ./init.sh`: 3325 passed, 1 skipped, 2 warnings de deprecación, exit 0.
-
-## 2026-11-13 — Feature #52 asignacion_automatica_carga (done)
-- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_asignacion_automatica_carga.md`); DeepSeek V4.1 Flash implementó T1–T20; Claude aprobó el código (`progress/review_asignacion_automatica_carga.md`).
-- El orchestrator ofrece modo manual/automático configurable; handover elige al asesor con menor carga y asigna en una transacción serializada, sin pisar acciones humanas ni redistribuir casos antiguos en cola.
-- Trazabilidad R1–R26 en `progress/impl_asignacion_automatica_carga.md`. Tras una corrección documental dirigida, `bash ./init.sh`: 3367 passed, 1 skipped, 2 warnings, exit 0.
-
-## 2026-11-13 — Feature #53 panel_tiempo_real (done)
-- Claude `spec_author` y reviewer aprobaron el spec (`progress/specreview_panel_tiempo_real.md`); el dueño autorizó añadir e instalar `websockets>=13,<16`; DeepSeek V4.1 Flash implementó T1–T20 y Claude aprobó el código (`progress/review_panel_tiempo_real.md`).
-- Añade avisos websocket autorizados por sesión/caso, eventos compartidos en Postgres, fragmentos HTML de recuperación, JavaScript propio con CSP estricta y fallback periódico.
-- Trazabilidad R1–R35 en `progress/impl_panel_tiempo_real.md`. `bash ./init.sh`: 3416 passed, 1 skipped, 2 warnings de deprecación, exit 0.
-
-## 2026-11-13 — Feature #54 segundo_factor_panel (done)
-- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_segundo_factor_panel.md`) tras definir recuperación operativa SQL para el último administrador y pérdida de clave; el dueño autorizó añadir e instalar `cryptography>=43,<48`.
-- DeepSeek V4.1 Flash implementó T0–T18; Claude aprobó el código (`progress/review_segundo_factor_panel.md`). TOTP RFC 6238, secretos Fernet, anti-replay, códigos de recuperación, sesiones restringidas, reset auditado y recuperación operacional documentada.
-- Trazabilidad R1–R48 en `progress/impl_segundo_factor_panel.md`. `bash ./init.sh`: 3489 passed, 1 skipped, 2 warnings de deprecación, exit 0.
-
-## 2026-11-13 — Feature #55 evaluacion_ataques_y_preguntas_reales (done)
-- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_evaluacion_ataques_y_preguntas_reales.md`); DeepSeek V4.1 Flash implementó T1–T14; Claude aprobó el código (`progress/review_evaluacion_ataques_y_preguntas_reales.md`).
-- Añade dataset sintético de ataques, scoring separado y salida de fallo, plantilla vacía para preguntas reales, mínimo configurable/documentado y compatibilidad de `--url` y `--preguntas` repetible.
-- Trazabilidad R1–R33 en `progress/impl_evaluacion_ataques_y_preguntas_reales.md`. `bash ./init.sh`: 3537 passed, 1 skipped, 2 warnings de deprecación, exit 0.
-
-## 2026-11-13 — Feature #56 rediseño_visual_paneles (done)
-- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_rediseño_visual_paneles.md`); DeepSeek V4.1 Flash implementó T1–T13; Claude aprobó el código (`progress/review_rediseño_visual_paneles.md`).
-- Rediseña la presentación compartida de admin y asesores, con tablas adaptables, accesibilidad, foco visible, contraste WCAG y navegación coherente, sin cambiar lógica ni CSP.
-- Se reparó la validación del puente writer para aceptar la `ñ` del nombre de feature; se añadió una prueba de regresión.
-- Trazabilidad R1–R27 en `progress/impl_rediseño_visual_paneles.md`. `bash ./init.sh`: 3558 passed, 1 skipped, 2 warnings de deprecación, exit 0.
-- Se preservaron los demás cambios locales preexistentes; no se hicieron commits.
-
-## 2026-11-14 — Feature #57 retencion_evidencia_y_privacidad_inicial (done)
-- El dueño aprobó el 2026-11-14 aviso breve, versión 1.0, frases ACEPTO/NO ACEPTO, retención de 30 días, límite de casos activos de 15 días, memoria hasta supresión y borrado de la evidencia de consentimiento en supresión o por antigüedad.
-- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_retencion_evidencia_y_privacidad_inicial.md`); DeepSeek V4.1 Flash implementó T1–T23; Claude aprobó el código (`progress/review_retencion_evidencia_y_privacidad_inicial.md`).
-- Render y `.env.example` reflejan los valores aprobados; Fake/Postgres borran `privacy_consents` en supresión y purga por `occurred_at`, con conteos y transacción. La documentación aclara que es decisión del dueño, no una revisión legal externa.
-- `bash ./init.sh`: 3579 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+## 2026-10-30 a 2026-11-14 — Resumen de las 57 features cerradas
+
+Todas pasaron por spec, implementación, `./init.sh` verde y revisión de código.
+
+| # | Feature | Qué entrega |
+|---|---------|-------------|
+| 1 | `contratos_servicios` | Contratos entre servicios |
+| 2 | `esqueleto_servicios` | Esqueleto de servicios con Docker |
+| 3 | `telegram_gateway` | Telegram gateway |
+| 4 | `orquestador_basico` | Orquestador básico |
+| 5 | `rag_ingesta_busqueda` | RAG: ingesta de manuales y búsqueda con umbral |
+| 6 | `no_inventar` | No inventar: validación de citas y rechazo fijo |
+| 9 | `contrato_asignar_caso` | Contrato: asignar un caso a un asesor |
+| 7 | `traspaso_asesor` | Traspaso a asesor |
+| 8 | `evaluacion` | Evaluación con preguntas de ejemplo |
+| 10 | `validacion_config_asesores` | Validación de ADVISOR_CHAT_IDS al arrancar handover |
+| 11 | `registro_solicitudes_traspaso` | Registro de cada solicitud de traspaso en handover |
+| 12 | `vencimiento_automatico` | Ejecución periódica de POST /cases/check-timeouts |
+| 13 | `contrato_autorizacion_asesores` | Contrato: autorización de asesores sobre un caso |
+| 14 | `autorizacion_asesores` | Autorización de asesores para responder y cerrar casos |
+| 15 | `contrato_conversacion_caso` | Contrato: mensajes del cliente hacia el asesor |
+| 16 | `conversacion_cliente_asesor` | Conversación bidireccional cliente-asesor por Telegram |
+| 17 | `contrato_cierre_casos_huerfanos` | Contrato: cierre de casos huérfanos (asesor retirado de ADVISOR_CHAT_IDS) |
+| 18 | `candado_repositorio_orquestador` | Candado en la conexión compartida de PostgresRepository del orquestador |
+| 19 | `edicion_fragmentos` | Edición del contenido de fragmentos RAG |
+| 20 | `verificacion_cuentas` | Vincular perfiles verificados con cuentas de Telegram |
+| 21 | `panel_administracion` | Panel administrativo mínimo |
+| 22 | `panel_fragmentos` | Manuales y fragmentos en el panel administrativo |
+| 23 | `bootstrap_administrador` | Crear el primer administrador de forma segura |
+| 24 | `despliegue_produccion` | Configuración y verificaciones para despliegue de producción |
+| 25 | `clasificador_consultas` | Clasificar consultas por categoría configurable |
+| 26 | `consulta_bd_lenguaje_natural` | Consultas de datos autorizadas en lenguaje natural |
+| 27 | `privacidad_y_retencion_datos` | Política de privacidad, retención y eliminación de datos |
+| 28 | `despliegue_retencion` | Retención de datos en Render |
+| 29 | `panel_asesores` | Panel de asesores para atender casos |
+| 30 | `agrupacion_mensajes` | Agrupar mensajes consecutivos del cliente |
+| 31 | `busqueda_hibrida_rag` | Búsqueda híbrida para manuales |
+| 32 | `traspaso_automatico_fallos` | Derivar automáticamente tras fallos repetidos |
+| 33 | `contrato_listar_casos_asesor` | Contrato para listar casos de un asesor |
+| 34 | `robustez_estado_traspaso_automatico` | Retención y recuperación del estado de traspaso automático |
+| 35 | `consentimiento_antes_de_datos` | No guardar datos personales antes del consentimiento |
+| 36 | `nucleo_multicanal` | Núcleo multicanal Telegram y WhatsApp |
+| 37 | `estados_y_consentimiento` | Estados de conversación y consentimiento versionado |
+| 38 | `identidad_credenciales` | Identidad web, credenciales y sesiones |
+| 39 | `harness_ia_por_estado` | Harness de IA con herramientas y datos por estado |
+| 40 | `memoria_por_cliente` | Historial resumido y memoria permanente por cliente |
+| 41 | `panel_asesores_multicanal` | Panel de asesores multicanal y solicitudes de supresión |
+| 42 | `administracion_y_avisos` | Administración de clientes, textos y avisos |
+| 43 | `proveedor_whatsapp_real` | Integración del proveedor real de WhatsApp |
+| 44 | `confirmar_callback_telegram` | Confirmar callback_query de Telegram (answerCallbackQuery) |
+| 45 | `corregir_foreign_session_windows` | Corregir tipo de parámetro en PostgresRepository.foreign_session_windows |
+| 46 | `consentimiento_texto_telegram` | Consentimiento por frase de texto en Telegram (sin botones inline) |
+| 47 | `healthcheck_dependencias` | Health checks reales de dependencias |
+| 48 | `retirar_asesores_telegram` | Retirar la atención de asesores por Telegram |
+| 49 | `roles_supervisor_responsable_datos` | Roles de supervisor y responsable de datos en el panel |
+| 50 | `notas_internas_y_etiquetas` | Notas internas y etiquetas en los casos |
+| 51 | `respuestas_guardadas` | Respuestas guardadas para asesores |
+| 52 | `asignacion_automatica_carga` | Asignación automática de casos por carga |
+| 53 | `panel_tiempo_real` | Panel de asesores en tiempo real |
+| 54 | `segundo_factor_panel` | Segundo factor en el acceso del personal al panel |
+| 55 | `evaluacion_ataques_y_preguntas_reales` | Evaluación con casos de ataque y preguntas reales |
+| 56 | `rediseño_visual_paneles` | Rediseño visual moderno de los paneles |
+| 57 | `retencion_evidencia_y_privacidad_inicial` | Aplicar la retención aprobada a la evidencia de consentimiento |
+
+Último `./init.sh` antes de la limpieza (2026-11-14): 3579 passed, 1 skipped.
+## 2026-11-15 — Limpieza del repositorio y guía de instalación
+- **Motivo:** al equipo le costaba abrir el proyecto. Una clonación limpia de la rama de trabajo instala y pasa los tests; el problema era que GitHub entrega por defecto una rama 256 archivos por detrás, el README pedía pasos que no aplican a un clon (`cd ~/proyectos/…`, `git init`, `claude`) y no explicaba PowerShell ni Docker, había rutas con `ñ` y `.codex/hooks.json` apuntaba a una ruta de un solo PC.
+- **Limpieza:** se archivaron en el tag `archivo-antes-limpieza-2026-11-15` y se borraron del árbol `specs/` (172 archivos), los informes de `progress/` (186), `.codex/` y `.agents/`. `feature_list.json` pasó de 95 KB a 9 KB (features `done` resumidas) y esta bitácora de 57 KB a 6 KB. `init.sh` y `CHECKPOINTS.md` exigen spec solo en `spec_ready`/`in_progress`.
+- **Documentación:** README reescrito (clonar, instalar, tests, Docker, problemas frecuentes). Correcciones en `docs/especificacion.md` (restos de exportación, proveedor de WhatsApp ya elegido, consentimiento por texto en Telegram, hash real de contraseñas, enlace de la fuente de Meta), `docs/proyecto.md` (nota del arnés, secciones históricas, riesgo de consulta de datos) y `docs/architecture.md`.
+- **Sin cambios** en `services/`, `contracts/`, `eval/`, `scripts/`, `docker-compose.yml` ni `.github/`. `contracts/` no se toca: es código en uso y `CONTRATOS.md` está verificado por tests.

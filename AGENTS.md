@@ -23,8 +23,8 @@
 |------------------------------|-----------------------------------------------------------------------------|---------------|
 | `feature_list.json`          | Lista de tareas con estado (`pending` / `spec_ready` / `in_progress` / `done` / `blocked`) | Siempre, al empezar |
 | `progress/current.md`        | Estado de la sesión actual                                                  | Siempre, al empezar |
-| `progress/history.md`        | Bitácora append-only de sesiones anteriores                                 | Si necesitas contexto histórico |
-| `specs/<feature>/`           | `requirements.md` + `design.md` + `tasks.md` (Kiro-style)                   | Antes de implementar cualquier feature con `"sdd": true` |
+| `progress/history.md`        | Bitácora append-only; lo anterior al 2026-11-15 está resumido y el detalle vive en el tag git `archivo-antes-limpieza-2026-11-15` | Si necesitas contexto histórico |
+| `specs/<feature>/`           | `requirements.md` + `design.md` + `tasks.md` (Kiro-style). Solo existen para la feature en curso; los de features `done` están en el tag de archivo | Antes de implementar cualquier feature con `"sdd": true` |
 | `docs/architecture.md`       | Qué significa "hacer un buen trabajo" en este proyecto                      | Antes de implementar |
 | `docs/conventions.md`        | Reglas de estilo, nombres, estructura                                       | Antes de escribir código |
 | `docs/specs.md`              | Proceso SDD: EARS notation y los 3 archivos                                  | Antes de redactar o leer un spec |
@@ -71,10 +71,15 @@ pending → [spec_author] → spec_ready → [reviewer: spec] → in_progress �
 3. Reviewer valida el spec en una pasada enfocada. Si aprueba, el leader cambia
    el status a `in_progress` y lanza `implementer` sin esperar aprobación manual.
 4. El implementer ejecuta `tasks.md` una a una, marcándolas `[x]`.
-6. El reviewer verifica trazabilidad `R<n>` ↔ test y tasks completas;
+5. El reviewer verifica trazabilidad `R<n>` ↔ test y tasks completas;
    aprueba o rechaza.
-7. Si aprueba, el implementer marca `done` y mueve el resumen a
+6. Si aprueba, el implementer marca `done` y mueve el resumen a
    `progress/history.md`.
+
+**Ahorro de contexto:** las features `done` se guardan en `feature_list.json`
+solo con `id`, `name` y `title`. No leas specs ni informes de features cerradas
+salvo que la tarea lo exija; si hace falta, están en el tag
+`archivo-antes-limpieza-2026-11-15` (`git show <tag>:specs/<name>/design.md`).
 
 ## 5. Cierre de sesión (lifecycle)
 

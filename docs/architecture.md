@@ -12,13 +12,13 @@ contracts/                 # Contratos entre servicios (feature 1)
 ├── lazaro_contracts/      # Modelos Pydantic compartidos (request/response)
 └── tests/
 services/
-├── telegram_gateway/      # Canal Telegram: recibe updates, envía mensajes
+├── telegram_gateway/      # Canales: Telegram y WhatsApp (Meta Cloud API); recibe y envía mensajes
 ├── orchestrator/          # Cerebro: contacto, conversación, decide qué hacer;
 │                          # incluye el módulo de identidad de clientes (#38)
 ├── rag/                   # Manuales: ingesta, fragmentos, búsqueda pgvector
 └── handover/              # Traspaso a asesor: casos, avisos, tiempo de espera
-eval/                      # Evaluación con preguntas de ejemplo (feature 8)
-scripts/                   # Utilidades (p. ej. cargar_manual.py)
+eval/                      # Evaluación con preguntas de ejemplo y casos de ataque
+scripts/                   # Utilidades y workers (cargar_manual, configurar_webhook, vencer_casos, purgar_datos…)
 docker-compose.yml         # Postgres (pgvector), Redis y los servicios
 ```
 
@@ -193,7 +193,7 @@ PSF). El agente solo instala lo que está en `requirements.txt` y en el
 - No usar `print()` para registrar: usar `logging`.
 - No mezclar IO con decisiones en `domain.py`.
 - No llamar a servicios reales (Telegram, proveedor de IA) desde los tests.
-- No añadir paneles web, clasificador, consulta a la base de datos ni
-  edición de fragmentos hasta que su feature exista en `feature_list.json`.
+- No añadir funcionalidad nueva (servicios, paneles, herramientas del modelo)
+  hasta que su feature exista en `feature_list.json`.
 - No resolver una duda abierta de `docs/proyecto.md` §12 inventando: se
   convierte en un supuesto configurable documentado en `design.md`.

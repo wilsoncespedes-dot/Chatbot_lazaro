@@ -86,7 +86,8 @@ try:
     if len(in_progress) > 1:
         print(f"[FAIL]  Hay {len(in_progress)} features en in_progress (máximo 1)")
         sys.exit(1)
-    requires_spec = {"spec_ready", "in_progress", "done"}
+    # Los specs de features `done` se archivan en git (ver progress/history.md).
+    requires_spec = {"spec_ready", "in_progress"}
     spec_errors = []
     for f in data["features"]:
         if f["status"] not in valid:
@@ -105,7 +106,7 @@ try:
             print(f"[FAIL]  {e}")
         sys.exit(1)
     print(f"[OK]    feature_list.json válido ({len(data['features'])} features)")
-    print(f"[OK]    Specs presentes para features sdd con estado no-pending")
+    print(f"[OK]    Specs presentes para features sdd en spec_ready o in_progress")
 except SystemExit:
     raise
 except Exception as e:

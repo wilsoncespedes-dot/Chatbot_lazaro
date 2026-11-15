@@ -1,131 +1,160 @@
 # Chatbot Lázaro Software
 
-Chatbot de atención y soporte por **Telegram**: responde con los manuales
-(RAG sobre pgvector), no inventa, y pasa la conversación a un **asesor
-humano** cuando no puede resolver. Microservicios en **Python + FastAPI**, con
-Docker, en un monorepo.
+Chatbot de atención y soporte por **Telegram y WhatsApp**: responde con los
+manuales (RAG sobre pgvector), no inventa, identifica al cliente con login web
+y pasa la conversación a un **asesor humano** en un panel propio cuando no
+puede resolver. Microservicios en **Python + FastAPI**, con Docker, en un
+monorepo.
 
-El desarrollo se hace con un **arnés SDD** (Spec Driven Development): Claude
-Code coordina (`leader`, `spec_author` y `reviewer`); después de aprobar el
-spec, **OpenCode con DeepSeek escribe el código**. El mismo writer se usa en
-modo supervisado y nocturno.
-
-- Contexto, decisiones y dudas abiertas: [`docs/proyecto.md`](docs/proyecto.md)
+- Qué hace el producto: [`docs/especificacion.md`](docs/especificacion.md)
+- Contexto y decisiones: [`docs/proyecto.md`](docs/proyecto.md)
 - Reglas técnicas: [`docs/architecture.md`](docs/architecture.md) y [`docs/conventions.md`](docs/conventions.md)
-- Plan de trabajo: [`feature_list.json`](feature_list.json)
+- Rutas entre servicios: [`contracts/CONTRATOS.md`](contracts/CONTRATOS.md)
+- Despliegue en Render: [`docs/despliegue.md`](docs/despliegue.md)
 
-## Versión mínima (8 features)
+## Abrir el proyecto en tu computador
 
-| # | Feature | Qué entrega |
-|---|---------|-------------|
-| 1 | `contratos_servicios`   | `contracts/CONTRATOS.md` + modelos Pydantic compartidos |
-| 2 | `esqueleto_servicios`   | 4 servicios FastAPI, Postgres+pgvector, Redis, Docker Compose, CI |
-| 3 | `telegram_gateway`      | Webhook, descarte de repetidos, `POST /send` |
-| 4 | `orquestador_basico`    | Contacto, historial, eventos, RAG → respuesta o traspaso |
-| 5 | `rag_ingesta_busqueda`  | Carga de PDF/DOCX, fragmentos, búsqueda con umbral |
-| 6 | `no_inventar`           | Validación de citas y números, rechazo fijo |
-| 7 | `traspaso_asesor`       | Casos, aviso a asesores, tiempo de espera, respuesta del asesor |
-| 8 | `evaluacion`            | Preguntas de ejemplo y métricas |
+### Qué necesitas instalado
 
-Features completadas: consulta a la base de datos (#26), verificación de cuentas (#20),
-clasificador (#25), panel administrativo (#21–#22) y edición de fragmentos (#19, #22).
-El panel de asesores (#29) y su contrato de listado (#33) ya están implementados.
-El backlog actual incluye agrupación de mensajes (#30), búsqueda híbrida RAG (#31)
-y traspaso automático tras fallos (#32), en feature_list.json.
+| Herramienta | Para qué | Notas |
+|---|---|---|
+| Git | Descargar el repositorio | En Windows instala [Git for Windows](https://git-scm.com/download/win): trae **Git Bash** |
+| Python 3.11 o superior (recomendado 3.12) | Correr los tests | Windows: `winget install Python.Python.3.12` y desactiva los alias de la Microsoft Store (*Configuración → Aplicaciones → Configuración avanzada de aplicaciones → Alias de ejecución de aplicaciones*) |
+| Docker Desktop | Levantar los servicios | Solo si quieres ejecutar el bot; los tests no lo necesitan. Debe estar abierto y en marcha |
 
-## Puesta en marcha (una vez)
+### 1. Descargar
 
-En **Git Bash** (Windows) o una terminal (macOS/Linux):
+Usa `git clone`. **No descargues el ZIP** de GitHub: no trae el historial y
+luego no puedes actualizar con `git pull`.
 
 ```bash
-cd ~/proyectos/chatbot-lazaro
+git clone https://github.com/wilsoncespedes-dot/Chatbot_lazaro.git
+cd Chatbot_lazaro
+```
+
+### 2. Instalar y comprobar (sin Docker)
+
+En **Git Bash** (Windows) o en una terminal (macOS / Linux):
+
+```bash
 python -m venv .venv
 source .venv/Scripts/activate        # Windows (Git Bash)
 # source .venv/bin/activate          # macOS / Linux
 python -m pip install -r requirements-dev.txt
-cp .env.example .env                 # y rellena tus claves; .env nunca va a git
+cp .env.example .env
 ./init.sh                            # debe terminar en [OK] Entorno listo
-git init && git add -A && git commit -m "arnés del chatbot"
-claude                               # acepta el aviso de confianza de la carpeta
 ```
 
-`./init.sh` usa el `.venv` automáticamente si existe. Antes de la feature 2
-dirá «Aún no hay tests»: es normal.
+En **PowerShell** (si no usas Git Bash):
 
-Cuando una feature añada dependencias (FastAPI, librerías de PDF…), el spec
-las lista en `design.md` y el implementer las instala en el `.venv`. Para
-instalarlas tú a mano en otro equipo:
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+python -m pytest
+```
+
+Si PowerShell no deja activar el entorno, ejecuta una vez
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Los scripts `.sh`
+(`init.sh`, `modo.sh`, `nocturno.sh`) solo funcionan en Git Bash, no en
+PowerShell ni en CMD.
+
+Los tests usan adaptadores falsos: no necesitan Docker, base de datos, claves
+ni internet (salvo para instalar las dependencias).
+
+### 3. Levantar los servicios (con Docker)
+
+Con Docker Desktop abierto y el `.env` creado en el paso anterior:
 
 ```bash
-python -m pip install -r services/<servicio>/requirements.txt
+docker compose up --build
 ```
 
-## Primer administrador
+| Servicio | URL local |
+|---|---|
+| telegram_gateway | http://localhost:8001/health |
+| orchestrator (panel en `/admin` y `/asesor`) | http://localhost:8002/health |
+| rag | http://localhost:8003/health |
+| handover | http://localhost:8004/health |
 
-En una instalación vacía, crea el administrador inicial desde dentro del
-contenedor del orquestador:
+Con los valores de `.env.example` los servicios arrancan, pero el bot no
+conversa hasta que rellenes en `.env` tus propias claves: `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_WEBHOOK_SECRET`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDINGS_API_KEY` y
+`EMBEDDINGS_MODEL`. **Nunca subas `.env` a git** ni compartas las claves por
+chat; cada persona usa las suyas.
+
+Crear el primer administrador del panel (pide la contraseña sin mostrarla):
 
 ```bash
 docker compose exec orchestrator python -m orchestrator.bootstrap_admin --username <nombre>
 ```
 
-El comando usa `DATABASE_URL`, pide la contraseña dos veces sin mostrarla y se
-niega si ya existe un administrador. No hay endpoint HTTP ni credenciales por
-defecto.
-
-En Render, ejecuta el mismo comando desde la Shell del servicio `orchestrator`
-después del primer despliegue. En producción configura primero los valores
-legales de privacidad y `PANEL_2FA_ENCRYPTION_KEY`; el administrador registra
-TOTP en su primer acceso.
-
-## Trabajo diario (modo supervisado)
-
-1. En Claude Code: **`/siguiente`**. El leader prepara y revisa el spec y,
-   si pasa revisión, continúa sin esperar aprobación manual.
-2. El implementer delega el código a OpenCode/DeepSeek V4.1 Flash. Antes de
-   implementar, busca en `referencias/` piezas reutilizables; confirma repo,
-   archivo, commit y licencia. Adapta solo lo necesario y registra avisos
-   MIT/Apache en `THIRD_PARTY_NOTICES.md`; no uses código sin licencia ni
-   GPL/AGPL.
-3. Tras terminar el código, se ejecuta `./init.sh` una vez y el reviewer
-   hace una revisión final. Los informes deben ser breves.
-4. **`/estado`** en cualquier momento para ver dónde estás.
-
-## Modo nocturno
+Cargar un manual (PDF o DOCX) desde tu computador. El script lee las variables
+del entorno, no del `.env`, y desde fuera de Docker el servicio `rag` está en
+el puerto 8003:
 
 ```bash
-./modo.sh              # ¿en qué modo estoy?
-git add -A && git commit -m "antes de dormir"
-./nocturno.sh --max-sesiones 3
+RAG_URL=http://localhost:8003 SERVICE_TOKEN=<el de tu .env> python scripts/cargar_manual.py <ruta> --nombre <nombre>
 ```
 
-Claude coordina feature tras feature sin preguntar; OpenCode/DeepSeek escribe
-el código. El reviewer aprueba los specs por ti, el script hace un commit por
-feature y se para ante problemas. Por la mañana: `progress/nocturno_<fecha>.md`,
-revisa los specs `"auto_approved"` y usa `/revisado`.
+Para que Telegram entregue mensajes hace falta una URL pública `https` y
+registrar el webhook con `scripts/configurar_webhook.py`; el procedimiento está
+en [`docs/despliegue.md`](docs/despliegue.md) §4.
 
-### Conectar OpenCode Go (una vez)
+### Problemas frecuentes
 
-En el CLI de OpenCode, ejecuta `/connect`, selecciona **Other**, usa el id de
-proveedor `opencode-go` y configura la credencial de OpenCode Go. La credencial
-se guarda en el almacén de OpenCode del usuario, fuera del repositorio.
-Comprueba que aparece `OpenCode Go` en `opencode auth list`. El implementer está
-fijado a `opencode-go/deepseek-v4.1-flash` en el modo supervisado y nocturno.
+| Síntoma | Causa y solución |
+|---|---|
+| `python` abre la Microsoft Store o no existe | Instala Python y desactiva los alias de la Store; en PowerShell usa `py -3` |
+| `./init.sh: command not found` o no hace nada | Estás en PowerShell o CMD: abre Git Bash |
+| `pytest no está instalado` | No activaste el `.venv` o falta `python -m pip install -r requirements-dev.txt` |
+| `docker compose` dice que no encuentra `.env` | Falta `cp .env.example .env` |
+| `failed to connect to the docker API` | Docker Desktop no está abierto |
+| El puerto 8001–8004 está ocupado | Cierra el programa que lo usa o cambia el puerto en `docker-compose.yml` |
+| Faltan archivos o funciones recientes | Estás en una rama vieja: `git fetch` y `git switch <rama>` |
 
-OpenCode tiene permisos de edición solo dentro del proyecto; su shell, red y
-subagentes están bloqueados. Claude ejecuta `./init.sh` después de cada sesión
-del writer. Para usar el modo nocturno, configura antes la credencial y ejecuta
-`opencode auth list` para confirmar que OpenCode Go aparece.
+## Estructura
 
-Tu propio documento (D6) recomienda **empezar en supervisado**: de noche el
-reviewer aprueba los specs en tu lugar y los agentes instalan las
-dependencias que esos specs piden sin que nadie las revise antes.
+```
+.
+├── contracts/         # CONTRATOS.md + modelos Pydantic compartidos (lazaro_contracts)
+├── services/          # telegram_gateway (Telegram y WhatsApp), orchestrator, rag, handover
+├── eval/              # Evaluación con preguntas de ejemplo y casos de ataque
+├── scripts/           # cargar_manual, configurar_webhook, workers de vencimiento y purga
+├── docs/              # especificacion, proyecto, architecture, conventions, despliegue…
+├── docker-compose.yml # Postgres (pgvector), Redis, servicios y workers
+├── render.yaml        # Blueprint de Render
+├── .env.example       # Variables (copia a .env)
+├── requirements-dev.txt / pytest.ini / conftest.py
+└── Arnés de agentes: AGENTS.md, CLAUDE.md, CHECKPOINTS.md, feature_list.json,
+    init.sh, modo.sh, nocturno.sh, progress/, specs/, .claude/, .opencode/
+```
 
-## Permisos de los agentes
+## Desarrollo con agentes de IA (opcional)
 
-Los agentes tienen todo lo que necesitan para desarrollar: comandos de shell,
-editar archivos, red (búsqueda web, `curl`, `git clone`), instalar
-dependencias con pip y Docker.
+No hace falta para abrir, probar ni ejecutar el proyecto. El desarrollo se
+hace con un **arnés SDD** (Spec Driven Development): Claude Code coordina
+(`leader`, `spec_author`, `reviewer`) y, con el spec aprobado, **OpenCode con
+DeepSeek escribe el código**. El mapa para agentes es [`AGENTS.md`](AGENTS.md).
+
+- `feature_list.json`: lista de features. Las `done` están resumidas; su
+  descripción, spec e informes completos quedaron en el tag git
+  `archivo-antes-limpieza-2026-11-15`.
+- **`/siguiente`** en Claude Code: toma la siguiente feature pendiente (spec →
+  revisión → implementación → `./init.sh` → revisión de código).
+- **`/estado`**: resumen del arnés y de las features.
+
+### Modos
+
+```bash
+./modo.sh                      # muestra el modo actual
+./modo.sh supervisado          # por defecto
+./nocturno.sh --max-sesiones 3 # trabajo autónomo; deja informe en progress/nocturno_<fecha>.md
+```
+
+En modo nocturno el reviewer aprueba los specs en tu lugar; por la mañana
+revisa los que tengan `"auto_approved"` y usa `/revisado`.
 
 | | Supervisado | Nocturno |
 |---|---|---|
@@ -134,51 +163,21 @@ dependencias con pip y Docker.
 | Editar el propio arnés (`docs/`, `CLAUDE.md`, `init.sh`, `.claude/`…) | Permitido | Denegado |
 | Leer o editar `.env` | Denegado | Denegado |
 
-- Solo instalan lo que está en el `requirements.txt` del servicio y en el
-  `design.md` aprobado, dentro del `.venv` (regla de las instrucciones).
-- Los repos de referencia van en `referencias/` (fuera de git, solo lectura).
-- `init.sh` falla si un `.env` entra en git.
-- Las reglas de Bash comparan texto, no son una barrera perfecta. Para más
-  aislamiento, ejecuta en una máquina virtual.
+Las reglas de Bash comparan texto, no son una barrera perfecta. Para más
+aislamiento, ejecuta en una máquina virtual.
 
-## Trabajo en equipo
+### Conectar OpenCode Go (una vez por persona)
 
-El arnés asume **una feature a la vez** por copia del repo. Si varios
-integrantes trabajan en paralelo en ramas distintas, que cada uno tome una
-feature diferente y el merge de `feature_list.json` y `progress/` se revise a
-mano. Los contratos (feature 1) son los que permiten trabajar en paralelo
-sin romperse: termínenla primero.
+En el CLI de OpenCode ejecuta `/connect`, selecciona **Other**, usa el id de
+proveedor `opencode-go` y configura tu credencial. Se guarda en el almacén de
+OpenCode del usuario, fuera del repositorio. Comprueba que `OpenCode Go`
+aparece en `opencode auth list`. El writer está fijado a
+`opencode-go/deepseek-v4.1-flash` en ambos modos; su shell, red y subagentes
+están bloqueados y solo edita archivos del proyecto.
 
-## Windows
+### Trabajo en equipo
 
-- Python: [python.org](https://www.python.org/downloads/) o
-  `winget install Python.Python.3.12`; desactiva los alias de la Microsoft
-  Store (*Configuración → Aplicaciones → Configuración avanzada de
-  aplicaciones → Alias de ejecución de aplicaciones*).
-- Claude Code: `irm https://claude.ai/install.ps1 | iex` en PowerShell. Si
-  Git Bash no encuentra `claude`:
-  `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc`.
-- Docker Desktop para la integración (feature 2 en adelante).
-- Modo nocturno: `powercfg /change standby-timeout-ac 0` en PowerShell para
-  que el equipo no se suspenda (vuelve con `... 30`).
-
-## Estructura
-
-```
-.
-├── AGENTS.md / CLAUDE.md     # Mapa para agentes / rol leader
-├── CHECKPOINTS.md            # Criterios de estado final correcto
-├── feature_list.json         # Las 8 features de la versión mínima
-├── init.sh                   # Verificación: Python, pytest, secretos, specs, tests
-├── modo.sh / nocturno.sh     # Modos supervisado / nocturno
-├── pytest.ini / conftest.py  # Tests de todo el monorepo
-├── requirements-dev.txt      # pytest, httpx
-├── .env.example              # Variables (copia a .env)
-├── THIRD_PARTY_NOTICES.md    # Código copiado y su licencia
-├── docs/                     # proyecto, architecture, conventions, specs, verification
-├── specs/<feature>/          # requirements.md, design.md, tasks.md
-├── progress/                 # current.md, history.md, informes de agentes
-├── contracts/                # (feature 1)
-├── services/                 # (feature 2+) telegram_gateway, orchestrator, rag, handover
-└── .claude/                  # agents, commands, hooks, modes, nocturno.md, settings.json
-```
+El arnés asume **una feature a la vez** por copia del repo. Si varias personas
+trabajan en paralelo, cada una toma una feature distinta en su propia rama y el
+merge de `feature_list.json` y `progress/` se revisa a mano. Los contratos de
+`contracts/` son los que permiten trabajar en paralelo sin romperse.

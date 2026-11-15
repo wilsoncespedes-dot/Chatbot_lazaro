@@ -61,7 +61,7 @@ para el patrón completo.
 
 ### Proyecto
 
-Es el chatbot de Lázaro Software (Telegram + RAG + traspaso a asesor, microservicios
+Es el chatbot de Lázaro Software (Telegram y WhatsApp + RAG + traspaso a asesor, microservicios
 en Python + FastAPI). Contexto en `docs/proyecto.md`; reglas técnicas en
 `docs/architecture.md`. Nunca leas `.env` (secretos); usa `.env.example`.
 
