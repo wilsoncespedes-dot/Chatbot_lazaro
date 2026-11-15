@@ -46,7 +46,9 @@ def _setup_link(env, username: str = "admin1") -> tuple[dict, str]:
 # --- R1: creación de perfiles -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("role", ["admin", "asesor", "cliente"])
+@pytest.mark.parametrize(
+    "role", ["admin", "supervisor", "asesor", "responsable_datos", "cliente"]
+)
 def test_create_profile_returns_201_without_password(env, role):
     """R1, R3: cada rol crea un perfil y la respuesta no incluye la clave ni el hash."""
     response = _create_profile(env, role=role)
@@ -233,7 +235,7 @@ def test_start_token_links_sender_and_consumes_token(env, caplog):
     profile, token = _setup_link(env)
     contact = env.repo.get_or_create_contact(10, 100, FIXED_NOW)
     env.repo.link_case("case-1", contact.id, FIXED_NOW)
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     env.post(text=f"/start {token}", user=10, chat=100)
 
     stored = env.repo.profiles[profile["id"]]
@@ -379,6 +381,48 @@ def test_get_link_token_role_returns_role_only_for_valid_tokens(env):
     assert env.repo.link_tokens["valid"].used_at is None
     assert env.repo.link_tokens["valid"].expires_at == FIXED_NOW + timedelta(minutes=15)
     assert env.repo.profiles[profile.id].telegram_user_id is None
+
+
+def test_postgres_sessions_filter_by_roles_and_delete_by_profile():
+    """R4, R5: el rol se filtra en el servidor y el cambio de rol borra sesiones."""
+    statements: list[tuple[str, tuple]] = []
+
+    class Cursor:
+        def execute(self, sql, params=()):
+            statements.append((sql, tuple(params)))
+
+        def fetchall(self):
+            return []
+
+    class Conn:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    repo = PostgresRepository(
+        "postgresql://x", connect=lambda: Conn(), new_id=lambda: "p1"
+    )
+    assert repo.get_session_for_roles(
+        "hash", FIXED_NOW, ("asesor", "supervisor", "responsable_datos")
+    ) is None
+    sql, params = statements[-1]
+    assert "p.role = ANY(%s)" in sql
+    assert params == (
+        "hash",
+        FIXED_NOW,
+        ["asesor", "supervisor", "responsable_datos"],
+    )
+    assert sql.count("%s") == len(params)
+
+    repo.delete_sessions_for_profile("p1")
+    sql, params = statements[-1]
+    assert sql == "DELETE FROM admin_sessions WHERE profile_id = %s"
+    assert params == ("p1",)
 
 
 def test_postgres_get_link_token_role_is_single_select():

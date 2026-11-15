@@ -1,0 +1,22 @@
+{
+  "generation": 7,
+  "profiles": [
+    {
+      "profile_id": "profile-ana",
+      "role": "asesor",
+      "telegram_user_id": 111
+    },
+    {
+      "profile_id": "profile-luis",
+      "role": "asesor"
+    },
+    {
+      "profile_id": "profile-super",
+      "role": "supervisor"
+    },
+    {
+      "profile_id": "profile-cliente",
+      "role": "otro"
+    }
+  ]
+}

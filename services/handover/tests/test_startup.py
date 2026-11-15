@@ -1,4 +1,4 @@
-"""Tests del arranque de handover: validación de ADVISOR_CHAT_IDS y logs de inicio."""
+"""Tests del arranque de handover: roster persistido y logs de inicio."""
 from __future__ import annotations
 
 import logging
@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from lazaro_contracts import AdvisorRosterEntry
 
 from handover.adapters.gateway import FakeGatewayClient
 from handover.adapters.repository import FakeCaseRepository
@@ -39,70 +39,62 @@ def _build_adapters() -> tuple[Adapters, FakeCaseRepository, FakeGatewayClient]:
     return adapters, repo, gateway
 
 
-@pytest.mark.parametrize("value", ["111,abc", "111,111"])
-def test_create_app_fails_with_invalid_advisor_ids(monkeypatch, value):
-    """R9: con ADVISOR_CHAT_IDS inválida, create_app() propaga ValidationError sin app."""
-    monkeypatch.setenv("ADVISOR_CHAT_IDS", value)
-    with pytest.raises(ValidationError):
-        create_app()
-
-
-def test_startup_log_reports_advisor_count(caplog):
-    """R10: create_app registra a INFO advisors_configured con el número de asesores."""
+def test_create_app_starts_without_advisor_chat_ids():
+    """R44: sin ADVISOR_CHAT_IDS create_app devuelve la app y /health responde 200."""
     adapters, _, _ = _build_adapters()
-    caplog.set_level(logging.INFO)
+    app = create_app(Settings(), adapters)
+    assert isinstance(app, FastAPI)
+    assert TestClient(app).get("/health").status_code == 200
 
-    create_app(Settings(advisor_chat_ids="111,222,333"), adapters)
 
-    record = next(
-        r for r in caplog.records if r.getMessage() == "advisors_configured count=3"
+def test_startup_log_reports_roster_count(caplog):
+    """R13, R44: el arranque registra cuántos perfiles asesores hay en el roster."""
+    adapters, repo, _ = _build_adapters()
+    repo.replace_roster(
+        [
+            AdvisorRosterEntry(profile_id="p1", role="asesor"),
+            AdvisorRosterEntry(profile_id="p2", role="asesor"),
+            AdvisorRosterEntry(profile_id="p3", role="asesor"),
+        ],
+        1,
     )
-    assert record.levelno == logging.INFO
+    caplog.set_level(logging.INFO)
+    with TestClient(create_app(Settings(), adapters)):
+        pass
+    assert any(r.getMessage() == "advisors_configured count=3" for r in caplog.records)
     assert all(r.getMessage() != "no_advisors_configured" for r in caplog.records)
 
 
-@pytest.mark.parametrize("value", ["", " , ,"])
-def test_startup_warns_when_no_advisors(caplog, value):
-    """R11: con la lista vacía se registra WARNING no_advisors_configured y count=0."""
+def test_startup_warns_when_no_advisors(caplog):
+    """R15: con el roster vacío se registra WARNING no_advisors_configured y count=0."""
     adapters, _, _ = _build_adapters()
     caplog.set_level(logging.INFO)
-
-    create_app(Settings(advisor_chat_ids=value), adapters)
-
+    with TestClient(create_app(Settings(), adapters)):
+        pass
     messages = [r.getMessage() for r in caplog.records]
     assert "advisors_configured count=0" in messages
     warning = next(r for r in caplog.records if r.getMessage() == "no_advisors_configured")
     assert warning.levelno == logging.WARNING
 
 
-def test_create_app_starts_with_empty_advisor_list():
-    """R12: con la lista vacía create_app devuelve la app y /health responde 200."""
-    adapters, _, _ = _build_adapters()
-
-    app = create_app(Settings(advisor_chat_ids=""), adapters)
-
-    assert isinstance(app, FastAPI)
-    assert TestClient(app).get("/health").status_code == 200
-
-
-def test_startup_log_does_not_contain_advisor_ids(caplog):
-    """R13: los registros que emite create_app no incluyen ningún id de asesor."""
-    adapters, _, _ = _build_adapters()
+def test_startup_log_does_not_contain_profile_ids(caplog):
+    """R44: los registros de arranque no incluyen los ids de los perfiles."""
+    adapters, repo, _ = _build_adapters()
+    repo.replace_roster(
+        [AdvisorRosterEntry(profile_id="perfil-secreto-987", role="asesor")], 1
+    )
     caplog.set_level(logging.DEBUG)
-
-    create_app(Settings(advisor_chat_ids="987654321,-1001234567890"), adapters)
-
+    with TestClient(create_app(Settings(), adapters)):
+        pass
     assert caplog.records
     for record in caplog.records:
-        message = record.getMessage()
-        assert "987654321" not in message
-        assert "1001234567890" not in message
+        assert "perfil-secreto-987" not in record.getMessage()
 
 
-def test_only_commas_config_still_returns_no_advisors():
-    """R14: solo comas deja la lista vacía; /handover responde no_advisors y no envía."""
+def test_handover_without_roster_returns_no_advisors():
+    """R15: roster vacío -> no_advisors sin enviar y el caso pasa a timed_out."""
     adapters, repo, gateway = _build_adapters()
-    settings = Settings(service_token=TOKEN, advisor_chat_ids=", ,")
+    settings = Settings(service_token=TOKEN)
     client = TestClient(create_app(settings, adapters))
 
     response = client.post(
@@ -125,10 +117,9 @@ def test_only_commas_config_still_returns_no_advisors():
     assert repo.cases["case-1"].status == "timed_out"
 
 
-def test_import_main_logs_advisor_count_to_stderr():
-    """R15, R13: el arranque real (import de main) escribe el conteo en stderr sin ids."""
+def test_import_main_does_not_require_advisor_chat_ids():
+    """R44, R45: importar main funciona sin ADVISOR_CHAT_IDS."""
     env = {name: value for name, value in os.environ.items() if name not in SETTINGS_ENV}
-    env["ADVISOR_CHAT_IDS"] = "987654321,-1001234567890"
     env["PYTHONPATH"] = os.pathsep.join(sys.path)
 
     result = subprocess.run(
@@ -140,9 +131,6 @@ def test_import_main_logs_advisor_count_to_stderr():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "advisors_configured count=2" in result.stderr
-    assert "987654321" not in result.stderr
-    assert "1001234567890" not in result.stderr
 
 
 def _case(case_id: str, status: str, advisor_id: str | None = None) -> Case:
@@ -159,37 +147,36 @@ def _case(case_id: str, status: str, advisor_id: str | None = None) -> Case:
 
 
 def test_startup_logs_orphan_case_count(caplog):
-    """autorizacion_asesores R49, R50: el arranque registra cuántos huérfanos hay, sin ids."""
+    """R20-R22: el arranque registra cuántos huérfanos hay, sin ids."""
     adapters, repo, _ = _build_adapters()
-    settings = Settings(advisor_chat_ids="987654321,111")
-    repo.create_case(_case("c-registered", "assigned", "987654321"))
-    repo.create_case(_case("c-orphan", "assigned", "1001234567890"))
+    repo.replace_roster([AdvisorRosterEntry(profile_id="p1", role="asesor")], 1)
+    repo.create_case(_case("c-registered", "assigned", "p1"))
+    repo.create_case(_case("c-orphan", "assigned", "retirado"))
     repo.create_case(_case("c-null", "assigned", None))
     repo.create_case(_case("c-open", "open"))
     repo.create_case(_case("c-closed", "closed"))
     caplog.set_level(logging.INFO)
 
-    with TestClient(create_app(settings, adapters)) as client:
+    with TestClient(create_app(Settings(), adapters)) as client:
         assert client.get("/health").status_code == 200
 
     messages = [record.getMessage() for record in caplog.records]
     assert "orphan_cases count=2" in messages
     assert "orphan_cases_present count=2" in messages
-    assert all("1001234567890" not in message for message in messages)
-    assert all("987654321" not in message for message in messages)
+    assert all("retirado" not in message for message in messages)
     assert all("c-registered" not in message for message in messages)
     assert all("c-orphan" not in message for message in messages)
 
 
 def test_startup_without_orphans_logs_zero_and_no_warning(caplog):
-    """autorizacion_asesores R49, R50: sin huérfanos no se emite el WARNING."""
+    """R20: sin huérfanos no se emite el WARNING."""
     adapters, repo, _ = _build_adapters()
-    settings = Settings(advisor_chat_ids="987654321")
-    repo.create_case(_case("c-registered", "assigned", "987654321"))
+    repo.replace_roster([AdvisorRosterEntry(profile_id="p1", role="asesor")], 1)
+    repo.create_case(_case("c-registered", "assigned", "p1"))
     repo.create_case(_case("c-open", "open"))
     caplog.set_level(logging.INFO)
 
-    with TestClient(create_app(settings, adapters)):
+    with TestClient(create_app(Settings(), adapters)):
         pass
 
     messages = [record.getMessage() for record in caplog.records]
@@ -198,9 +185,8 @@ def test_startup_without_orphans_logs_zero_and_no_warning(caplog):
 
 
 def test_startup_orphan_count_failure_warns_and_starts(monkeypatch, caplog):
-    """autorizacion_asesores R51: si el recuento falla, WARNING y el servicio arranca."""
+    """R20: si el recuento falla, WARNING y el servicio arranca."""
     adapters, repo, _ = _build_adapters()
-    settings = Settings(advisor_chat_ids="111")
 
     def boom():
         raise RuntimeError("secreto-xyz")
@@ -208,7 +194,7 @@ def test_startup_orphan_count_failure_warns_and_starts(monkeypatch, caplog):
     monkeypatch.setattr(repo, "count_assigned_by_advisor", boom)
     caplog.set_level(logging.INFO)
 
-    with TestClient(create_app(settings, adapters)) as client:
+    with TestClient(create_app(Settings(), adapters)) as client:
         assert client.get("/health").status_code == 200
 
     messages = [record.getMessage() for record in caplog.records]
@@ -217,9 +203,8 @@ def test_startup_orphan_count_failure_warns_and_starts(monkeypatch, caplog):
 
 
 def test_create_app_does_not_count_orphans(monkeypatch):
-    """autorizacion_asesores R52: create_app no cuenta huérfanos ni abre la conexión."""
+    """R20: create_app no cuenta huérfanos hasta el arranque real."""
     adapters, repo, _ = _build_adapters()
-    settings = Settings(advisor_chat_ids="111")
     calls = []
 
     def boom():
@@ -227,8 +212,7 @@ def test_create_app_does_not_count_orphans(monkeypatch):
         raise AssertionError("no debe contar huérfanos")
 
     monkeypatch.setattr(repo, "count_assigned_by_advisor", boom)
-    app = create_app(settings, adapters)
+    app = create_app(Settings(), adapters)
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert calls == []
-

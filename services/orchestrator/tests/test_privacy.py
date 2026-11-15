@@ -212,7 +212,7 @@ def test_personal_routes_work_without_privacy_configuration(env_factory):
         assert response.status_code == 202
     assert env.gateway.sent[0] == (111, env.settings.link_failed_reply)
     assert len(env.repo.db_query_audits) == 1
-    assert len(env.handover.authorized) == 2
+    assert env.handover.authorized == []
     assert all(
         text not in (PRIVACY_NOTICE_TEXT, PRIVACY_ACCEPTED_REPLY)
         for _, text in env.gateway.sent

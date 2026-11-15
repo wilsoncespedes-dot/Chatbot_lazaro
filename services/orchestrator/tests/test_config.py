@@ -78,6 +78,7 @@ def test_only_health_and_messages_routes_exposed():
     # Feature 22 añade las vistas de manuales y fragmentos.
     # Feature 29 añade las rutas HTML del panel de asesores.
     # Feature 38 añade /acceso y las rutas internas /clients.
+    # Feature 53 añade los fragmentos en vivo y el JavaScript propio.
     assert paths == {
         "/health",
         "/messages",
@@ -98,6 +99,10 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/profiles",
         "/admin/profiles/{profile_id}/role",
         "/admin/profiles/{profile_id}/link-token",
+        "/admin/profiles/{profile_id}/2fa/reset",
+        "/admin/2fa",
+        "/admin/2fa/start",
+        "/admin/2fa/confirm",
         "/admin/events",
         "/admin/manuals",
         "/admin/manuals/{manual_id}",
@@ -107,6 +112,12 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/categories/threshold",
         "/admin/categories/{category_id}",
         "/admin/categories/{category_id}/active",
+        "/admin/etiquetas",
+        "/admin/etiquetas/{tag_id}",
+        "/admin/etiquetas/{tag_id}/activa",
+        "/admin/respuestas",
+        "/admin/respuestas/{reply_id}",
+        "/admin/respuestas/{reply_id}/activa",
         "/admin/texts",
         "/admin/texts/{field}/historial",
         "/admin/clientes",
@@ -122,17 +133,30 @@ def test_only_health_and_messages_routes_exposed():
         "/asesor",
         "/asesor/login",
         "/asesor/logout",
+        "/asesor/2fa",
+        "/asesor/2fa/start",
+        "/asesor/2fa/confirm",
         "/asesor/cases",
         "/asesor/cases/{case_id}",
         "/asesor/cases/{case_id}/memoria",
+        "/asesor/cases/{case_id}/notes",
+        "/asesor/cases/{case_id}/notes/{note_id}/delete",
+        "/asesor/cases/{case_id}/tags",
+        "/asesor/cases/{case_id}/tags/{tag_id}/remove",
         "/asesor/reply",
         "/asesor/assign",
         "/asesor/close",
         "/asesor/return",
         "/asesor/transfer",
         "/asesor/presence",
+        "/asesor/todos",
+        "/asesor/casos/{case_id}/reasignar",
+        "/asesor/metricas",
         "/asesor/supresiones",
         "/asesor/supresiones/{request_id}/execute",
+        "/asesor/live/inbox",
+        "/asesor/live/cases/{case_id}",
+        "/asesor/static/panel_live.js",
         "/admin/supresiones",
         "/admin/supresiones/{request_id}/execute",
     }
@@ -177,6 +201,11 @@ PANEL_ENV_VARS = [
     "SUPPRESSION_QUEUE_EXECUTED_LIMIT",
     "SUPPRESSION_DONE_REPLY",
     "SUPPRESSION_RESULT_TEMPLATE",
+    "PANEL_LIVE_ENABLED",
+    "PANEL_WS_ALLOWED_ORIGINS",
+    "PANEL_EVENTS_POLL_SECONDS",
+    "PANEL_EVENTS_RETENTION_HOURS",
+    "PANEL_WS_MAX_CONNECTIONS_PER_PROFILE",
 ]
 
 
@@ -195,6 +224,11 @@ def test_panel_settings_defaults_and_env_example():
     assert settings.suppression_queue_executed_limit == 20
     assert settings.suppression_done_reply.strip()
     assert settings.suppression_result_template == "resultado_supresion"
+    assert settings.panel_live_enabled is True
+    assert settings.panel_ws_allowed_origin_list == ()
+    assert settings.panel_events_poll_seconds == 2
+    assert settings.panel_events_retention_hours == 24
+    assert settings.panel_ws_max_connections_per_profile == 5
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
     declared = {
         ln.split("=", 1)[0].strip()
@@ -296,6 +330,90 @@ def test_admin_settings_defaults_and_env_example():
 )
 def test_admin_settings_reject_invalid_values(overrides):
     """R69: fuera de rango o con formato inválido, Settings falla al arrancar."""
+    with pytest.raises(ValidationError):
+        Settings(**overrides)
+
+
+CASE_ENV_VARS = [
+    "CASE_NOTE_MAX_CHARS",
+    "CASE_NOTES_MAX_PER_CASE",
+    "CASE_TAG_NAME_MAX_CHARS",
+    "CASE_TAGS_MAX_PER_CASE",
+]
+
+
+def test_case_annotation_settings_defaults_and_env_example():
+    """R40: defaults de notas y etiquetas y su presencia en .env.example."""
+    settings = Settings()
+    assert settings.case_note_max_chars == 1000
+    assert settings.case_notes_max_per_case == 50
+    assert settings.case_tag_name_max_chars == 40
+    assert settings.case_tags_max_per_case == 10
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    declared = {
+        ln.split("=", 1)[0].strip()
+        for ln in text.splitlines()
+        if "=" in ln and not ln.lstrip().startswith("#")
+    }
+    for name in CASE_ENV_VARS:
+        assert name in declared, name
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"case_note_max_chars": 0},
+        {"case_note_max_chars": 4001},
+        {"case_notes_max_per_case": 0},
+        {"case_notes_max_per_case": 501},
+        {"case_tag_name_max_chars": 0},
+        {"case_tag_name_max_chars": 101},
+        {"case_tags_max_per_case": 0},
+        {"case_tags_max_per_case": 51},
+    ],
+)
+def test_case_annotation_settings_reject_out_of_range(overrides):
+    """R40: fuera de rango, Settings falla al arrancar."""
+    with pytest.raises(ValidationError):
+        Settings(**overrides)
+
+
+SAVED_REPLY_ENV_VARS = [
+    "SAVED_REPLY_TITLE_MAX_CHARS",
+    "SAVED_REPLY_TEXT_MAX_CHARS",
+    "SAVED_REPLIES_MAX",
+]
+
+
+def test_saved_reply_settings_defaults_and_env_example():
+    """R23: defaults de respuestas guardadas y su presencia en .env.example."""
+    settings = Settings()
+    assert settings.saved_reply_title_max_chars == 80
+    assert settings.saved_reply_text_max_chars == 1000
+    assert settings.saved_replies_max == 100
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    declared = {
+        ln.split("=", 1)[0].strip()
+        for ln in text.splitlines()
+        if "=" in ln and not ln.lstrip().startswith("#")
+    }
+    for name in SAVED_REPLY_ENV_VARS:
+        assert name in declared, name
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"saved_reply_title_max_chars": 0},
+        {"saved_reply_title_max_chars": 201},
+        {"saved_reply_text_max_chars": 0},
+        {"saved_reply_text_max_chars": 4097},
+        {"saved_replies_max": 0},
+        {"saved_replies_max": 501},
+    ],
+)
+def test_saved_reply_settings_reject_out_of_range(overrides):
+    """R23: fuera de rango, Settings falla al arrancar."""
     with pytest.raises(ValidationError):
         Settings(**overrides)
 

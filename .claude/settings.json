@@ -1,8 +1,10 @@
 {
+  "model": "sonnet",
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
       "Bash",
+      "Agent",
       "Edit",
       "Write",
       "Read",

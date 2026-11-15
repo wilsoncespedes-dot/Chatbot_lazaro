@@ -1,6 +1,8 @@
 """Configuración del servicio orchestrator leída de variables de entorno."""
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 
@@ -39,6 +41,22 @@ _DB_QUERY_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _RLS_SETTING = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 
 AUTO_HANDOVER_FAILURE_ALLOWED_REASONS = ("no_relevant_chunks", "invalid_answer")
+ASSIGNMENT_MODES = ("manual", "automatica")
+
+
+def _is_valid_fernet_key(value: str) -> bool:
+    """R41: clave Fernet válida = 32 bytes en base64 urlsafe, sin importar cryptography."""
+    text = value.strip()
+    if not text or not re.fullmatch(r"[A-Za-z0-9_-]+=*", text):
+        return False
+    try:
+        decoded = base64.urlsafe_b64decode(text.encode("ascii"))
+    except (ValueError, UnicodeEncodeError, binascii.Error):
+        return False
+    return (
+        len(decoded) == 32
+        and base64.urlsafe_b64encode(decoded).decode("ascii") == text
+    )
 
 
 def _parse_db_query_allowlist(
@@ -99,26 +117,12 @@ class Settings(BaseSettings):
     auto_handover_failure_threshold: int = Field(default=3, ge=1)
     auto_handover_failure_reasons: str = "no_relevant_chunks,invalid_answer"
     handover_keywords: str = DEFAULT_HANDOVER_KEYWORDS
-    advisor_reply_confirmation: str = "Respuesta enviada al cliente."
-    advisor_close_confirmation: str = "Caso cerrado."
     case_closed_reply: str = (
         "Tu caso con el asesor quedó cerrado. Si necesitas algo más, escríbenos por aquí."
     )
     forward_failed_reply: str = (
         "No pude hacer llegar tu mensaje al asesor. Inténtalo de nuevo en unos minutos."
     )
-    advisor_command_help: str = (
-        "Comandos de asesor: /responder <case_id> <texto> para responder al cliente y "
-        "/cerrar <case_id> para cerrar el caso."
-    )
-    advisor_command_forbidden_reply: str = (
-        "No tienes permiso para usar ese comando sobre ese caso."
-    )
-    advisor_command_failed_reply: str = (
-        "No se pudo completar el comando. Revisa el número de caso o inténtalo de nuevo "
-        "en unos minutos."
-    )
-    advisor_command_case_closed_reply: str = "Ese caso ya está cerrado."
     link_token_ttl_minutes: int = Field(default=15, ge=1, le=1440)
     password_hash_iterations: int = Field(default=600000, ge=100000)
     profile_password_min_length: int = Field(default=12, ge=1)
@@ -133,6 +137,12 @@ class Settings(BaseSettings):
     admin_login_max_attempts: int = Field(default=5, ge=1, le=100)
     admin_login_window_minutes: int = Field(default=15, ge=1, le=1440)
     admin_trust_proxy_headers: bool = False
+    # segundo factor del panel (#54)
+    panel_2fa_required: bool | None = None
+    panel_2fa_encryption_key: str = ""
+    panel_2fa_issuer: str = Field(default="Lazaro Software", min_length=1, max_length=64)
+    panel_2fa_window_steps: int = Field(default=1, ge=0, le=2)
+    panel_2fa_recovery_codes: int = Field(default=8, ge=4, le=20)
     admin_manual_max_bytes: int = Field(default=20971520, ge=1, le=104857600)
     classifier_default_threshold: float = Field(default=0.6, ge=0, le=1)
     db_query_enabled: bool = False
@@ -287,6 +297,12 @@ class Settings(BaseSettings):
     advisor_history_max_messages: int = Field(default=100, ge=10, le=500)
     advisor_presence_ttl_minutes: int = Field(default=15, ge=1, le=240)
     advisor_inbox_refresh_seconds: int = Field(default=30, ge=0, le=600)
+    # panel de asesores en tiempo real (#53)
+    panel_live_enabled: bool = True
+    panel_ws_allowed_origins: str = ""
+    panel_events_poll_seconds: float = Field(default=2.0, ge=1, le=30)
+    panel_events_retention_hours: int = Field(default=24, ge=1, le=168)
+    panel_ws_max_connections_per_profile: int = Field(default=5, ge=1, le=20)
     suppression_deadline_business_days: int = Field(default=15, ge=1, le=60)
     suppression_due_soon_business_days: int = Field(default=3, ge=0, le=30)
     suppression_queue_executed_limit: int = Field(default=20, ge=0, le=200)
@@ -304,12 +320,41 @@ class Settings(BaseSettings):
     business_hours_end: str = "21:00"
     business_hours_days: str = "1,2,3,4,5,6,7"
     business_hours_utc_offset_minutes: int = Field(default=-300, ge=-720, le=840)
+    assignment_mode: str = "manual"
     expiry_notice_enabled: bool = True
     expiry_notice_max_attempts: int = Field(default=3, ge=1, le=10)
     expiry_notice_interval_seconds: int = Field(default=3600, ge=1)
     expiry_notice_http_timeout_seconds: int = Field(default=120, ge=1)
     admin_text_history_limit: int = Field(default=20, ge=1, le=200)
     admin_metrics_unanswered_limit: int = Field(default=20, ge=0, le=200)
+    # notas y etiquetas (#50)
+    case_note_max_chars: int = Field(default=1000, ge=1, le=4000)
+    case_notes_max_per_case: int = Field(default=50, ge=1, le=500)
+    case_tag_name_max_chars: int = Field(default=40, ge=1, le=100)
+    case_tags_max_per_case: int = Field(default=10, ge=1, le=50)
+    # respuestas guardadas del panel (#51)
+    saved_reply_title_max_chars: int = Field(default=80, ge=1, le=200)
+    saved_reply_text_max_chars: int = Field(default=1000, ge=1, le=4096)
+    saved_replies_max: int = Field(default=100, ge=1, le=500)
+
+    @field_validator("panel_2fa_required", mode="before")
+    @classmethod
+    def _empty_two_factor_required_is_unset(cls, value):
+        """R21: una variable vacía equivale a no definirla."""
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("panel_2fa_issuer")
+    @classmethod
+    def _validate_two_factor_issuer(cls, value: str) -> str:
+        """R43: el emisor no puede estar vacío ni superar 64 caracteres."""
+        text = value.strip()
+        if not text or len(text) > 64:
+            raise ValueError("PANEL_2FA_ISSUER debe tener entre 1 y 64 caracteres")
+        return text
 
     @field_validator("business_hours_start", "business_hours_end")
     @classmethod
@@ -317,6 +362,14 @@ class Settings(BaseSettings):
         if not re.fullmatch(r"^([01]\d|2[0-3]):[0-5]\d$", value):
             raise ValueError("BUSINESS_HOURS_START/END deben tener formato HH:MM")
         return value
+
+    @field_validator("assignment_mode")
+    @classmethod
+    def _validate_assignment_mode(cls, value: str) -> str:
+        text = value.strip()
+        if text not in ASSIGNMENT_MODES:
+            raise ValueError("ASSIGNMENT_MODE debe ser manual o automatica")
+        return text
 
     @field_validator("business_hours_days")
     @classmethod
@@ -421,10 +474,15 @@ class Settings(BaseSettings):
         tokens = [token.strip() for token in value.split(",") if token.strip()]
         if not tokens:
             raise ValueError("SUPPRESSION_EXECUTOR_ROLES no puede estar vacío")
-        invalid = [token for token in tokens if token not in ("admin", "asesor")]
+        invalid = [
+            token
+            for token in tokens
+            if token not in ("admin", "asesor", "responsable_datos")
+        ]
         if invalid:
             raise ValueError(
-                "SUPPRESSION_EXECUTOR_ROLES solo admite admin o asesor"
+                "SUPPRESSION_EXECUTOR_ROLES solo admite admin, asesor o "
+                "responsable_datos"
             )
         return ",".join(dict.fromkeys(tokens))
 
@@ -493,6 +551,8 @@ class Settings(BaseSettings):
             problems.append("IDENTITY_LINK_SIGNING_KEY")
         if not self.identity_login_required:
             problems.append("IDENTITY_LOGIN_REQUIRED")
+        if not _is_valid_fernet_key(self.panel_2fa_encryption_key):
+            problems.append("PANEL_2FA_ENCRYPTION_KEY")
         if problems:
             raise ProductionConfigError(problems)
         return self
@@ -507,6 +567,13 @@ class Settings(BaseSettings):
         if not _DB_QUERY_IDENTIFIER.fullmatch(self.db_query_views_schema):
             raise ValueError("DB_QUERY_VIEWS_SCHEMA debe ser un identificador válido")
         _parse_db_query_allowlist(self.db_query_allowlist, self.db_query_views_schema)
+
+    @property
+    def panel_2fa_required_effective(self) -> bool:
+        """R21, R22: obligatorio por defecto solo en producción."""
+        if self.panel_2fa_required is not None:
+            return self.panel_2fa_required
+        return self.app_env == "production"
 
     @property
     def handover_keyword_list(self) -> list[str]:
@@ -595,6 +662,15 @@ class Settings(BaseSettings):
         return tuple(
             token.strip()
             for token in self.advisor_whatsapp_templates.split(",")
+            if token.strip()
+        )
+
+    @property
+    def panel_ws_allowed_origin_list(self) -> tuple[str, ...]:
+        """R4: orígenes exactos permitidos; vacío activa la comprobación con `Host`."""
+        return tuple(
+            token.strip()
+            for token in self.panel_ws_allowed_origins.split(",")
             if token.strip()
         )
 

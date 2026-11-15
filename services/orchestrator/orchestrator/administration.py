@@ -54,10 +54,11 @@ class SettingsFormInvalid(ValueError):
 @dataclass(frozen=True)
 class SettingSpec:
     key: str
-    kind: Literal["int", "bool", "time", "days"]
+    kind: Literal["int", "bool", "time", "days", "enum"]
     minimum: int | None
     maximum: int | None
     default_attr: str
+    choices: tuple[str, ...] = ()
 
 
 OPERATIONAL_SETTINGS: tuple[SettingSpec, ...] = tuple(
@@ -90,10 +91,24 @@ OPERATIONAL_SETTINGS: tuple[SettingSpec, ...] = tuple(
         30,
         "suppression_due_soon_business_days",
     ),
+    SettingSpec(
+        "assignment.mode",
+        "enum",
+        None,
+        None,
+        "assignment_mode",
+        ("manual", "automatica"),
+    ),
 )
 
 OPERATIONAL_SETTINGS_BY_KEY = {spec.key: spec for spec in OPERATIONAL_SETTINGS}
-OPERATIONAL_PREFIXES = ("identity.", "expiry_notice.", "business_hours.", "suppression.")
+OPERATIONAL_PREFIXES = (
+    "identity.",
+    "expiry_notice.",
+    "business_hours.",
+    "suppression.",
+    "assignment.",
+)
 
 
 @dataclass(frozen=True)
@@ -112,6 +127,7 @@ class OperationalSettings:
     hours: BusinessHours
     suppression_deadline_business_days: int
     suppression_due_soon_business_days: int
+    assignment_mode: str
 
 
 def _default_value(spec: SettingSpec, settings: Settings) -> str:
@@ -145,6 +161,8 @@ def _valid_value(spec: SettingSpec, raw: str) -> bool:
     value = raw.strip()
     if spec.kind == "bool":
         return value in ("true", "false")
+    if spec.kind == "enum":
+        return value in spec.choices
     if spec.kind == "time":
         return _valid_time(value)
     if spec.kind == "days":
@@ -232,12 +250,17 @@ def resolve_operational_settings(
             ),
         )
     )
+    assignment_mode = valid.get(
+        "assignment.mode",
+        _default_value(OPERATIONAL_SETTINGS_BY_KEY["assignment.mode"], settings),
+    )
     return OperationalSettings(
         identity=identity,
         expiry_notice_enabled=expiry_enabled,
         hours=hours,
         suppression_deadline_business_days=deadline,
         suppression_due_soon_business_days=due_soon,
+        assignment_mode=assignment_mode,
     )
 
 

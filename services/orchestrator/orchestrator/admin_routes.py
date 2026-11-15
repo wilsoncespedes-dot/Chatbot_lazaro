@@ -37,6 +37,10 @@ from .domain import (
     TemplateExists,
     TemplateNotFound,
     TemplateTransitionInvalid,
+    TwoFactorCodeInvalid,
+    TwoFactorCodeRequired,
+    TwoFactorNotEnabled,
+    TwoFactorUnavailable,
     UsernameTaken,
     admin_metrics,
     authenticate_admin,
@@ -45,18 +49,27 @@ from .domain import (
     classifier_threshold,
     conversation_texts,
     create_client,
+    create_case_tag,
     create_profile,
     create_query_category,
+    create_saved_reply,
     create_template,
     execute_suppression_from_panel,
     issue_link_token,
+    list_case_tags,
     list_clients_admin,
     list_profiles,
     list_query_categories,
+    list_saved_replies,
+    rename_case_tag,
+    set_case_tag_active,
+    set_saved_reply_active,
+    update_saved_reply,
     operational_settings,
     recent_events,
     record_panel_audit,
     renew_credential,
+    reset_two_factor,
     revoke_credential,
     close_client_session,
     save_operational_settings,
@@ -72,6 +85,9 @@ from .privacy import CONVERSATION_TEXT_FIELDS, ConversationTexts
 
 SESSION_COOKIE = "admin_session"
 LOGIN_ERROR = "Usuario o contraseña incorrectos."
+TWO_FACTOR_REQUIRED = "Introduce tu código de verificación."
+TWO_FACTOR_INVALID = "Código de verificación incorrecto."
+TWO_FACTOR_UNAVAILABLE = "El segundo factor no está disponible."
 
 
 class LoginRequired(Exception):
@@ -104,6 +120,22 @@ def _require_session(request: Request, adapters: Adapters):
     if session is None:
         raise LoginRequired()
     return session
+
+
+def _require_any_session(request: Request, adapters: Adapters, roles=None):
+    """R23, R25: incluye sesiones restringidas a registro, filtrando el rol."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise LoginRequired()
+    session = adapters.repository.get_session_any(
+        hash_token(token), adapters.clock()
+    )
+    if session is None:
+        raise LoginRequired()
+    profile = adapters.repository.get_profile(session.profile_id)
+    if profile is None or (roles is not None and profile.role not in roles):
+        raise LoginRequired()
+    return session, profile
 
 
 def _require_csrf(session, form: dict[str, str]) -> None:
@@ -143,7 +175,9 @@ def _validate_profile_fields(
     if not USERNAME_PATTERN.fullmatch(normalized):
         return "El usuario debe tener de 3 a 64 caracteres: letras minúsculas, números, . _ -"
     if role not in ROLES:
-        return "El rol debe ser admin, asesor o cliente."
+        return (
+            "El rol debe ser admin, supervisor, asesor, responsable_datos o cliente."
+        )
     if len(password) < settings.profile_password_min_length:
         return "La contraseña es demasiado corta."
     return None
@@ -168,6 +202,18 @@ def _audit(profile, action: str, result: str, adapters: Adapters, **kwargs) -> N
         record_panel_audit(profile, action, result, adapters, **kwargs)
     except Exception:
         pass
+
+
+def _require_csrf_audited(
+    session, form: dict[str, str], actor, action: str, adapters: Adapters, **kwargs
+) -> None:
+    """R34: un fallo CSRF también queda auditado con su código (`forbidden`)."""
+    try:
+        _require_csrf(session, form)
+    except CsrfInvalid:
+        if actor is not None:
+            _audit(actor, action, "forbidden", adapters, **kwargs)
+        raise
 
 
 def _actor(session, adapters: Adapters):
@@ -213,6 +259,8 @@ def _effective_setting_value(key: str, operational) -> str:
         return str(operational.hours.utc_offset_minutes)
     if key == "suppression.deadline_business_days":
         return str(operational.suppression_deadline_business_days)
+    if key == "assignment.mode":
+        return operational.assignment_mode
     return str(operational.suppression_due_soon_business_days)
 
 
@@ -230,11 +278,15 @@ def _setting_range(spec) -> str:
         return "HH:MM"
     if spec.kind == "days":
         return "1-7 separados por comas"
+    if spec.kind == "enum":
+        return " | ".join(spec.choices)
     return f"{spec.minimum}..{spec.maximum}"
 
 
 def _settings_view(settings: Settings, adapters: Adapters) -> list[dict[str, str]]:
-    overrides = adapters.repository.get_app_settings(("identity.", "expiry_notice.", "business_hours.", "suppression."))
+    overrides = adapters.repository.get_app_settings(
+        ("identity.", "expiry_notice.", "business_hours.", "suppression.", "assignment.")
+    )
     operational = resolve_operational_settings(settings, overrides)
     rows = []
     for spec in OPERATIONAL_SETTINGS:
@@ -250,6 +302,7 @@ def _settings_view(settings: Settings, adapters: Adapters) -> list[dict[str, str
                 "default": _default_setting_value(spec, settings),
                 "origin": origin,
                 "range": _setting_range(spec),
+                "options": spec.choices,
             }
         )
     return rows
@@ -307,12 +360,36 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 client_ip(request, settings),
                 settings,
                 adapters,
+                form.get("code", ""),
             )
         except LoginThrottled:
             return _html(admin.render_login(LOGIN_ERROR), status_code=429)
+        except TwoFactorCodeRequired:
+            return _html(
+                admin.render_login(TWO_FACTOR_REQUIRED, "two_factor_required"),
+                status_code=401,
+            )
+        except TwoFactorCodeInvalid:
+            return _html(
+                admin.render_login(TWO_FACTOR_INVALID, "two_factor_invalid"),
+                status_code=401,
+            )
+        except TwoFactorUnavailable:
+            return _html(
+                admin.render_login(TWO_FACTOR_UNAVAILABLE, "two_factor_unavailable"),
+                status_code=503,
+            )
         if token is None:
             return _html(admin.render_login(LOGIN_ERROR), status_code=401)
-        response = _redirect("/admin")
+        token_session = adapters.repository.get_session_any(
+            hash_token(token), adapters.clock()
+        )
+        target = (
+            "/admin/2fa"
+            if token_session is not None and token_session.enroll_only
+            else "/admin"
+        )
+        response = _redirect(target)
         response.set_cookie(
             key=SESSION_COOKIE,
             value=token,
@@ -326,7 +403,9 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
 
     @router.post("/admin/logout")
     async def logout(request: Request) -> Response:
-        session = _require_session(request, adapters)
+        session, _profile = _require_any_session(
+            request, adapters, frozenset({"admin"})
+        )
         form = await _form(request)
         _require_csrf(session, form)
         adapters.repository.delete_session(session.token_hash)
@@ -429,6 +508,70 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 issued.token, link, issued.expires_at, session.csrf_token
             )
         )
+
+    @router.post("/admin/profiles/{profile_id}/2fa/reset")
+    async def reset_profile_two_factor(profile_id: str, request: Request) -> Response:
+        """R35–R38, R40: solo un admin con CSRF restablece el segundo factor."""
+        token = request.cookies.get(SESSION_COOKIE)
+        if not token:
+            raise LoginRequired()
+        session = adapters.repository.get_session_any(
+            hash_token(token), adapters.clock()
+        )
+        if session is None:
+            raise LoginRequired()
+        actor = _actor(session, adapters)
+        if actor is None or actor.role != "admin":
+            if actor is not None:
+                _audit(
+                    actor,
+                    "two_factor_reset",
+                    "forbidden",
+                    adapters,
+                    target=profile_id,
+                )
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        form = await _form(request)
+        _require_csrf_audited(
+            session,
+            form,
+            actor,
+            "two_factor_reset",
+            adapters,
+            target=profile_id,
+        )
+        try:
+            reset_two_factor(actor, profile_id, adapters)
+        except ProfileNotFound:
+            _audit(actor, "two_factor_reset", "profile_not_found", adapters,
+                   target=profile_id)
+            return _html(
+                admin.render_message(
+                    "Perfil no encontrado", "profile_not_found", session.csrf_token
+                ),
+                status_code=404,
+            )
+        except TwoFactorNotEnabled:
+            _audit(actor, "two_factor_reset", "two_factor_not_enabled", adapters,
+                   target=profile_id)
+            return _html(
+                admin.render_profiles(
+                    list_profiles(adapters),
+                    session.csrf_token,
+                    "two_factor_not_enabled",
+                ),
+                status_code=409,
+            )
+        except DomainError as exc:
+            _audit(actor, "two_factor_reset", exc.code, adapters, target=profile_id)
+            return _html(
+                admin.render_error(exc.status_code, exc.code, session.csrf_token),
+                status_code=exc.status_code,
+            )
+        return _redirect("/admin/profiles")
 
     @router.get("/admin/events")
     async def events_page(request: Request) -> HTMLResponse:
@@ -621,6 +764,298 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
         except CategoryNotFound:
             return _category_page(session, 404, "category_not_found")
         return _redirect("/admin/categories")
+
+    def _tags_session(request):
+        """R19: una sesión válida de otro rol debe dar 403, no redirigir."""
+        token = request.cookies.get(SESSION_COOKIE)
+        if not token:
+            raise LoginRequired()
+        session = adapters.repository.get_session_for_roles(
+            hash_token(token), adapters.clock(), ROLES
+        )
+        if session is None:
+            raise LoginRequired()
+        return session
+
+    def _tags_actor(session):
+        profile = _actor(session, adapters)
+        if profile is None or profile.role != "admin":
+            return None
+        return profile
+
+    def _tags_page(session, status_code: int = 200, error: str | None = None):
+        return _html(
+            admin.render_tags(
+                list_case_tags(adapters), session.csrf_token, error
+            ),
+            status_code=status_code,
+        )
+
+    @router.get("/admin/etiquetas")
+    async def tags_page(request: Request) -> HTMLResponse:
+        session = _tags_session(request)
+        if _tags_actor(session) is None:
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        return _tags_page(session)
+
+    @router.post("/admin/etiquetas")
+    async def create_tag(request: Request) -> Response:
+        session = _tags_session(request)
+        profile = _actor(session, adapters)
+        actor = profile if profile is not None and profile.role == "admin" else None
+        form = await _form(request)
+        _require_csrf_audited(session, form, profile, "tag_created", adapters)
+        if actor is None:
+            if profile is not None:
+                _audit(profile, "tag_created", "forbidden", adapters)
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        try:
+            tag = create_case_tag(
+                form.get("name", ""), settings, adapters
+            )
+        except DomainError as exc:
+            _audit(actor, "tag_created", exc.code, adapters)
+            return _tags_page(session, exc.status_code, exc.code)
+        _audit(actor, "tag_created", "ok", adapters, target=tag.id)
+        return _redirect("/admin/etiquetas")
+
+    @router.post("/admin/etiquetas/{tag_id}")
+    async def rename_tag(tag_id: str, request: Request) -> Response:
+        session = _tags_session(request)
+        profile = _actor(session, adapters)
+        actor = profile if profile is not None and profile.role == "admin" else None
+        form = await _form(request)
+        _require_csrf_audited(
+            session, form, profile, "tag_renamed", adapters, target=tag_id
+        )
+        if actor is None:
+            if profile is not None:
+                _audit(
+                    profile, "tag_renamed", "forbidden", adapters, target=tag_id
+                )
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        try:
+            rename_case_tag(
+                tag_id, form.get("name", ""), settings, adapters
+            )
+        except DomainError as exc:
+            _audit(actor, "tag_renamed", exc.code, adapters, target=tag_id)
+            return _tags_page(session, exc.status_code, exc.code)
+        _audit(actor, "tag_renamed", "ok", adapters, target=tag_id)
+        return _redirect("/admin/etiquetas")
+
+    @router.post("/admin/etiquetas/{tag_id}/activa")
+    async def change_tag_active(tag_id: str, request: Request) -> Response:
+        session = _tags_session(request)
+        profile = _actor(session, adapters)
+        actor = profile if profile is not None and profile.role == "admin" else None
+        form = await _form(request)
+        _require_csrf_audited(
+            session, form, profile, "tag_active_changed", adapters, target=tag_id
+        )
+        if actor is None:
+            if profile is not None:
+                _audit(
+                    profile,
+                    "tag_active_changed",
+                    "forbidden",
+                    adapters,
+                    target=tag_id,
+                )
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        active_value = form.get("active", "")
+        if active_value not in ("0", "1"):
+            _audit(
+                actor, "tag_active_changed", "validation_error", adapters,
+                target=tag_id,
+            )
+            return _tags_page(
+                session, 422, "El estado debe ser 0 o 1."
+            )
+        try:
+            set_case_tag_active(tag_id, active_value == "1", adapters)
+        except DomainError as exc:
+            _audit(actor, "tag_active_changed", exc.code, adapters, target=tag_id)
+            return _tags_page(session, exc.status_code, exc.code)
+        _audit(actor, "tag_active_changed", "ok", adapters, target=tag_id)
+        return _redirect("/admin/etiquetas")
+
+    def _saved_replies_session(request):
+        """R6: una sesión válida de otro rol debe dar 403, no redirigir."""
+        token = request.cookies.get(SESSION_COOKIE)
+        if not token:
+            raise LoginRequired()
+        session = adapters.repository.get_session_for_roles(
+            hash_token(token), adapters.clock(), ROLES
+        )
+        if session is None:
+            raise LoginRequired()
+        return session
+
+    def _saved_replies_page(
+        session, status_code: int = 200, error: str | None = None
+    ):
+        return _html(
+            admin.render_saved_replies(
+                list_saved_replies(adapters), session.csrf_token, error
+            ),
+            status_code=status_code,
+        )
+
+    @router.get("/admin/respuestas")
+    async def saved_replies_page(request: Request) -> HTMLResponse:
+        session = _saved_replies_session(request)
+        profile = _actor(session, adapters)
+        if profile is None or profile.role != "admin":
+            if profile is not None:
+                _audit(profile, "saved_replies_viewed", "forbidden", adapters)
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        return _saved_replies_page(session)
+
+    @router.post("/admin/respuestas")
+    async def create_saved_reply_page(request: Request) -> Response:
+        session = _saved_replies_session(request)
+        profile = _actor(session, adapters)
+        actor = profile if profile is not None and profile.role == "admin" else None
+        form = await _form(request)
+        _require_csrf_audited(
+            session, form, profile, "saved_reply_created", adapters
+        )
+        if actor is None:
+            if profile is not None:
+                _audit(profile, "saved_reply_created", "forbidden", adapters)
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        try:
+            reply = create_saved_reply(
+                form.get("title", ""), form.get("body", ""), settings, adapters
+            )
+        except DomainError as exc:
+            _audit(actor, "saved_reply_created", exc.code, adapters)
+            return _saved_replies_page(session, exc.status_code, exc.code)
+        _audit(actor, "saved_reply_created", "ok", adapters, target=reply.id)
+        return _redirect("/admin/respuestas")
+
+    @router.post("/admin/respuestas/{reply_id}")
+    async def edit_saved_reply(reply_id: str, request: Request) -> Response:
+        session = _saved_replies_session(request)
+        profile = _actor(session, adapters)
+        actor = profile if profile is not None and profile.role == "admin" else None
+        form = await _form(request)
+        _require_csrf_audited(
+            session,
+            form,
+            profile,
+            "saved_reply_updated",
+            adapters,
+            target=reply_id,
+        )
+        if actor is None:
+            if profile is not None:
+                _audit(
+                    profile,
+                    "saved_reply_updated",
+                    "forbidden",
+                    adapters,
+                    target=reply_id,
+                )
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        try:
+            update_saved_reply(
+                reply_id,
+                form.get("title", ""),
+                form.get("body", ""),
+                settings,
+                adapters,
+            )
+        except DomainError as exc:
+            _audit(
+                actor, "saved_reply_updated", exc.code, adapters, target=reply_id
+            )
+            return _saved_replies_page(session, exc.status_code, exc.code)
+        _audit(actor, "saved_reply_updated", "ok", adapters, target=reply_id)
+        return _redirect("/admin/respuestas")
+
+    @router.post("/admin/respuestas/{reply_id}/activa")
+    async def change_saved_reply_active(
+        reply_id: str, request: Request
+    ) -> Response:
+        session = _saved_replies_session(request)
+        profile = _actor(session, adapters)
+        actor = profile if profile is not None and profile.role == "admin" else None
+        form = await _form(request)
+        _require_csrf_audited(
+            session,
+            form,
+            profile,
+            "saved_reply_active_changed",
+            adapters,
+            target=reply_id,
+        )
+        if actor is None:
+            if profile is not None:
+                _audit(
+                    profile,
+                    "saved_reply_active_changed",
+                    "forbidden",
+                    adapters,
+                    target=reply_id,
+                )
+            return _html(
+                admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+            )
+        active_value = form.get("active", "")
+        if active_value not in ("0", "1"):
+            _audit(
+                actor,
+                "saved_reply_active_changed",
+                "validation_error",
+                adapters,
+                target=reply_id,
+            )
+            return _saved_replies_page(
+                session, 422, "El estado debe ser 0 o 1."
+            )
+        try:
+            set_saved_reply_active(reply_id, active_value == "1", adapters)
+        except DomainError as exc:
+            _audit(
+                actor,
+                "saved_reply_active_changed",
+                exc.code,
+                adapters,
+                target=reply_id,
+            )
+            return _saved_replies_page(session, exc.status_code, exc.code)
+        _audit(
+            actor,
+            "saved_reply_active_changed",
+            "ok",
+            adapters,
+            target=reply_id,
+        )
+        return _redirect("/admin/respuestas")
 
     @router.get("/admin/texts")
     async def texts_page(request: Request) -> HTMLResponse:
@@ -967,7 +1402,7 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
         _require_csrf(session, form)
         actor = _actor(session, adapters)
         before = adapters.repository.get_app_settings(
-            ("identity.", "expiry_notice.", "business_hours.", "suppression.")
+            ("identity.", "expiry_notice.", "business_hours.", "suppression.", "assignment.")
         )
         try:
             save_operational_settings(form, actor, settings, adapters)

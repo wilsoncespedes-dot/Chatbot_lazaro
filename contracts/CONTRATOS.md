@@ -39,13 +39,16 @@ Todo error tiene la forma `{"error": "<codigo>", "message": "<texto>"}` (modelo
 |------|----------------------|-------|--------|
 | 401  | `unauthorized`       | todas las rutas del contrato | falta `X-Service-Token` o no coincide con `SERVICE_TOKEN` |
 | 422  | `validation_error`   | todas | el cuerpo no valida contra el modelo (el servicio sustituye la respuesta 422 por defecto de FastAPI por `{error, message}`) |
-| 403  | `forbidden`          | `/cases/{id}/authorize`, `/cases/{id}/reply`, `/cases/{id}/close`, `/cases/{id}/assign`, `/cases/{id}/transfer` | el asesor no está autorizado para esa acción sobre el caso (S12) |
-| 404  | `not_found`          | `/cases/{id}/reply`, `/cases/{id}/close` | el caso no existe |
-| 409  | `case_closed`        | `/cases/{id}/assign`, `/cases/{id}/reply` | el caso está cerrado (S11) |
+| 403  | `forbidden`          | `GET /cases` (`scope=all`), `/cases/{id}/authorize`, `/cases/{id}/reply`, `/cases/{id}/close`, `/cases/{id}/assign`, `/cases/{id}/transfer`, `/cases/{id}/reassign` | el perfil no está autorizado para esa acción (S12) |
+| 404  | `not_found`          | `/cases/{id}/reply`, `/cases/{id}/close`, `/cases/{id}/reassign`, `/cases/{id}/auto-assign` | el caso no existe |
+| 409  | `case_closed`        | `/cases/{id}/assign`, `/cases/{id}/reply`, `/cases/{id}/reassign`, `/cases/{id}/auto-assign` | el caso está cerrado (S11) |
+| 409  | `case_not_assigned`  | `/cases/{id}/reassign` | el caso no está `assigned` y no se puede reasignar (S12) |
+| 409  | `case_changed`       | `/cases/{id}/reassign` | el caso cambió entre la lectura y la escritura condicional (S12) |
 | 415  | `unsupported_format` | `/manuals` | el archivo no es PDF ni DOCX |
 | 422  | `empty_document`     | `/manuals` | archivo vacío o sin texto extraíble |
 | 502  | `telegram_error`     | `/send` | la API de Telegram falla |
 | 502  | `upstream_error`     | `/send` (variante canónica), `/cases/{id}/reply` | falla el adaptador del canal o la llamada a `POST /send` del gateway |
+| 503  | `roster_out_of_sync` | `/handover`, `/cases`, `/cases/{id}/authorize`, `/cases/{id}/assign`, `/cases/{id}/auto-assign`, `/cases/{id}/transfer`, `/cases/{id}/reassign`, `/cases/{id}/close` | la generación del roster indicada en `X-Advisor-Roster-Generation` no coincide con la sincronizada (S12) |
 | 503  | `privacy_not_configured` | `/privacy/purge` | falta `PRIVACY_RETENTION_DAYS` (o, en handover, `PRIVACY_ACTIVE_CASE_MAX_DAYS`); no se borra nada |
 | 500  | `internal_error`     | todas | error inesperado; nunca se devuelve el stack trace |
 
@@ -184,7 +187,7 @@ normalizado y respuesta abstracta»). La respuesta y los errores no cambian.
 ### POST /send
 
 - **Expone:** telegram_gateway
-- **Llama:** orchestrator, handover (avisos a asesores y aviso de vencimiento al cliente)
+- **Llama:** orchestrator, handover (aviso de vencimiento al cliente)
 - **Modelos:** `SendRequest` → `SendResponse`
 
 También acepta la variante canónica `ChannelSendRequest` (canal, destino y
@@ -256,6 +259,12 @@ fragmentos que superan el umbral de similitud, ordenados de mayor a menor
 - **Llama:** orchestrator
 - **Modelos:** `HandoverRequest` → `HandoverResponse`
 
+`POST /handover` crea o reutiliza el caso abierto del contacto. Si existe al
+menos un perfil con rol `asesor` en el roster sincronizado responde `queued`
+sin enviar avisos por Telegram; el caso aparece en la bandeja del panel. Si no
+hay ningún perfil asesor responde `no_advisors` (S12). Las operaciones
+dependientes del roster exigen el encabezado `X-Advisor-Roster-Generation`.
+
 #### Request
 
 | Campo | Tipo | Obligatorio | Descripción |
@@ -280,7 +289,7 @@ Cada elemento de `last_messages` (`LastMessage`):
 
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
-| `status` | `notified` \| `no_advisors` | sí | `notified` si se avisó a algún asesor; `no_advisors` si no hay asesores |
+| `status` | `queued` \| `no_advisors` | sí | `queued` si hay perfiles asesores y el caso queda en la bandeja del panel; `no_advisors` si no hay ninguno |
 | `case_id` | identificador | sí | caso efectivo: el nuevo o el abierto que se reutilizó (S3) |
 
 #### Errores
@@ -289,12 +298,13 @@ Cada elemento de `last_messages` (`LastMessage`):
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
 | 422 | validation_error | el cuerpo no valida contra `HandoverRequest` |
+| 503 | roster_out_of_sync | la generación del roster no coincide con la sincronizada |
 | 500 | internal_error | error inesperado |
 
 ### POST /cases/{id}/reply
 
 - **Expone:** orchestrator
-- **Llama:** asesor (herramienta interna con token; panel de asesores en el futuro)
+- **Llama:** asesor (herramienta interna con token; panel de asesores)
 - **Modelos:** `CaseReplyRequest` → `CaseReplyResponse`
 
 `{id}` es el `case_id` (identificador, 1–64 caracteres).
@@ -508,7 +518,7 @@ embedding, manual ni orden. Desactivar un fragmento solo lo saca de
 ### POST /cases/{id}/close
 
 - **Expone:** handover
-- **Llama:** asesor (herramienta interna con token; panel en el futuro), orchestrator (comando `/cerrar` de un asesor desde Telegram, #16)
+- **Llama:** orchestrator (panel de asesores)
 - **Modelos:** `CaseCloseRequest` → `CaseCloseResponse`
 
 `{id}` es el `case_id` (identificador, 1–64 caracteres). Cerrar un caso ya
@@ -609,6 +619,50 @@ asignado; asignar un caso `closed` responde `409` con `error` = `case_closed`
 | 409 | case_closed | el caso está cerrado (S11) |
 | 500 | internal_error | error inesperado |
 
+### POST /cases/{id}/auto-assign
+
+- **Expone:** handover
+- **Llama:** orchestrator (al escalar un caso en modo de asignación `automatica`, #52)
+- **Modelos:** `CaseAutoAssignRequest` → `CaseAutoAssignResponse`
+
+La ruta `POST /cases/{case_id}/auto-assign` elige y asigna el caso en una sola
+transacción serializada (S16). `{id}` es el `case_id` (identificador, 1–64 caracteres).
+`candidate_ids` son los perfiles que el orquestador considera
+disponibles; handover descarta los que no son asesores atendedores del roster.
+Entre los válidos elige el de menor número de casos `assigned` y, a igual carga,
+el menor `advisor_id` lexicográfico. Solo asigna si el caso sigue `open` y sin
+asesor: si una persona lo asignó, respondió o cerró antes, no lo modifica y
+responde `skipped`. Sin candidatos válidos responde `queued` sin modificar el
+caso. Un caso cerrado responde `409` con `error` = `case_closed`. Exige
+`X-Service-Token`.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `candidate_ids` | lista de identificadores (1–200) | sí | perfiles atendedores disponibles, sin repetir |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `assigned` \| `queued` \| `skipped` | sí | resultado de la asignación automática |
+| `case_id` | identificador | sí | caso solicitado |
+| `advisor_id` | identificador o `null` | sí | asesor asignado; `null` si quedó en cola o no se modificó sin asignación |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `CaseAutoAssignRequest` |
+| 404 | not_found | el caso no existe |
+| 409 | case_closed | el caso está cerrado |
+| 503 | roster_out_of_sync | la generación del roster no coincide con la sincronizada (S12) |
+| 500 | internal_error | error inesperado |
+
 ### POST /cases/{id}/transfer
 
 - **Expone:** handover
@@ -617,9 +671,10 @@ asignado; asignar un caso `closed` responde `409` con `error` = `case_closed`
 
 `{id}` es el `case_id` (identificador, 1–64 caracteres). Reasigna un caso
 `assigned` del asesor que lo tiene al asesor destino. Solo el asesor asignado
-puede transferirlo y ambos deben estar en `ADVISOR_CHAT_IDS`; el caso no cambia
-de estado y no se envía aviso por Telegram al destino (S6). Asignar a uno mismo
-o a un asesor no registrado responde `422` sin modificar el caso.
+puede transferirlo y ambos deben ser perfiles con rol `asesor` del roster
+sincronizado; el caso no cambia de estado y no se envía aviso por Telegram al
+destino (S6). Asignar a uno mismo o a un asesor no registrado responde `422` sin
+modificar el caso.
 
 #### Request
 
@@ -649,10 +704,58 @@ o a un asesor no registrado responde `422` sin modificar el caso.
 | 409 | case_closed | el caso está cerrado |
 | 500 | internal_error | error inesperado |
 
+### POST /cases/{id}/reassign
+
+- **Expone:** handover
+- **Llama:** orchestrator (panel de asesores, reasignación de un supervisor)
+- **Modelos:** `CaseReassignRequest` → `CaseReassignResponse`
+
+`{id}` es el `case_id` (identificador, 1–64 caracteres). Un supervisor
+registrado reasigna un caso `assigned` a otro asesor atendedor registrado. Es
+una escritura condicional: solo se aplica si el caso sigue `assigned` al asesor
+leído. No cambia el estado del caso y no se envía aviso por Telegram al
+destino. Reasignar no es responder, asignar ni cerrar; un asesor con rol
+`asesor` recibe `403`. El destino debe ser otro perfil del roster y el caso no
+puede estar `open`, `timed_out` ni `closed` (S12). Si el caso no está asignado
+responde `409` con `error` = `case_not_assigned`; si la escritura condicional
+pierde la carrera responde `409` con `error` = `case_changed`.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `advisor_id` | identificador | sí | `profile_id` del supervisor que reasigna (S6) |
+| `target_advisor_id` | identificador | sí | perfil atendedor registrado que recibe el caso |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `assigned` | sí | siempre `assigned`; el estado no cambia |
+| `case_id` | identificador | sí | caso reasignado |
+| `previous_advisor_id` | identificador o `null` | sí | asesor anterior; `null` si el caso era huérfano |
+| `advisor_id` | identificador | sí | nuevo asesor asignado (`target_advisor_id`) |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida o el destino no es un asesor atendedor registrado distinto del actual |
+| 403 | forbidden | el `advisor_id` no es un supervisor registrado; el caso no cambia |
+| 404 | not_found | el caso no existe |
+| 409 | case_closed | el caso está cerrado |
+| 409 | case_not_assigned | el caso está `open` o `timed_out` |
+| 409 | case_changed | el caso cambió entre la lectura y la escritura condicional (respondido y reasignado, transferido o cerrado) |
+| 503 | roster_out_of_sync | la generación del roster no coincide con la sincronizada (S12) |
+| 500 | internal_error | error inesperado |
+
 ### POST /cases/{id}/authorize
 
 - **Expone:** handover
-- **Llama:** orchestrator (antes de reenviar la respuesta de un asesor con `POST /cases/{id}/reply` y, con el comando `/cerrar` de un asesor, antes de `POST /cases/{id}/close`)
+- **Llama:** orchestrator (antes de reenviar la respuesta de un asesor con `POST /cases/{id}/reply` y antes de `POST /cases/{id}/close`)
 - **Modelos:** `CaseAuthorizeRequest` → `CaseAuthorizeResponse`
 
 `{id}` es el `case_id` (identificador, 1–64 caracteres). Consulta si el asesor
@@ -695,15 +798,16 @@ responde `200` con `allowed` = `true`; si no, responde `403` con `error` =
 - **Modelos:** `CaseClientMessageRequest` → `CaseClientMessageResponse`
 
 `{id}` es el `case_id` (identificador, 1–64 caracteres). Si el caso está `assigned`,
-handover envía el texto al asesor asignado y responde `200` con `status` =
-`forwarded`; si el caso existe y no está `assigned`, responde `200` con `status` =
-`not_assigned` sin enviar nada (S13).
+el mensaje queda disponible en la conversación del panel y handover responde `200`
+con `status` = `available_in_panel`, sin enviarlo por Telegram; si el caso existe y
+no está `assigned`, responde `200` con `status` = `not_assigned` sin enviar nada
+(S13).
 
 #### Request
 
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
-| `text` | texto (1–4096) | sí | mensaje del cliente que se reenvía al asesor |
+| `text` | texto (1–4096) | sí | mensaje del cliente que queda visible en el panel |
 | `at` | fecha ISO 8601 con zona | sí | momento del mensaje del cliente |
 
 #### Respuesta
@@ -712,7 +816,7 @@ handover envía el texto al asesor asignado y responde `200` con `status` =
 
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
-| `status` | `forwarded` \| `not_assigned` | sí | `forwarded` si se envió al asesor asignado; `not_assigned` si el caso no está `assigned` |
+| `status` | `available_in_panel` \| `not_assigned` | sí | `available_in_panel` si el caso está `assigned`; `not_assigned` si no lo está |
 | `case_id` | identificador | sí | caso del mensaje |
 
 #### Errores
@@ -722,7 +826,6 @@ handover envía el texto al asesor asignado y responde `200` con `status` =
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
 | 422 | validation_error | el cuerpo no valida contra `CaseClientMessageRequest` |
 | 404 | not_found | el caso no existe |
-| 502 | upstream_error | falló el envío al asesor (la llamada a `POST /send` del gateway falla) |
 | 500 | internal_error | error inesperado |
 
 ### POST /credentials/expiry-notices
@@ -811,17 +914,22 @@ El cuerpo es el objeto vacío `{}`.
 - **Modelos:** `CaseListQuery` → `CaseListResponse` (elementos `CaseListItem`)
 
 Lista de solo lectura de los casos que un asesor puede gestionar según S12 y la
-regla de huérfanos (S14). Exige `X-Service-Token`. Un `advisor_id` que no está en
-`ADVISOR_CHAT_IDS` recibe `200` con la lista vacía.
+regla de huérfanos (S14). Exige `X-Service-Token`. Con `scope=mine` (por
+defecto), un `advisor_id` que no es un perfil atendedor del roster sincronizado
+recibe `200` con la lista vacía. Con `scope=all`, solo un supervisor registrado
+recibe todos los casos de cualquier estado; otro perfil recibe `403` con
+`error` = `forbidden`.
 
 #### Request
 
 Los parámetros viajan en la query; un parámetro no declarado se rechaza con
-`422 validation_error`.
+`422 validation_error`. La generación del roster viaja en
+`X-Advisor-Roster-Generation`.
 
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
-| `advisor_id` | identificador (1–64) | sí | chat_id del asesor que pide el listado (S6) |
+| `advisor_id` | identificador (1–64) | sí | `profile_id` del asesor o supervisor que pide el listado (S6) |
+| `scope` | `mine` \| `all` | no | `mine` lista lo gestionable por el solicitante; `all` es la vista global del supervisor (S14) |
 
 #### Respuesta
 
@@ -833,9 +941,10 @@ elemento (`CaseListItem`):
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
 | `case_id` | identificador | sí | caso listado |
-| `status` | `open` \| `timed_out` \| `assigned` | sí | estado actual del caso |
+| `status` | `open` \| `timed_out` \| `assigned` \| `closed` | sí | estado actual del caso |
 | `created_at` | fecha ISO 8601 con zona | sí | fecha de creación del caso |
-| `actions` | lista no vacía y sin repetidos de `reply` \| `assign` \| `close` | sí | acciones que el asesor puede hacer hoy (S14) |
+| `actions` | lista no vacía y sin repetidos de `reply` \| `assign` \| `close` \| `reassign` | sí | acciones que el solicitante puede hacer hoy; `reassign` solo aparece en la vista global del supervisor (S14) |
+| `advisor_id` | identificador o `null` | no | asesor actualmente asignado; `null` si no hay ninguno (S14) |
 
 #### Errores
 
@@ -843,7 +952,65 @@ elemento (`CaseListItem`):
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
 | 422 | validation_error | los parámetros de query no validan contra `CaseListQuery` |
+| 403 | forbidden | `scope=all` con un `advisor_id` que no es supervisor registrado |
+| 503 | roster_out_of_sync | la generación del roster no coincide con la sincronizada (S12) |
 | 500 | internal_error | error inesperado |
+
+### POST /advisors/sync
+
+- **Expone:** handover
+- **Llama:** orchestrator (al arrancar y después de crear o cambiar el rol de un perfil)
+- **Modelos:** `AdvisorRosterSyncRequest` → `AdvisorRosterSyncResponse`
+
+Reemplaza el roster completo de asesores y migra las asignaciones antiguas en
+una única transacción. Es la única fuente que handover usa para decidir quién
+es asesor. Exige `X-Service-Token`. El request incluye la generación del
+orchestrator; handover guarda esa generación y la usa para rechazar operaciones
+atrasadas.
+
+- `role` = `asesor` o `supervisor` habilita al perfil como asesor atendedor y
+  conserva el rol en el roster; `responsable_datos` y `otro` no se registran
+  como asesores (R7, R24 de #49).
+- `telegram_user_id` solo sirve para migrar un caso cuyo `advisor_id` coincide
+  con ese valor: se reemplaza por el `profile_id` del mismo perfil. Si el valor
+  antiguo no coincide con ningún perfil vinculado, el caso queda huérfano
+  (`advisor_id` nulo) sin perder su estado ni su historial.
+- Repetir la sincronización del mismo roster es idempotente: un `profile_id` ya
+  migrado no se vuelve a interpretar como id Telegram.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `generation` | entero ≥ 0 | sí | generación del roster del orchestrator |
+| `profiles` | lista de `AdvisorRosterEntry` | sí | snapshot completo de perfiles |
+
+Cada elemento (`AdvisorRosterEntry`):
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `profile_id` | identificador | sí | id del perfil |
+| `role` | `asesor` \| `supervisor` \| `responsable_datos` \| `otro` | sí | rol del perfil; solo `asesor` y `supervisor` se registran como atendedores |
+| `telegram_user_id` | entero o `null` | no | solo para migrar asignaciones anteriores |
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `synced` | sí | siempre `synced` |
+| `generation` | entero ≥ 0 | sí | generación aplicada |
+| `advisors` | entero ≥ 0 | sí | perfiles atendedores (`asesor` o `supervisor`) del snapshot |
+| `orphaned_cases` | entero ≥ 0 | sí | casos asignados que quedaron huérfanos tras migrar |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `AdvisorRosterSyncRequest` |
+| 500 | internal_error | falla la persistencia; no se aplica un roster parcial |
 
 ## Supuestos a confirmar
 
@@ -857,13 +1024,14 @@ contrato.
 | S3 | `case_id` lo genera el orquestador (texto, p. ej. UUID). Si el contacto ya tiene un caso abierto, handover lo reutiliza y devuelve en `HandoverResponse.case_id` el caso efectivo | — |
 | S4 | `HandoverRequest` añade `chat_id` para que handover pueda avisar al cliente al vencer la espera | — |
 | S5 | `reason` ∈ `no_relevant_chunks`, `user_request`, `invalid_answer` (este último reservado para la feature 6) | — |
-| S6 | `advisor_id` es texto; en la versión mínima contiene el chat_id del asesor (de `ADVISOR_CHAT_IDS`) en decimal | — |
+| S6 | `advisor_id` es texto y contiene el `profile_id` de un perfil con rol `asesor` o `supervisor` del roster sincronizado (`POST /advisors/sync`), no un `telegram_user_id`. Un asesor sin Telegram vinculado puede actuar desde el panel. | — |
 | S7 | `category` de `POST /search` es opcional y RAG la ignora hasta que exista el clasificador | `null` |
 | S8 | Cerrar un caso ya cerrado es idempotente: `200` con `status` = `closed` | — |
 | S9 | Límites: texto ≤ 4096 (límite de `sendMessage` de Telegram), `top_k` ≤ 20, identificadores ≤ 64, nombre de manual ≤ 200 | `MAX_TEXT_LENGTH`, `MAX_TOP_K`, `MAX_IDENTIFIER_LENGTH`, `MAX_MANUAL_NAME_LENGTH` |
 | S10 | La respuesta de `POST /search` es un arreglo JSON de nivel superior | — |
 | S11 | Asignar con `POST /cases/{id}/assign` un caso ya `assigned` responde `200` con `status` = `assigned` sin cambiar el asesor asignado cuando quien asigna es el asesor asignado; si es otro asesor, responde `403` con `error` = `forbidden` sin cambiar el caso (S12, cambio de la #13); asignar un caso `closed` responde `409` con `error` = `case_closed` | — |
-| S12 | Autorización de asesores (`POST /cases/{id}/authorize`). Solo son asesores los chat_id de `ADVISOR_CHAT_IDS` (hasta que existan el panel y la verificación de cuentas); un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `403` con `error` = `forbidden`. Responder (`reply`): un caso `open` o `timed_out` lo responde cualquier asesor registrado y la primera respuesta lo asigna; un caso `assigned` solo lo responde el asesor asignado. Cerrar (`close`): un caso `open` o `timed_out` lo cierra cualquier asesor registrado; un caso `assigned` solo lo cierra el asesor asignado, salvo un caso huérfano. Caso huérfano: un caso `assigned` cuyo `advisor_id` es nulo o ya no está en `ADVISOR_CHAT_IDS`. Un caso huérfano lo cierra cualquier asesor registrado: `POST /cases/{id}/close` lo pasa a `closed` y `authorize` con `action` = `close` responde `200` con `allowed` = `true`; cerrarlo no es reasignarlo. Un caso huérfano no lo responde ni lo asigna ningún otro asesor: `POST /cases/{id}/reply` y `authorize` con `action` = `reply` responden `403` con `error` = `forbidden`, y `POST /cases/{id}/assign` responde `403` con `error` = `forbidden` sin modificar el caso, como con cualquier caso asignado a otro asesor. Sin reasignación y sin rol supervisor. Las mismas reglas se aplican en `POST /cases/{id}/reply` (el orquestador responde `403` sin enviar nada al cliente), `POST /cases/{id}/close` y `POST /cases/{id}/assign` (handover responde `403` sin modificar el caso); asignar un caso ya `assigned` (S11) solo responde `200` al asesor asignado y otro asesor recibe `403`. Esto cambia el `200` sin cambios que S11 daba en la #9 a cualquier asesor: el asesor asignado sigue recibiendo `200` sin cambios. Precedencia de errores en `POST /cases/{id}/authorize`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`: `403` (asesor no registrado) → `404` (caso inexistente) → `409` (caso `closed`; en `POST /cases/{id}/close`, `200` sin cambios por S8) → `403` (caso asignado a otro asesor), escalón que no se aplica a `POST /cases/{id}/close` ni a `authorize` con `action` = `close` sobre un caso huérfano (para ellos, superados los tres primeros escalones, el cierre está permitido). En `POST /cases/{id}/reply` el orquestador autoriza antes de comprobar si el caso existe: un `advisor_id` no registrado recibe `403` con `error` = `forbidden` aunque el caso no exista. `POST /cases/{id}/close` sobre un caso `closed` sigue S8: `200` sin cambios para cualquier asesor registrado, aunque no sea el asignado; `authorize` con `action` = `close` sobre un caso `closed` responde `409`. `POST /cases/{id}/reply` sobre un caso `closed` responde `409` con `error` = `case_closed`, sin enviar nada al cliente (el orquestador propaga el `409` de `authorize`). Si handover no está disponible para autorizar, el orquestador falla cerrado: no envía la respuesta y responde `502` con `upstream_error` (la fila `502 upstream_error` ya publicada de `POST /cases/{id}/reply`). La autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado; la identidad por persona llega con la #16 (remitente del webhook validado) o con el panel y la verificación de cuentas. Retirada de un asesor: antes de quitar su chat_id de `ADVISOR_CHAT_IDS`, el asesor cierra sus casos; al arrancar, handover registra cuántos casos huérfanos hay, sin sus ids. | — |
-| S13 | Solo se reenvían al asesor, con `POST /cases/{id}/client-message`, los mensajes de un cliente cuyo caso está `assigned`; con un caso `open`, con `not_assigned` o con `404` sigue el flujo actual (RAG, rechazo o traspaso). Si el reenvío falla (`502`), el cliente recibe un texto fijo y no se vuelve al RAG. Los comandos de asesor `/responder <case_id> <texto>` y `/cerrar <case_id>` llegan por `POST /messages`, cuyo contrato no cambia; un mensaje de un asesor que no es `/responder` ni `/cerrar` sigue el flujo actual, como el de cualquier cliente. Los comandos se autorizan con las reglas de S12; en ellos el `advisor_id` es el `telegram_user_id` del update validado con `TELEGRAM_WEBHOOK_SECRET`, nunca un id escrito en el texto del mensaje, y la pertenencia a `ADVISOR_CHAT_IDS` se comprueba con ese `telegram_user_id`, no con el `chat_id`; por eso un id de grupo (negativo) de `ADVISOR_CHAT_IDS` no puede usar los comandos. | — |
-| S14 | `GET /cases` lista solo los casos que el asesor puede gestionar según S12: `open` y `timed_out` con `actions` = `reply`, `assign`, `close`; `assigned` al solicitante con `actions` = `reply`, `close`; huérfanos (`assigned` con `advisor_id` nulo o fuera de `ADVISOR_CHAT_IDS`) con `actions` = `close`. Nunca incluye casos `closed` ni `assigned` a otro asesor registrado. Orden por `created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Límite `CASE_LIST_LIMIT` (default 50, máximo 200) aplicado después de filtrar; sin cursor en v1. Un `advisor_id` que no está en `ADVISOR_CHAT_IDS` recibe `200` con la lista vacía, sin registrar denegación. | `CASE_LIST_LIMIT = 50` |
+| S12 | Autorización de asesores (`POST /cases/{id}/authorize`). Son asesores atendedores los perfiles con rol `asesor` o `supervisor` del roster sincronizado por `POST /advisors/sync`; un `advisor_id` que no es uno de esos perfiles recibe `403` con `error` = `forbidden`. `responsable_datos`, `admin` y `cliente` no son asesores atendedores. Responder (`reply`): un caso `open` o `timed_out` lo responde cualquier asesor registrado y la primera respuesta lo asigna; un caso `assigned` solo lo responde el asesor asignado. Cerrar (`close`): un caso `open` o `timed_out` lo cierra cualquier asesor registrado; un caso `assigned` solo lo cierra el asesor asignado, salvo un caso huérfano. Caso huérfano: un caso `assigned` cuyo `advisor_id` es nulo o ya no está en el roster de asesores. Un caso huérfano lo cierra cualquier asesor registrado: `POST /cases/{id}/close` lo pasa a `closed` y `authorize` con `action` = `close` responde `200` con `allowed` = `true`; cerrarlo no es reasignarlo. Un caso huérfano no lo responde ni lo asigna ningún otro asesor: `POST /cases/{id}/reply` y `authorize` con `action` = `reply` responden `403` con `error` = `forbidden`, y `POST /cases/{id}/assign` responde `403` con `error` = `forbidden` sin modificar el caso, como con cualquier caso asignado a otro asesor. Reglas del supervisor (cambian la decisión de la #14, que no permitía reasignar ni rol supervisor). Un perfil con rol `supervisor` del roster conserva todas las capacidades de `asesor` de este supuesto y además puede reasignar casos `assigned` y listar todos los casos con `scope=all`. La reasignación la decide handover con `POST /cases/{id}/reassign`: el actor debe ser supervisor registrado (si no, `403`); el caso debe existir (`404`), no estar `closed` (`409 case_closed`) y estar `assigned` (`409 case_not_assigned`); el destino debe ser otro asesor atendedor registrado y distinto del actual (`422 validation_error`). Las mismas reglas se aplican en `POST /cases/{id}/reply` (el orquestador responde `403` sin enviar nada al cliente), `POST /cases/{id}/close` y `POST /cases/{id}/assign` (handover responde `403` sin modificar el caso); asignar un caso ya `assigned` (S11) solo responde `200` al asesor asignado y otro asesor recibe `403`. Esto cambia el `200` sin cambios que S11 daba en la #9 a cualquier asesor: el asesor asignado sigue recibiendo `200` sin cambios. Precedencia de errores en `POST /cases/{id}/authorize`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`: `403` (asesor no registrado) → `404` (caso inexistente) → `409` (caso `closed`; en `POST /cases/{id}/close`, `200` sin cambios por S8) → `403` (caso asignado a otro asesor), escalón que no se aplica a `POST /cases/{id}/close` ni a `authorize` con `action` = `close` sobre un caso huérfano (para ellos, superados los tres primeros escalones, el cierre está permitido). En `POST /cases/{id}/reply` el orquestador autoriza antes de comprobar si el caso existe: un `advisor_id` no registrado recibe `403` con `error` = `forbidden` aunque el caso no exista. `POST /cases/{id}/close` sobre un caso `closed` sigue S8: `200` sin cambios para cualquier asesor registrado, aunque no sea el asignado; `authorize` con `action` = `close` sobre un caso `closed` responde `409`. `POST /cases/{id}/reply` sobre un caso `closed` responde `409` con `error` = `case_closed`, sin enviar nada al cliente (el orquestador propaga el `409` de `authorize`). Si handover no está disponible para autorizar, el orquestador falla cerrado: no envía la respuesta y responde `502` con `error` = `upstream_error`, reutilizando la fila `502 upstream_error` ya publicada de `POST /cases/{id}/reply`. La autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado. Retirada de un asesor: antes de quitar un perfil del roster, el asesor cierra sus casos; al arrancar, handover registra cuántos casos huérfanos hay, sin sus ids. El supervisor NO responde, cierra ni asigna un caso asignado a otro asesor: solo lo reasigna con `POST /cases/{id}/reassign`, y un caso `open`, `timed_out` o `closed` responde `409` (`case_not_assigned` en los dos primeros y `case_closed` en el último) y un cambio perdido en la escritura condicional responde `409` `case_changed`. La escritura es condicional al asesor leído: si el caso fue cerrado, respondido-y-reasignado o transferido entre la lectura y la escritura responde `409` (`case_closed` si está `closed`, `case_changed` en otro caso) sin deshacer el cambio. Un caso huérfano `assigned` sí puede reasignarse. El supervisor NO responde, cierra ni asigna un caso asignado a otro asesor: solo lo reasigna. Las mismas reglas de `asesor` se aplican en `POST /cases/{id}/reply` (el orquestador responde `403` sin enviar nada al cliente), `POST /cases/{id}/close` y `POST /cases/{id}/assign` (handover responde `403` sin modificar el caso); asignar un caso ya `assigned` (S11) solo responde `200` al asesor asignado y otro asesor recibe `403`. Esto cambia el `200` sin cambios que S11 daba en la #9 a cualquier asesor: el asesor asignado sigue recibiendo `200` sin cambios. Precedencia de errores en `POST /cases/{id}/authorize`, `POST /cases/{id}/close` y `POST /cases/{id}/assign`: `403` (asesor no registrado) → `404` (caso inexistente) → `409` (caso `closed`; en `POST /cases/{id}/close`, `200` sin cambios por S8) → `403` (caso asignado a otro asesor), escalón que no se aplica a `POST /cases/{id}/close` ni a `authorize` con `action` = `close` sobre un caso huérfano (para ellos, superados los tres primeros escalones, el cierre está permitido). En `POST /cases/{id}/reply` el orquestador autoriza antes de comprobar si el caso existe: un `advisor_id` no registrado recibe `403` con `error` = `forbidden` aunque el caso no exista. `POST /cases/{id}/close` sobre un caso `closed` sigue S8: `200` sin cambios para cualquier asesor registrado, aunque no sea el asignado; `authorize` con `action` = `close` sobre un caso `closed` responde `409`. `POST /cases/{id}/reply` sobre un caso `closed` responde `409` con `error` = `case_closed`, sin enviar nada al cliente (el orquestador propaga el `409` de `authorize`). Si handover no está disponible para autorizar, el orquestador falla cerrado: no envía la respuesta y responde `502` con `upstream_error` (la fila `502 upstream_error` ya publicada de `POST /cases/{id}/reply`). La autorización por HTTP con `SERVICE_TOKEN` no impide que un proceso que ya tenga ese token suplante un `advisor_id` registrado; la identidad por persona llega con la #16 (remitente del webhook validado) o con el panel y la verificación de cuentas. Retirada de un asesor: antes de quitar un perfil del roster, el asesor cierra sus casos; al arrancar, handover registra cuántos casos huérfanos hay, sin sus ids. | — |
+| S13 | Con `POST /cases/{id}/client-message`, si el caso está `assigned` el mensaje del cliente queda disponible en la conversación del panel y se responde `available_in_panel`, sin enviarlo por Telegram; con un caso `open`, con `not_assigned` o con `404` sigue el flujo actual (RAG, rechazo o traspaso). Los comandos de asesor `/responder <case_id> <texto>` y `/cerrar <case_id>` ya no existen: un mensaje con ese texto llega por `POST /messages` y se trata como texto ordinario del remitente, con su compuerta de privacidad y el flujo habitual, sin responder, asignar ni cerrar ningún caso. La identidad del asesor es el `profile_id` del panel; un asesor sin `telegram_user_id` vinculado puede atender desde el panel. | — |
+| S14 | `GET /cases` con `scope=mine` (por defecto) lista solo los casos que el asesor puede gestionar según S12: `open` y `timed_out` con `actions` = `reply`, `assign`, `close`; `assigned` al solicitante con `actions` = `reply`, `close`; huérfanos (`assigned` con `advisor_id` nulo o fuera del roster de asesores) con `actions` = `close`. Nunca incluye casos `closed` ni `assigned` a otro perfil asesor registrado. Con `scope=all`, un supervisor registrado recibe todos los casos de cualquier estado y asesor, incluidos `closed`; `actions` contiene solo lo que puede hacer (`reply`, `assign`, `close` o `reassign`) y `advisor_id` indica el asesor asignado o `null`. Otro `advisor_id` con `scope=all` recibe `403 forbidden`. Orden por `created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Límite `CASE_LIST_LIMIT` (default 50, máximo 200) aplicado después de filtrar; sin cursor en v1. Un `advisor_id` que no es un perfil atendedor del roster recibe `200` con la lista vacía en `scope=mine`, sin registrar denegación. | `CASE_LIST_LIMIT = 50` |
 | S15 | Los botones de consentimiento viajan como `OptionsBlock` con `options`, `option_ids` y `option_proofs` alineados. Cada `option_proof` es `HMAC-SHA256(service_token, "<channel>:<external_user_id>:<external_chat_id>:<button_id>:<notice_version>:<notice_sha256>:<nonce>")` truncado a 32 hex. El nonce es aleatorio por presentación y el orquestador conserva en memoria los proofs pendientes por identidad/canal/chat; compara identidad, canal, chat y política vigentes, exige ausencia de consentimiento vigente y consume atómicamente el proof aceptado/rechazado. Repeticiones, pruebas viejas o ajenas se descartan sin registrar consentimiento, borrar contenido ni cambiar estado. El gateway pinta teclado inline con `callback_data = "<button_id>:<option_proof>"` y normaliza `callback_query` a `kind=button`, `button_id` canónico y `button_proof`. La prueba no contiene datos personales en claro, mide 32 caracteres y cabe en el límite de 64 bytes de `callback_data` de Telegram. | — |
+| S16 | Asignación automática por carga (`POST /cases/{id}/auto-assign`). La decide handover: si el caso sigue `open` y sin asesor, elige entre los `candidate_ids` que son asesores atendedores del roster el de menor número de casos `assigned`, con desempate por menor `advisor_id` lexicográfico, y registra la asignación con motivo `auto`. Dos solicitudes simultáneas se serializan y contabilizan la asignación ya confirmada. Sin candidatos válidos responde `queued`; si el caso ya fue asignado, respondido o cerrado por una persona responde `skipped`; un caso inexistente `404 not_found`; uno cerrado `409 case_closed`. El orquestador solo la invoca con el modo `automatica`, sin casos de supresión ni fuera del horario de atención, y no asigna casos que ya estaban en cola cuando un asesor recupera la disponibilidad. | — |

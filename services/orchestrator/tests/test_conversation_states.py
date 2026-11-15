@@ -529,7 +529,7 @@ def test_escalation_sets_with_advisor_and_forwarding_skips_the_llm(env):
     assert env.handover.requests
 
     env.repo.link_case("case-1", contact.id, NOW)
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     process_channel_message(_message("sigo esperando", message_id="m2"), env.settings, env.adapters)
     assert env.handover.client_messages[-1][:2] == ("case-1", "sigo esperando")
     assert env.llm.calls == []

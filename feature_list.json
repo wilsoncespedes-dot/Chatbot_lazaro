@@ -947,7 +947,7 @@
         "Handover deja de decidir quién es asesor con `ADVISOR_CHAT_IDS` y deja de avisar los casos por Telegram; los casos nuevos aparecen en la bandeja del panel. `ADVISOR_CHAT_IDS` y los textos de los comandos se retiran de la configuración, `.env.example`, `docker-compose.yml`, `render.yaml` y la documentación.",
         "Las reglas de autorización vigentes (S12: un caso asignado solo lo atiende su asesor, casos huérfanos, precedencia de errores, fallo cerrado si handover no responde) se conservan con la identidad nueva; ninguna prueba de seguridad existente se elimina ni se debilita, solo se adapta a la identidad nueva.",
         "Migración sin pérdida: los casos abiertos o asignados antes del cambio siguen visibles; un caso asignado a un chat_id se conserva asignado al perfil vinculado a ese `telegram_user_id` y, si no existe ese perfil, queda como caso huérfano según las reglas actuales.",
-        "Los cambios de contrato (identidad del asesor, respuesta de `POST /handover`, supuestos S12 y S13) quedan publicados en `contracts/CONTRATOS.md` y `lazaro_contracts` con ejemplos y tests; el spec lista cada edición a secciones ya publicadas.",
+        "Los cambios de contrato (identidad del asesor, respuesta de `POST /handover`, supuestos S12 y S13) quedan publicados en `contracts/CONTRATOS.md` y `lazaro_contracts` con ejemplos y tests; el spec lista cada edición a secciones ya publicadas. El contrato incluye `POST /advisors/sync`, autenticado con `X-Service-Token`, sus modelos y códigos de error, y el header de generación que impide autorizar con un roster obsoleto.",
         "Supuesto (confirmar): sin aviso por Telegram, `POST /handover` responde `no_advisors` cuando no existe ningún perfil con rol asesor habilitado; el cliente recibe `NO_ADVISORS_REPLY` como hoy.",
         "Prueba de seguridad obligatoria: un `/responder <case_id> <texto>` enviado por Telegram, incluso desde un chat que antes estaba en `ADVISOR_CHAT_IDS`, no envía nada a ningún cliente. Las pruebas cubren además asesor sin Telegram, migración de casos asignados, casos huérfanos y arranque sin `ADVISOR_CHAT_IDS`; `./init.sh` queda verde y reviewer aprueba."
       ],
@@ -956,7 +956,7 @@
         42
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 49,
@@ -978,7 +978,7 @@
         48
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 50,
@@ -998,7 +998,7 @@
         49
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 51,
@@ -1017,7 +1017,7 @@
         42
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 52,
@@ -1038,7 +1038,7 @@
         49
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 53,
@@ -1058,7 +1058,7 @@
         49
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 54,
@@ -1079,7 +1079,7 @@
         49
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 55,
@@ -1099,7 +1099,29 @@
         39
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
+    },
+    {
+      "id": 56,
+      "name": "rediseño_visual_paneles",
+      "title": "Rediseño visual moderno de los paneles",
+      "description": "Mejora el aspecto anticuado de los paneles de administración y asesores con una interfaz más clara, actual, amable y adaptable, preservando flujos y permisos.",
+      "acceptance": [
+        "El panel de administración y el panel de asesores comparten una identidad visual coherente, con jerarquía tipográfica, espacios, colores, controles y estados definidos; el resultado se percibe actual, limpio y profesional.",
+        "Las páginas principales de ambos paneles se adaptan a móvil (ancho 375 px) y escritorio (1280 px) sin desbordamiento horizontal ni pérdida de acciones.",
+        "Formularios, tablas, navegación, botones, mensajes y estados de casos tienen jerarquía y estados hover, foco y error claramente visibles; el contraste y el foco por teclado son accesibles.",
+        "La presentación nueva conserva rutas, contenido, acciones, CSRF, permisos, cabeceras de seguridad y comportamiento actual; no cambia la lógica de negocio.",
+        "La implementación usa HTML/CSS del proyecto, sin frameworks nuevos, JavaScript externo, CDN ni dependencias añadidas; la CSP actual continúa funcionando.",
+        "Pruebas cubren las plantillas y estilos compartidos, rutas principales de admin/asesor y restricciones CSP; ./init.sh queda verde y reviewer aprueba."
+      ],
+      "dependencies": [
+        41,
+        42,
+        48,
+        49
+      ],
+      "sdd": true,
+      "status": "done"
     }
   ]
 }

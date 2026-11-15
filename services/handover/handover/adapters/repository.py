@@ -10,7 +10,14 @@ from urllib.parse import unquote, urlparse
 
 from lazaro_contracts import LastMessage
 
-from ..domain import Case, Denial, HandoverRequestRecord, Notification, RequestResult
+from ..domain import (
+    AutoAssignment,
+    Case,
+    Denial,
+    HandoverRequestRecord,
+    Notification,
+    RequestResult,
+)
 
 
 class CaseRepository(Protocol):
@@ -40,16 +47,36 @@ class CaseRepository(Protocol):
         self, advisor_id: str, registered_ids: list[str], limit: int
     ) -> list[Case]: ...
 
+    def list_all_cases(self, limit: int) -> list[Case]: ...
+
     def add_notification(
         self, case_id: str, advisor_id: str, reason: str, at: datetime, delivered: bool
     ) -> None: ...
+
+    def get_roster(self) -> dict[str, str | None]: ...
+
+    def get_roster_roles(self) -> dict[str, str]: ...
+
+    def get_roster_generation(self) -> int: ...
+
+    def replace_roster(
+        self, entries: list[Any], generation: int
+    ) -> tuple[int, int]: ...
 
     def add_denial(self, denial: Denial) -> None: ...
 
     def assign_if_unassigned(self, case_id: str, advisor_id: str, at: datetime) -> bool: ...
 
+    def auto_assign_least_loaded(
+        self, case_id: str, candidate_ids: list[str], at: datetime
+    ) -> str | None: ...
+
     def transfer_if_assigned_to(
         self, case_id: str, from_id: str, to_id: str, at: datetime
+    ) -> bool: ...
+
+    def reassign_if_assigned_to(
+        self, case_id: str, from_id: str | None, to_id: str, at: datetime
     ) -> bool: ...
 
     def close_if_still_allowed(
@@ -75,6 +102,7 @@ class CaseRepository(Protocol):
 
 ACTIVE_STATUSES = ("open", "assigned")
 PURGE_ACTIVE_STATUSES = ("open", "assigned", "timed_out")
+AUTO_ASSIGN_ADVISORY_LOCK = 5200
 
 
 class FakeCaseRepository:
@@ -84,11 +112,16 @@ class FakeCaseRepository:
         self.cases: dict[str, Case] = {}
         self.notifications: list[Notification] = []
         self.denials: list[Denial] = []
+        self.auto_assignments: list[AutoAssignment] = []
         self.requests: list[HandoverRequestRecord] = []
         self.timeout_claims: dict[str, datetime] = {}
         self.privacy_purge_runs: list[dict[str, Any]] = []
         self.health_checks: list[float] = []
         self.health_error: BaseException | None = None
+        self.advisor_roster: dict[str, str | None] = {}
+        self.advisor_roles: dict[str, str] = {}
+        self.roster_generation = 0
+        self._auto_assign_lock = threading.Lock()
 
     def health_check(self, timeout_seconds: float) -> None:
         """healthcheck_dependencias R4, R8: fallo y timeout controlables en tests."""
@@ -175,6 +208,54 @@ class FakeCaseRepository:
             )
         )
 
+    def get_roster(self) -> dict[str, str | None]:
+        return dict(self.advisor_roster)
+
+    def get_roster_roles(self) -> dict[str, str]:
+        return dict(self.advisor_roles)
+
+    def get_roster_generation(self) -> int:
+        return self.roster_generation
+
+    def replace_roster(
+        self, entries: list[Any], generation: int
+    ) -> tuple[int, int]:
+        registered = [entry for entry in entries if entry.role in ("asesor", "supervisor")]
+        telegram_to_profile = {
+            str(entry.telegram_user_id): entry.profile_id
+            for entry in registered
+            if entry.telegram_user_id is not None
+        }
+        new_roster = {
+            entry.profile_id: (
+                None if entry.telegram_user_id is None
+                else str(entry.telegram_user_id)
+            )
+            for entry in registered
+        }
+        self.advisor_roles = {
+            entry.profile_id: entry.role for entry in registered
+        }
+        for case in self.cases.values():
+            if case.status != "assigned":
+                continue
+            advisor_id = case.advisor_id
+            if advisor_id is None or advisor_id in new_roster:
+                continue
+            if advisor_id in telegram_to_profile:
+                case.advisor_id = telegram_to_profile[advisor_id]
+            else:
+                case.advisor_id = None
+        self.advisor_roster = new_roster
+        self.roster_generation = generation
+        orphaned = sum(
+            1
+            for case in self.cases.values()
+            if case.status == "assigned"
+            and (case.advisor_id is None or case.advisor_id not in new_roster)
+        )
+        return len(new_roster), orphaned
+
     def add_denial(self, denial: Denial) -> None:
         self.denials.append(denial.model_copy(deep=True))
 
@@ -187,6 +268,36 @@ class FakeCaseRepository:
         )
         return True
 
+    def auto_assign_least_loaded(
+        self, case_id: str, candidate_ids: list[str], at: datetime
+    ) -> str | None:
+        with self._auto_assign_lock:
+            case = self.cases.get(case_id)
+            if case is None or case.status != "open" or case.advisor_id is not None:
+                return None
+            valid = [
+                candidate_id
+                for candidate_id in dict.fromkeys(candidate_ids)
+                if self.advisor_roles.get(candidate_id) in ("asesor", "supervisor")
+            ]
+            if not valid:
+                return None
+            loads: dict[str, int] = {}
+            for stored in self.cases.values():
+                if stored.status == "assigned" and stored.advisor_id is not None:
+                    loads[stored.advisor_id] = loads.get(stored.advisor_id, 0) + 1
+            chosen = min(
+                valid,
+                key=lambda candidate_id: (loads.get(candidate_id, 0), candidate_id),
+            )
+            self.cases[case_id] = case.model_copy(
+                update={"status": "assigned", "advisor_id": chosen, "assigned_at": at}
+            )
+            self.auto_assignments.append(
+                AutoAssignment(case_id=case_id, advisor_id=chosen, reason="auto", at=at)
+            )
+            return chosen
+
     def transfer_if_assigned_to(
         self, case_id: str, from_id: str, to_id: str, at: datetime
     ) -> bool:
@@ -197,6 +308,23 @@ class FakeCaseRepository:
             update={"advisor_id": to_id, "assigned_at": at}
         )
         return True
+
+    def reassign_if_assigned_to(
+        self, case_id: str, from_id: str | None, to_id: str, at: datetime
+    ) -> bool:
+        case = self.cases.get(case_id)
+        if case is None or case.status != "assigned" or case.advisor_id != from_id:
+            return False
+        self.cases[case_id] = case.model_copy(
+            update={"advisor_id": to_id, "assigned_at": at}
+        )
+        return True
+
+    def list_all_cases(self, limit: int) -> list[Case]:
+        cases = sorted(
+            self.cases.values(), key=lambda case: (case.created_at, case.case_id)
+        )
+        return [case.model_copy(deep=True) for case in cases[:limit]]
 
     def close_if_still_allowed(
         self, case_id: str, advisor_id: str, allowed_assignee: str | None, at: datetime
@@ -317,6 +445,9 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS handover_denials ("
     "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
     "action TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS handover_auto_assignments ("
+    "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
+    "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
     "CREATE TABLE IF NOT EXISTS handover_requests ("
     "id BIGSERIAL PRIMARY KEY, requested_case_id TEXT NOT NULL, case_id TEXT NULL, "
     "contact_id TEXT NOT NULL, reason TEXT NOT NULL, received_at TIMESTAMPTZ NOT NULL, "
@@ -325,8 +456,19 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS privacy_purge_runs ("
     "id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ NOT NULL, "
     "cutoff TIMESTAMPTZ NOT NULL, counts JSONB NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS handover_advisors ("
+    "profile_id TEXT PRIMARY KEY, telegram_user_id TEXT NULL, "
+    "role TEXT NOT NULL DEFAULT 'asesor')",
+    "CREATE UNIQUE INDEX IF NOT EXISTS handover_advisors_telegram "
+    "ON handover_advisors (telegram_user_id) WHERE telegram_user_id IS NOT NULL",
+    "CREATE TABLE IF NOT EXISTS handover_roster_state ("
+    "singleton_id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)",
+    "INSERT INTO handover_roster_state (singleton_id, generation) "
+    "VALUES (1, 0) ON CONFLICT (singleton_id) DO NOTHING",
     "ALTER TABLE handover_cases ADD COLUMN IF NOT EXISTS "
     "timeout_claimed_at TIMESTAMPTZ NULL",
+    "ALTER TABLE handover_advisors ADD COLUMN IF NOT EXISTS "
+    "role TEXT NOT NULL DEFAULT 'asesor'",
 )
 
 _CASE_COLUMNS = (
@@ -537,6 +679,15 @@ class PostgresCaseRepository:
         )
         return [_row_to_case(row) for row in rows]
 
+    def list_all_cases(self, limit: int) -> list[Case]:
+        rows = self._run(
+            f"SELECT {_CASE_COLUMNS} FROM handover_cases "
+            "ORDER BY created_at ASC, case_id ASC LIMIT %s",
+            (limit,),
+            fetch=True,
+        )
+        return [_row_to_case(row) for row in rows]
+
     def add_notification(
         self, case_id: str, advisor_id: str, reason: str, at: datetime, delivered: bool
     ) -> None:
@@ -545,6 +696,85 @@ class PostgresCaseRepository:
             "VALUES (%s, %s, %s, %s, %s)",
             (case_id, advisor_id, reason, at, delivered),
         )
+
+    def get_roster(self) -> dict[str, str | None]:
+        rows = self._run(
+            "SELECT profile_id FROM handover_advisors", (), fetch=True
+        )
+        return {row[0]: None for row in rows}
+
+    def get_roster_roles(self) -> dict[str, str]:
+        rows = self._run(
+            "SELECT profile_id, role FROM handover_advisors", (), fetch=True
+        )
+        return {row[0]: row[1] for row in rows}
+
+    def get_roster_generation(self) -> int:
+        rows = self._run(
+            "SELECT generation FROM handover_roster_state WHERE singleton_id = 1",
+            (),
+            fetch=True,
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def replace_roster(
+        self, entries: list[Any], generation: int
+    ) -> tuple[int, int]:
+        telegram_to_profile = {
+            str(entry.telegram_user_id): entry.profile_id
+            for entry in entries
+            if entry.telegram_user_id is not None
+            and entry.role in ("asesor", "supervisor")
+        }
+        advisors = [
+            (entry.profile_id, None if entry.telegram_user_id is None
+             else str(entry.telegram_user_id), entry.role)
+            for entry in entries
+            if entry.role in ("asesor", "supervisor")
+        ]
+        profile_ids = [entry.profile_id for entry in entries
+                       if entry.role in ("asesor", "supervisor")]
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "INSERT INTO handover_roster_state (singleton_id, generation) "
+                    "VALUES (1, %s) ON CONFLICT (singleton_id) DO UPDATE "
+                    "SET generation = EXCLUDED.generation",
+                    (generation,),
+                )
+                cur.execute("DELETE FROM handover_advisors")
+                for profile_id, telegram_user_id, role in advisors:
+                    cur.execute(
+                        "INSERT INTO handover_advisors "
+                        "(profile_id, telegram_user_id, role) VALUES (%s, %s, %s)",
+                        (profile_id, telegram_user_id, role),
+                    )
+                for telegram_user_id, profile_id in telegram_to_profile.items():
+                    cur.execute(
+                        "UPDATE handover_cases SET advisor_id = %s "
+                        "WHERE status = %s AND advisor_id = %s "
+                        "AND NOT (advisor_id = ANY(%s))",
+                        (profile_id, "assigned", telegram_user_id, profile_ids),
+                    )
+                cur.execute(
+                    "UPDATE handover_cases SET advisor_id = NULL "
+                    "WHERE status = %s AND advisor_id IS NOT NULL "
+                    "AND NOT (advisor_id = ANY(%s))",
+                    ("assigned", profile_ids),
+                )
+                cur.execute(
+                    "SELECT COUNT(*) FROM handover_cases WHERE status = %s "
+                    "AND (advisor_id IS NULL OR NOT (advisor_id = ANY(%s)))",
+                    ("assigned", profile_ids),
+                )
+                orphaned = int(cur.fetchone()[0])
+                conn.commit()
+                return len(advisors), orphaned
+            except Exception:
+                conn.rollback()
+                raise
 
     def add_denial(self, denial: Denial) -> None:
         self._run(
@@ -562,6 +792,60 @@ class PostgresCaseRepository:
         )
         return bool(rows)
 
+    def auto_assign_least_loaded(
+        self, case_id: str, candidate_ids: list[str], at: datetime
+    ) -> str | None:
+        """R7-R9, R13, R14, R19: elige y escribe bajo un candado de transacción."""
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%s::bigint)",
+                    (AUTO_ASSIGN_ADVISORY_LOCK,),
+                )
+                cur.execute(
+                    "SELECT profile_id FROM handover_advisors "
+                    "WHERE role IN (%s, %s) AND profile_id = ANY(%s)",
+                    ("asesor", "supervisor", list(dict.fromkeys(candidate_ids))),
+                )
+                valid = [row[0] for row in cur.fetchall()]
+                if not valid:
+                    conn.rollback()
+                    return None
+
+                cur.execute(
+                    "SELECT advisor_id, COUNT(*) FROM handover_cases "
+                    "WHERE status = %s AND advisor_id IS NOT NULL GROUP BY advisor_id",
+                    ("assigned",),
+                )
+                loads = {row[0]: int(row[1]) for row in cur.fetchall()}
+                chosen = min(
+                    valid, key=lambda candidate_id: (loads.get(candidate_id, 0),
+                                                     candidate_id)
+                )
+
+                cur.execute(
+                    "UPDATE handover_cases SET status = %s, advisor_id = %s, "
+                    "assigned_at = %s WHERE case_id = %s AND status = %s "
+                    "AND advisor_id IS NULL RETURNING case_id",
+                    ("assigned", chosen, at, case_id, "open"),
+                )
+                if not cur.fetchall():
+                    conn.rollback()
+                    return None
+
+                cur.execute(
+                    "INSERT INTO handover_auto_assignments "
+                    "(case_id, advisor_id, reason, at) VALUES (%s, %s, %s, %s)",
+                    (case_id, chosen, "auto", at),
+                )
+                conn.commit()
+                return chosen
+            except Exception:
+                conn.rollback()
+                raise
+
     def transfer_if_assigned_to(
         self, case_id: str, from_id: str, to_id: str, at: datetime
     ) -> bool:
@@ -571,6 +855,26 @@ class PostgresCaseRepository:
             (to_id, at, case_id, "assigned", from_id),
             fetch=True,
         )
+        return bool(rows)
+
+    def reassign_if_assigned_to(
+        self, case_id: str, from_id: str | None, to_id: str, at: datetime
+    ) -> bool:
+        if from_id is None:
+            sql = (
+                "UPDATE handover_cases SET advisor_id = %s, assigned_at = %s "
+                "WHERE case_id = %s AND status = %s AND advisor_id IS NULL "
+                "RETURNING case_id"
+            )
+            params = (to_id, at, case_id, "assigned")
+        else:
+            sql = (
+                "UPDATE handover_cases SET advisor_id = %s, assigned_at = %s "
+                "WHERE case_id = %s AND status = %s AND advisor_id = %s "
+                "RETURNING case_id"
+            )
+            params = (to_id, at, case_id, "assigned", from_id)
+        rows = self._run(sql, params, fetch=True)
         return bool(rows)
 
     def close_if_still_allowed(

@@ -106,14 +106,15 @@ def test_start_token_is_not_classified(env):
     assert env.rag.calls == []
 
 
-def test_advisor_command_is_not_classified(env):
-    """R24: un comando de asesor no clasifica ni llama al RAG."""
+def test_responder_text_flows_as_ordinary_message(env):
+    """R1: `/responder` es texto ordinario y sigue el flujo del cliente."""
     _add_category(env, "facturacion", ("factura",))
 
     env.post(text="/responder case-1 hola")
 
-    assert _query_events(env) == []
-    assert env.rag.calls == []
+    assert env.rag.calls
+    assert env.handover.authorized == []
+    assert env.handover.closed == []
 
 
 def test_message_forwarded_to_case_is_not_classified(env):
@@ -121,7 +122,7 @@ def test_message_forwarded_to_case_is_not_classified(env):
     _add_category(env, "facturacion", ("factura",))
     contact = env.repo.get_or_create_contact(10, 100, env.adapters.clock())
     env.repo.link_case("case-1", contact.id, env.adapters.clock())
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
 
     env.post(text=TEXT)
 

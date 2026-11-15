@@ -48,7 +48,7 @@ def test_http_clients_send_service_token_url_and_timeout(captured):
         200, json=[{"chunk_id": "c", "manual": "M", "text": "t", "score": 0.5}]
     )
     responses["/send"] = httpx.Response(200, json={"sent": True})
-    responses["/handover"] = httpx.Response(200, json={"status": "notified", "case_id": "k"})
+    responses["/handover"] = httpx.Response(200, json={"status": "queued", "case_id": "k"})
 
     results = rag.HttpRagClient("http://rag:8000/", "tok", 3).search("hola", 5)
     gateway.HttpGatewayClient("http://gw:8000", "tok", 3).send(9, "texto")
@@ -56,7 +56,7 @@ def test_http_clients_send_service_token_url_and_timeout(captured):
                           last_messages=[])
     resp = handover.HttpHandoverClient("http://ho:8000", "tok", 3).request(req)
 
-    assert results[0].chunk_id == "c" and resp.status == "notified"
+    assert results[0].chunk_id == "c" and resp.status == "queued"
     assert [str(r.url) for r, _ in requests] == [
         "http://rag:8000/search", "http://gw:8000/send", "http://ho:8000/handover",
     ]

@@ -1,6 +1,7 @@
 """Esquema Postgres y migración idempotente de identidad por canal (#36)."""
 from __future__ import annotations
 
+import inspect
 from copy import deepcopy
 from datetime import datetime, timezone
 
@@ -12,6 +13,18 @@ from orchestrator.adapters.repository import (
 )
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_two_factor_schema_is_additive_and_idempotent():
+    """R17, R23, R35: tablas nuevas, columna enroll_only y migración idempotente."""
+    schema = " ".join(_SCHEMA)
+    indexes = " ".join(_INDEXES)
+    migrations = " ".join(_MIGRATIONS)
+    assert "CREATE TABLE IF NOT EXISTS staff_two_factor" in schema
+    assert "CREATE TABLE IF NOT EXISTS staff_recovery_codes" in schema
+    assert "enroll_only BOOLEAN NOT NULL DEFAULT FALSE" in schema
+    assert "staff_recovery_codes_profile" in indexes
+    assert "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS enroll_only" in migrations
 
 
 class _MigrationCursor:
@@ -265,6 +278,41 @@ def test_schema_declares_administration_tables_and_indexes():
     assert "events_type_at" in indexes
     assert "case_links_created" in indexes
     assert all("IF NOT EXISTS" in statement for statement in _SCHEMA)
+
+
+def test_schema_declares_case_notes_and_tags():
+    """R39: las tablas de notas y etiquetas se crean de forma idempotente."""
+    schema = " ".join(_SCHEMA)
+    assert "CREATE TABLE IF NOT EXISTS case_notes" in schema
+    assert "author_profile_id TEXT NOT NULL" in schema
+    assert "CREATE TABLE IF NOT EXISTS case_tags" in schema
+    assert "name_key TEXT NOT NULL UNIQUE" in schema
+    assert "CREATE TABLE IF NOT EXISTS case_tag_assignments" in schema
+    assert "PRIMARY KEY (case_id, tag_id)" in schema
+    indexes = " ".join(_INDEXES)
+    assert "case_notes_case" in indexes
+    assert "case_notes_contact" in indexes
+    assert "case_tag_assignments_tag" in indexes
+    assert "case_tag_assignments_contact" in indexes
+    assert all("IF NOT EXISTS" in statement for statement in _SCHEMA)
+
+
+def test_schema_declares_saved_replies_outside_personal_data():
+    """R24: tabla idempotente, sin `contact_id` y fuera de supresión y purga."""
+    schema = " ".join(_SCHEMA)
+    assert "CREATE TABLE IF NOT EXISTS saved_replies" in schema
+    table = next(statement for statement in _SCHEMA if "saved_replies" in statement)
+    assert "id TEXT PRIMARY KEY" in table
+    assert "title TEXT NOT NULL" in table
+    assert "body TEXT NOT NULL" in table
+    assert "active BOOLEAN NOT NULL" in table
+    assert "contact_id" not in table
+    assert "saved_replies" not in " ".join(_MIGRATIONS)
+    for method in (
+        PostgresRepository.execute_suppression,
+        PostgresRepository.purge_personal_data,
+    ):
+        assert "saved_replies" not in inspect.getsource(method)
 
 
 class _ContactCursor:

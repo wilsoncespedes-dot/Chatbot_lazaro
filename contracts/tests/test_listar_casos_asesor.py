@@ -99,8 +99,8 @@ def test_route_query_table_lists_advisor_id() -> None:
     assert "identificador" in table and "1–64" in table
 
 
-def test_route_response_is_200_and_lists_exactly_four_fields() -> None:
-    """R1: la respuesta es 200 y los campos son solo case_id, status, created_at, actions."""
+def test_route_response_is_200_and_lists_contract_fields() -> None:
+    """R1, R28: la respuesta es 200 y documenta los campos del modelo."""
     section = _subsection("Respuesta")
     assert TABLE_HEADER in section
     assert re.search(r"`200 [A-Z][A-Za-z ]+`", section)
@@ -109,6 +109,7 @@ def test_route_response_is_200_and_lists_exactly_four_fields() -> None:
         "status",
         "created_at",
         "actions",
+        "advisor_id",
     }
 
 
@@ -147,8 +148,8 @@ def test_assumption_s14_documents_inclusion_actions_order_and_limit() -> None:
         assert fragment in row, fragment
 
 
-def test_s1_to_s13_are_unchanged() -> None:
-    """R7: añadir S14 no modifica ninguna fila existente (S1–S13)."""
+def test_s1_to_s11_are_unchanged() -> None:
+    """R7, #48: S6, S12 y S13 cambian por decisión de la feature; el resto no."""
     try:
         result = subprocess.run(
             ["git", "show", "HEAD:contracts/CONTRATOS.md"],
@@ -165,7 +166,9 @@ def test_s1_to_s13_are_unchanged() -> None:
         pytest.skip("HEAD no tiene contracts/CONTRATOS.md")
     previous = _assumptions(result.stdout)
     current = _assumptions(_doc())
-    for number in range(1, 14):
+    # #48 cambia S6 a identidad por `profile_id`; S12 y S13 quedan fuera de este rango.
+    unchanged = [number for number in range(1, 12) if number != 6]
+    for number in unchanged:
         identifier = f"S{number}"
         previous_row = re.search(rf"^\| {identifier} \|.*$", previous, re.MULTILINE)
         current_row = re.search(rf"^\| {identifier} \|.*$", current, re.MULTILINE)
@@ -197,9 +200,13 @@ def test_models_and_constants_are_exported() -> None:
 def test_query_requires_advisor_id_and_rejects_unknown_fields() -> None:
     """R2: CaseListQuery exige advisor_id (1–64) y rechaza campos no declarados."""
     assert CaseListQuery(advisor_id="111").advisor_id == "111"
+    assert CaseListQuery(advisor_id="111").scope == "mine"
+    assert CaseListQuery(advisor_id="111", scope="all").scope == "all"
     for body in ({}, {"advisor_id": ""}, {"advisor_id": "x" * 65}, {"otro": "1"}):
         with pytest.raises(ValidationError):
             CaseListQuery.model_validate(body)
+    with pytest.raises(ValidationError):
+        CaseListQuery.model_validate({"advisor_id": "111", "scope": "otra"})
 
 
 def test_item_requires_all_four_fields() -> None:
@@ -222,11 +229,12 @@ def test_item_rejects_naive_date() -> None:
         CaseListItem.model_validate({**VALID_ITEM, "created_at": "2026-01-02T03:00:00"})
 
 
-def test_item_rejects_status_outside_the_three_values() -> None:
-    """R3: status solo admite open, timed_out o assigned."""
-    for status in ("closed", "otro"):
+def test_item_rejects_status_outside_the_four_values() -> None:
+    """R3, R28: status solo admite open, timed_out, assigned o closed."""
+    for status in ("otro", "pending"):
         with pytest.raises(ValidationError):
             CaseListItem.model_validate({**VALID_ITEM, "status": status})
+    assert CaseListItem.model_validate({**VALID_ITEM, "status": "closed"}).status == "closed"
 
 
 def test_item_rejects_empty_unknown_or_repeated_actions() -> None:
@@ -237,7 +245,7 @@ def test_item_rejects_empty_unknown_or_repeated_actions() -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ["contact_id", "chat_id", "reason", "last_messages", "advisor_id", "otro"]
+    "field", ["contact_id", "chat_id", "reason", "last_messages", "otro"]
 )
 def test_item_rejects_contact_and_conversation_fields(field: str) -> None:
     """R5: CaseListItem rechaza cualquier campo de contacto o conversación."""
@@ -278,3 +286,19 @@ def test_examples_validate_against_their_models() -> None:
 
     empty = CaseListResponse.model_validate_json(empty_text)
     assert empty.root == []
+
+
+def test_scope_all_example_covers_closed_and_reassign() -> None:
+    """R8, R9, R28: el ejemplo de scope=all incluye closed, reassign y advisor_id."""
+    query = CaseListQuery.model_validate_json(
+        (EXAMPLES_DIR / "case_list_query.json").read_text(encoding="utf-8")
+    )
+    assert query.scope == "all"
+    response = CaseListResponse.model_validate_json(
+        (EXAMPLES_DIR / "case_list_response_all.json").read_text(encoding="utf-8")
+    )
+    statuses = {item.status for item in response.root}
+    actions = {action for item in response.root for action in item.actions}
+    assert "closed" in statuses
+    assert "reassign" in actions
+    assert any(item.advisor_id == "222222222" for item in response.root)

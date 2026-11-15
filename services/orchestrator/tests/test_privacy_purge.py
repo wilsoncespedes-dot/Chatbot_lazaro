@@ -146,6 +146,7 @@ def test_response_and_purge_run_are_saved(env):
         "auto_handover_streaks": 0,
         "tool_calls": 0,
         "conversation_summaries": 0,
+        "case_notes": 0,
     }
 
 
@@ -206,6 +207,7 @@ def test_postgres_purge_uses_the_documented_order_and_parameters():
         "auto_handover_streaks": 1,
         "tool_calls": 0,
         "conversation_summaries": 0,
+        "case_notes": 0,
     }
     assert conn.commits == 2 and conn.rollbacks == 0
     statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]

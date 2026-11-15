@@ -35,19 +35,28 @@ if str(EVAL_DIR) not in sys.path:
     sys.path.insert(0, str(EVAL_DIR))
 
 from scoring import (  # noqa: E402
+    Attack,
+    AttackResult,
     Observation,
     Question,
     Scored,
+    check_real_set,
+    load_attacks,
     load_questions,
+    render_attacks,
     render_comparison,
     render_report,
     score,
+    score_attack,
     summarize,
+    summarize_attacks,
 )
 
 DEFAULT_REFUSAL = "No encontré información sobre eso en los manuales. Te paso con un asesor."
 MAX_TOP_K = 20
 BASE_CHAT_ID = 900_000_000
+ATTACK_BASE_CHAT_ID = 910_000_000
+DEFAULT_MIN_QUESTIONS = 50
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -177,6 +186,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rechazo", default=None, help="texto de rechazo; por defecto NO_ANSWER_REPLY")
     p.add_argument("--preguntas", action="append", default=None, type=Path,
                    help="archivo de preguntas (repetible); sustituye a eval/preguntas.json")
+    p.add_argument("--ataques", type=Path, default=None,
+                   help="archivo de ataques; por defecto eval/ataques.json")
+    p.add_argument("--sin-ataques", action="store_true",
+                   help="no ejecutar ataques (solo modo orquestador)")
+    p.add_argument("--minimo-preguntas", type=int, default=None,
+                   help=f"mínimo recomendado de preguntas reales ({DEFAULT_MIN_QUESTIONS} por defecto)")
+    p.add_argument("--exigir-minimo", action="store_true",
+                   help="terminar con código 2 si el conjunto real no llega al mínimo")
     p.add_argument("--umbral-minimo-aciertos", type=float, default=None,
                    help="proporción mínima (0 a 1) de aciertos de recuperación")
     return p
@@ -202,6 +219,33 @@ def _collect(
             obs = query_orchestrator(client, url, token, q, sink, wait, BASE_CHAT_ID + i)
         scored.append(score(q, obs, mode=mode, refusal_text=refusal))
     return scored
+
+
+def _collect_attacks(
+    client,
+    url: str,
+    token: str,
+    attacks: list[Attack],
+    sink,
+    wait: float,
+    refusal: str,
+) -> list[AttackResult]:
+    results: list[AttackResult] = []
+    for i, attack in enumerate(attacks):
+        question = Question(id=attack.id, pregunta=attack.mensaje, tipo="no_responde")
+        obs = query_orchestrator(
+            client, url, token, question, sink, wait, ATTACK_BASE_CHAT_ID + i
+        )
+        results.append(score_attack(attack, obs, refusal_text=refusal))
+    return results
+
+
+def _warnings_block(warnings: list[str]) -> str:
+    if not warnings:
+        return ""
+    lines = ["", "## Avisos", ""]
+    lines.extend(f"- Aviso: {warning}" for warning in warnings)
+    return "\n".join(lines) + "\n"
 
 
 def _comparison_threshold() -> float:
@@ -251,6 +295,14 @@ def main(
     if umbral is not None and not 0 <= umbral <= 1:
         print("Error: --umbral-minimo-aciertos debe estar entre 0 y 1.", file=sys.stderr)
         return 2
+    minimum = (
+        args.minimo_preguntas
+        if args.minimo_preguntas is not None
+        else DEFAULT_MIN_QUESTIONS
+    )
+    if minimum < 1:
+        print("Error: --minimo-preguntas debe ser un entero mayor o igual que 1.", file=sys.stderr)
+        return 2
 
     url = args.url.rstrip("/")
     comparar_url = args.comparar_url.rstrip("/") if args.comparar_url else None
@@ -274,6 +326,29 @@ def main(
         print(f"Error en las preguntas: {exc}", file=sys.stderr)
         return 2
 
+    warnings: list[str] = []
+    if args.preguntas:
+        warnings = check_real_set(questions, minimum)
+        for warning in warnings:
+            print(f"Aviso: {warning}", file=sys.stderr)
+        if args.exigir_minimo and len(questions) < minimum:
+            print(
+                f"Error: el conjunto real tiene {len(questions)} preguntas; "
+                f"se exigen al menos {minimum}.",
+                file=sys.stderr,
+            )
+            return 2
+
+    run_attacks = args.modo == "orquestador" and not args.sin_ataques
+    attacks: list[Attack] = []
+    if run_attacks:
+        attack_path = args.ataques or (EVAL_DIR / "ataques.json")
+        try:
+            attacks = load_attacks(attack_path)
+        except (ValueError, OSError) as exc:
+            print(f"Error en los ataques: {exc}", file=sys.stderr)
+            return 2
+
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=10.0)
@@ -285,11 +360,16 @@ def main(
 
     left_scored: list[Scored] = []
     right_scored: list[Scored] = []
+    attack_results: list[AttackResult] = []
     try:
         left_scored = _collect(
             client, url, token, questions, mode=args.modo, top_k=top_k,
             sink=sink, wait=args.espera, refusal=refusal,
         )
+        if run_attacks:
+            attack_results = _collect_attacks(
+                client, url, token, attacks, sink, args.espera, refusal
+            )
         if comparar_url:
             right_scored = _collect(
                 client, comparar_url, token, questions, mode=args.modo, top_k=top_k,
@@ -315,6 +395,7 @@ def main(
             threshold=threshold if threshold is not None else 0.75,
             date=day,
         )
+        report += _warnings_block(warnings)
         target = (out_dir or EVAL_DIR) / f"comparacion_{day.isoformat()}.md"
         target.write_text(report, encoding="utf-8")
         print(f"Comparación escrita en {target}")
@@ -335,6 +416,11 @@ def main(
 
     summary = summarize(left_scored)
     report = render_report(summary, url=url, mode=args.modo, date=day)
+    report += _warnings_block(warnings)
+    attack_summary = None
+    if run_attacks:
+        attack_summary = summarize_attacks(attack_results)
+        report += "\n" + render_attacks(attack_summary)
     target = (out_dir or EVAL_DIR) / f"resultados_{day.isoformat()}.md"
     target.write_text(report, encoding="utf-8")
     print(f"Informe escrito en {target}")
@@ -343,11 +429,18 @@ def main(
         f"rechazos {summary.rechazos[0]}/{summary.rechazos[1]}, "
         f"inventadas {summary.inventadas}, fallos {len(summary.fallos)}"
     )
+    if attack_summary is not None:
+        print(
+            f"Ataques resistidos {attack_summary.resistidos}/{attack_summary.total}, "
+            f"fallos {len(attack_summary.fallos)}"
+        )
 
     code = 0
     if any(s.outcome == "error" for s in left_scored):
         code = 1
     if _below_minimum(summary, umbral):
+        code = 1
+    if any(r.outcome != "resistido" for r in attack_results):
         code = 1
     return code
 

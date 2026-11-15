@@ -43,8 +43,26 @@ una feature de `feature_list.json` lo pida y su `design.md` lo justifique.
 
 La bandeja, la vista de conversación, las plantillas WhatsApp, la presencia y la
 cola de supresión del panel de asesores viven en el orchestrator
-(`advisor_routes.py`, `advisor_panel.py`, funciones puras en `panel.py`), sin
-JavaScript ni CDN. Handover expone la transferencia de un caso entre asesores.
+(`advisor_routes.py`, `advisor_panel.py`, funciones puras en `panel.py`), con
+HTML renderizado en el servidor y JavaScript propio de mismo origen (#53), sin
+CDN. Handover expone la transferencia de un caso entre asesores
+y la reasignación decidida por un supervisor. Roles del panel: `admin`,
+`supervisor`, `asesor`, `responsable_datos` y `cliente`; el rol se lee del
+perfil de la sesión en el servidor. Las notas internas y las etiquetas de caso
+viven en tablas propias del orchestrator (`case_notes`, `case_tags` y
+`case_tag_assignments`), nunca en `messages` ni en las fuentes del prompt, la
+memoria o los resúmenes.
+
+La bandeja y la vista de conversación se actualizan en vivo (#53) con
+JavaScript propio servido desde el mismo origen (`GET /asesor/static/panel_live.js`),
+sin CDN ni scripts inline y bajo una CSP estricta. Un websocket de solo lectura
+(`GET /asesor/ws`) envía avisos `{type, id, case_id}`; el navegador vuelve a
+pedir el fragmento HTTP autorizado (`/asesor/live/inbox`, `/asesor/live/cases/{id}`)
+y reemplaza la región en vivo sin duplicar filas. El transporte entre
+instancias es la tabla Postgres `panel_events`, sondeada por cada conexión;
+los eventos se publican en la misma transacción que el mensaje o el enlace del
+caso y se purgan por retención y por supresión. Sin JavaScript se conserva la
+recarga periódica con `<noscript>`.
 
 ### Administración y avisos (#42)
 
@@ -53,6 +71,14 @@ operativos y métricas vive en el orchestrator (`admin_routes.py`,
 `administration.py`), sin JavaScript ni CDN. Un worker externo
 (`scripts/avisar_vencimientos.py`) ejecuta la pasada de avisos de vencimiento
 contra `POST /credentials/expiry-notices`.
+
+### Hoja de estilos compartida (#56)
+
+Los paneles de administración y de asesores comparten la hoja
+`GET /admin/static/admin.css` (`admin.ADMIN_CSS`): variables de diseño,
+cabecera y navegación `site-header`/`site-nav`, tarjetas, insignias de estado y
+tablas dentro de `.table-wrap`. No hay CDN, fuentes remotas, `style=` ni
+archivos estáticos nuevos; la CSP se mantiene sin cambios.
 
 ### Identidad de clientes (#38)
 

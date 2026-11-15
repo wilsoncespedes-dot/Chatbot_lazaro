@@ -1,5 +1,6 @@
-"""Modelos de /handover, /cases/{id}/reply, /cases/{id}/close, /cases/check-timeouts
-/cases/{id}/assign, /cases/{id}/authorize y /cases/{id}/client-message."""
+"""Modelos de /handover, /cases/{id}/reply, /cases/{id}/close, /cases/check-timeouts,
+/cases/{id}/assign, /cases/{id}/auto-assign, /cases/{id}/authorize,
+/cases/{id}/transfer, /cases/{id}/reassign y /cases/{id}/client-message."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -39,10 +40,42 @@ class HandoverRequest(ContractModel):
 
 
 class HandoverResponse(ContractModel):
-    """Respuesta 200 de POST /handover con el caso efectivo (S3)."""
+    """Respuesta 200 de POST /handover con el caso efectivo (S3).
 
-    status: Literal["notified", "no_advisors"]
+    `queued`: hay al menos un perfil asesor y el caso queda en la bandeja del
+    panel, sin aviso por Telegram. `no_advisors`: no hay ningún perfil asesor.
+    """
+
+    status: Literal["queued", "no_advisors"]
     case_id: Identifier
+
+
+AdvisorRosterRole = Literal["asesor", "supervisor", "responsable_datos", "otro"]
+
+
+class AdvisorRosterEntry(ContractModel):
+    """Un perfil del roster que handover usa para autorizar (#48)."""
+
+    profile_id: Identifier
+    role: AdvisorRosterRole
+    # Solo para migrar asignaciones anteriores; el panel no lo requiere.
+    telegram_user_id: int | None = None
+
+
+class AdvisorRosterSyncRequest(ContractModel):
+    """Sincronización completa del roster de asesores (#48)."""
+
+    generation: int = Field(ge=0)
+    profiles: list[AdvisorRosterEntry]
+
+
+class AdvisorRosterSyncResponse(ContractModel):
+    """Respuesta 200 de POST /advisors/sync (#48)."""
+
+    status: Literal["synced"]
+    generation: int = Field(ge=0)
+    advisors: int = Field(ge=0)
+    orphaned_cases: int = Field(ge=0)
 
 
 class CaseReplyRequest(ContractModel):
@@ -86,6 +119,20 @@ class CaseAssignResponse(ContractModel):
     case_id: Identifier
 
 
+class CaseAutoAssignRequest(ContractModel):
+    """Candidatos disponibles para asignar un caso por carga (#52)."""
+
+    candidate_ids: Annotated[list[Identifier], Field(min_length=1, max_length=200)]
+
+
+class CaseAutoAssignResponse(ContractModel):
+    """Respuesta 200 de POST /cases/{id}/auto-assign (#52)."""
+
+    status: Literal["assigned", "queued", "skipped"]
+    case_id: Identifier
+    advisor_id: Identifier | None
+
+
 class CaseTransferRequest(ContractModel):
     """Transferencia de un caso de un asesor a otro (#41 R26)."""
 
@@ -99,6 +146,22 @@ class CaseTransferResponse(ContractModel):
 
     status: Literal["assigned"]
     case_id: Identifier
+    advisor_id: Identifier
+
+
+class CaseReassignRequest(ContractModel):
+    """Reasignación de un caso decidida por un supervisor (#49 R12)."""
+
+    advisor_id: Identifier
+    target_advisor_id: Identifier
+
+
+class CaseReassignResponse(ContractModel):
+    """Respuesta 200 de POST /cases/{id}/reassign (#49 R12b)."""
+
+    status: Literal["assigned"]
+    case_id: Identifier
+    previous_advisor_id: Identifier | None
     advisor_id: Identifier
 
 
@@ -139,21 +202,28 @@ class CaseClientMessageRequest(ContractModel):
 
 
 class CaseClientMessageResponse(ContractModel):
-    """Respuesta 200 de POST /cases/{id}/client-message (S13)."""
+    """Respuesta 200 de POST /cases/{id}/client-message (S13).
 
-    status: Literal["forwarded", "not_assigned"]
+    `available_in_panel`: el caso está asignado y el mensaje queda visible en la
+    conversación del panel, sin envío por Telegram. `not_assigned`: el caso no
+    está asignado y sigue el flujo habitual.
+    """
+
+    status: Literal["available_in_panel", "not_assigned"]
     case_id: Identifier
 
 
 # S14: acciones que el panel puede ofrecer para un caso listado.
-CaseListAction = Literal["reply", "assign", "close"]
-CaseListStatus = Literal["open", "timed_out", "assigned"]
+CaseListAction = Literal["reply", "assign", "close", "reassign"]
+CaseListStatus = Literal["open", "timed_out", "assigned", "closed"]
+CaseListScope = Literal["mine", "all"]
 
 
 class CaseListQuery(ContractModel):
-    """Parámetro de query de GET /cases: el asesor que pide su listado (S14)."""
+    """Parámetro de query de GET /cases: el asesor y el alcance del listado (S14)."""
 
     advisor_id: Identifier
+    scope: CaseListScope = "mine"
 
 
 class CaseListItem(ContractModel):
@@ -163,6 +233,7 @@ class CaseListItem(ContractModel):
     status: CaseListStatus
     created_at: AwareDatetime
     actions: Annotated[list[CaseListAction], Field(min_length=1)]
+    advisor_id: Identifier | None = None
 
     @field_validator("actions")
     @classmethod

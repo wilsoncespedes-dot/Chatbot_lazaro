@@ -64,10 +64,17 @@ def env() -> Env:
 
 def _login(env: Env, telegram_user_id: int | None = 700) -> None:
     profile = env.repo.create_profile("asesor1", "asesor", "hash", FIXED_NOW)
-    env.repo.profiles[profile.id].telegram_user_id = telegram_user_id
+    if telegram_user_id is not None:
+        stored = env.repo.profiles.pop(profile.id)
+        stored.telegram_user_id = telegram_user_id
+        stored.id = str(telegram_user_id)
+        env.repo.profiles[stored.id] = stored
+        profile_id = stored.id
+    else:
+        profile_id = profile.id
     env.repo.create_session(
         hash_token("session-token"),
-        profile.id,
+        profile_id,
         CSRF,
         FIXED_NOW + timedelta(minutes=60),
     )
@@ -105,14 +112,14 @@ def test_r27_memory_route_requires_a_session(env):
     assert response.headers["location"] == "/asesor/login"
 
 
-def test_r27_unlinked_profile_is_403_without_authorizing(env):
-    """R27: un asesor sin Telegram vinculado no llega a consultar memoria."""
+def test_r27_unlinked_profile_uses_profile_id(env):
+    """R5: un asesor sin Telegram vinculado consulta memoria usando su profile.id."""
     _login(env, telegram_user_id=None)
+    _link_case(env)
     response = env.client.get("/asesor/cases/case-1/memoria")
 
-    assert response.status_code == 403
-    assert "telegram_not_linked" in response.text
-    assert env.handover.authorized == []
+    assert response.status_code == 200
+    assert env.handover.authorized[0][1] == "p1"
 
 
 def test_r27_invalid_case_id_is_422(env):

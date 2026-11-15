@@ -237,7 +237,7 @@ def test_reuse_concurrent_with_assignment_keeps_assignment(env_factory):
         contact_id="contact-1",
         last_messages=[{"role": "user", "text": "sigo aquí", "at": "2026-01-02T02:59:00Z"}],
     )
-    assert response.json() == {"status": "notified", "case_id": "case-1"}
+    assert response.json() == {"status": "queued", "case_id": "case-1"}
     case = env.repo.cases["case-1"]
     assert (case.status, case.advisor_id, case.assigned_at) == (
         "assigned",

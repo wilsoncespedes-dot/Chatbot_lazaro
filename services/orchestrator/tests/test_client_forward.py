@@ -25,14 +25,8 @@ ROOT = Path(__file__).resolve().parents[3]
 PKG = Path(__file__).resolve().parents[1] / "orchestrator"
 
 CONVERSATION_TEXTS = [
-    "ADVISOR_REPLY_CONFIRMATION",
-    "ADVISOR_CLOSE_CONFIRMATION",
     "CASE_CLOSED_REPLY",
     "FORWARD_FAILED_REPLY",
-    "ADVISOR_COMMAND_HELP",
-    "ADVISOR_COMMAND_FORBIDDEN_REPLY",
-    "ADVISOR_COMMAND_FAILED_REPLY",
-    "ADVISOR_COMMAND_CASE_CLOSED_REPLY",
 ]
 
 
@@ -52,7 +46,7 @@ def _contact_messages(env, contact) -> list[tuple[str, str]]:
 def test_assigned_case_message_is_forwarded_without_rag(env):
     """conversacion_cliente_asesor R27, R28: caso assigned → client-message, sin RAG."""
     contact = _link(env)
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     env.post(text="Sigue sin funcionar")
     assert ("user", "Sigue sin funcionar") in _contact_messages(env, contact)
     assert env.handover.client_messages == [("case-1", "Sigue sin funcionar", RECEIVED_AT)]
@@ -66,7 +60,7 @@ def test_assigned_case_message_is_forwarded_without_rag(env):
 def test_forward_runs_before_handover_keywords(env):
     """conversacion_cliente_asesor R27: el reenvío va antes de las palabras clave."""
     _link(env)
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     env.post(text="quiero un asesor")
     assert len(env.handover.client_messages) == 1
     assert env.handover.requests == []
@@ -77,7 +71,7 @@ def test_forward_uses_last_linked_case(env):
     """conversacion_cliente_asesor R27, R35: se usa el caso vinculado más reciente."""
     contact = _link(env, case_id="case-old")
     env.repo.link_case("case-new", contact.id, FIXED_NOW)
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     env.post()
     assert env.handover.client_messages[0][0] == "case-new"
 
@@ -147,7 +141,7 @@ def test_advisor_plain_message_follows_current_flow(env):
 
     contact = env.repo.contacts[111]
     env.repo.link_case("case-1", contact.id, FIXED_NOW)
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     env.post(text="otra cosa", user=111, chat=111, update_id=2)
     assert env.handover.client_messages[-1][0] == "case-1"
 
@@ -215,7 +209,7 @@ def test_forward_logs_do_not_contain_client_text(env, caplog, mode):
     secret = "SECRETO-CLIENTE-456"
     _link(env)
     if mode == "forwarded":
-        env.handover.client_message_status = "forwarded"
+        env.handover.client_message_status = "available_in_panel"
     elif mode == "upstream_error":
         env.handover.client_message_error = "upstream_error"
     else:
@@ -253,12 +247,12 @@ def captured(monkeypatch):
 def test_http_handover_client_forward_posts_to_client_message_route(captured):
     """conversacion_cliente_asesor R37, R38: URL, token, timeout y cuerpo de la ruta."""
     requests, holder = captured
-    holder["response"] = httpx.Response(200, json={"status": "forwarded", "case_id": "a b"})
+    holder["response"] = httpx.Response(200, json={"status": "available_in_panel", "case_id": "a b"})
     response = HttpHandoverClient("http://ho:8000/", "tok", 3).forward_client_message(
         "a b", "hola", datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
     )
     assert isinstance(response, CaseClientMessageResponse)
-    assert (response.status, response.case_id) == ("forwarded", "a b")
+    assert (response.status, response.case_id) == ("available_in_panel", "a b")
     request, timeout = requests[0]
     assert request.url.raw_path == b"/cases/a%20b/client-message"
     assert request.headers["X-Service-Token"] == "tok"
@@ -287,7 +281,7 @@ FAIL_CLOSED_FORWARD = [
     ("wrong_error", httpx.Response(404, json={"error": "otro", "message": "x"})),
     ("not_json", httpx.Response(502, content=b"no-json")),
     ("wrong_status", httpx.Response(200, json={"status": "sent", "case_id": "case-1"})),
-    ("other_case", httpx.Response(200, json={"status": "forwarded", "case_id": "case-2"})),
+    ("other_case", httpx.Response(200, json={"status": "available_in_panel", "case_id": "case-2"})),
     ("connect_error", httpx.ConnectError("sin conexión")),
     ("timeout", httpx.ReadTimeout("sin respuesta")),
 ]

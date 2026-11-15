@@ -1,11 +1,14 @@
 """Tests del arranque seguro en producción de handover (#24)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from handover.config import Settings
 
+ROOT = Path(__file__).resolve().parents[3]
 TOKEN = "s" * 40
 VALID = {
     "app_env": "production",
@@ -66,9 +69,17 @@ def test_development_database_credentials_are_rejected():
     assert "DATABASE_URL" in text
 
 
-def test_invalid_advisor_ids_still_prevent_startup():
-    """R14: una ADVISOR_CHAT_IDS inválida sigue impidiendo arrancar."""
-    assert "ADVISOR_CHAT_IDS" in _failure(advisor_chat_ids="111,abc")
+def test_advisor_chat_ids_is_no_longer_required():
+    """R44, R45: ADVISOR_CHAT_IDS ya no existe ni impide arrancar en producción."""
+    settings = Settings(**VALID)
+    assert not hasattr(settings, "advisor_chat_ids")
+
+
+@pytest.mark.parametrize("name", [".env.example", "docker-compose.yml", "render.yaml"])
+def test_advisor_chat_ids_is_removed_from_deployment_files(name):
+    """R45: la retirada de ADVISOR_CHAT_IDS llega a configuración y despliegue."""
+    text = (ROOT / name).read_text(encoding="utf-8")
+    assert "ADVISOR_CHAT_IDS" not in text
 
 
 def test_error_message_does_not_include_values():

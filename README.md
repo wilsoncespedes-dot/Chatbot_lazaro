@@ -77,7 +77,7 @@ defecto.
 
 1. En Claude Code: **`/siguiente`**. El leader prepara y revisa el spec y,
    si pasa revisión, continúa sin esperar aprobación manual.
-2. El implementer delega el código a OpenCode/DeepSeek Flash. Antes de
+2. El implementer delega el código a OpenCode/DeepSeek V4.1 Flash. Antes de
    implementar, busca en `referencias/` piezas reutilizables; confirma repo,
    archivo, commit y licencia. Adapta solo lo necesario y registra avisos
    MIT/Apache en `THIRD_PARTY_NOTICES.md`; no uses código sin licencia ni
@@ -99,19 +99,18 @@ el código. El reviewer aprueba los specs por ti, el script hace un commit por
 feature y se para ante problemas. Por la mañana: `progress/nocturno_<fecha>.md`,
 revisa los specs `"auto_approved"` y usa `/revisado`.
 
-### Conectar DeepSeek (una vez)
+### Conectar OpenCode Go (una vez)
 
 En el CLI de OpenCode, ejecuta `/connect`, selecciona **Other**, usa el id de
-proveedor `deepseek` y pega una API key de DeepSeek. La credencial se guarda en
-el almacén de OpenCode del usuario, fuera del repositorio. Comprueba que el
-modelo aparece con `opencode models deepseek`. El writer usa por defecto
-`deepseek/deepseek-flash`. También está configurado `deepseek/deepseek-v4-pro`;
-puedes elegirlo con la variable de entorno `OPENCODE_WRITER_MODEL`.
+proveedor `opencode-go` y configura la credencial de OpenCode Go. La credencial
+se guarda en el almacén de OpenCode del usuario, fuera del repositorio.
+Comprueba que aparece `OpenCode Go` en `opencode auth list`. El implementer está
+fijado a `opencode-go/deepseek-v4.1-flash` en el modo supervisado y nocturno.
 
 OpenCode tiene permisos de edición solo dentro del proyecto; su shell, red y
 subagentes están bloqueados. Claude ejecuta `./init.sh` después de cada sesión
 del writer. Para usar el modo nocturno, configura antes la credencial y ejecuta
-`opencode auth list` para confirmar que DeepSeek aparece.
+`opencode auth list` para confirmar que OpenCode Go aparece.
 
 Tu propio documento (D6) recomienda **empezar en supervisado**: de noche el
 reviewer aprueba los specs en tu lugar y los agentes instalan las

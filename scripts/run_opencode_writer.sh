@@ -16,8 +16,8 @@ fi
 
 FEATURE="$1"
 shift
-if [[ ! "$FEATURE" =~ ^[a-z0-9_]+$ ]]; then
-  echo "Nombre de feature inválido: usa solo minúsculas, números y guion bajo." >&2
+if [[ ! "$FEATURE" =~ ^[a-z0-9_ñ]+$ ]]; then
+  echo "Nombre de feature inválido: usa minúsculas, números, guion bajo y ñ." >&2
   exit 2
 fi
 
@@ -49,7 +49,9 @@ if [ -z "${PY:-}" ]; then
   exit 1
 fi
 
-"$PY" - "$FEATURE" <<'PY'
+PY_CMD=()
+read -r -a PY_CMD <<< "$PY"
+"${PY_CMD[@]}" - "$FEATURE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -71,12 +73,13 @@ if missing:
     raise SystemExit(f"Faltan archivos de spec para {name}: {', '.join(missing)}")
 PY
 
-if ! opencode auth list 2>&1 | grep -Eqi 'OpenCode Go|opencode-go'; then
+source .claude/hooks/opencode_writer.sh
+if ! opencode_writer_authenticated; then
   echo "No hay credencial OpenCode Go en OpenCode. En la TUI ejecuta /connect, selecciona Other, usa el id 'opencode-go' y configura tu API key. No la guardes en el repositorio." >&2
   exit 3
 fi
 
-MODEL="${OPENCODE_WRITER_MODEL:-opencode-go/deepseek-v4.1-flash}"
+MODEL="$OPENCODE_WRITER_MODEL"
 PROMPT="Implementa la feature SDD aprobada '${FEATURE}'. Lee y sigue specs/${FEATURE}/requirements.md, design.md y tasks.md en orden. Respeta AGENTS.md y .opencode/agents/implementer.md. No cambies el estado de feature_list.json, no marques done y no edites el harness."
 if [ -n "$CONTEXT_FILE" ]; then
   PROMPT+=$'\n\nLee también el informe indicado y atiende sus cambios: '

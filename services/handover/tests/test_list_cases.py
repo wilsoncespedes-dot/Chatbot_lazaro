@@ -12,7 +12,7 @@ from handover.domain import can_act_on_case
 
 HEADERS = {"X-Service-Token": "svc-token"}
 START = datetime(2026, 1, 2, 3, 0, 0, tzinfo=timezone.utc)
-FIELDS = {"case_id", "status", "created_at", "actions"}
+FIELDS = {"case_id", "status", "created_at", "actions", "advisor_id"}
 
 
 def _get(env, advisor_id: str = "111", headers: dict | None = None):
@@ -96,7 +96,7 @@ def test_get_cases_rejects_invalid_query_with_422(env, params):
 
 
 def test_unregistered_advisor_gets_empty_list_without_querying(env_factory):
-    """R10: un advisor_id fuera de ADVISOR_CHAT_IDS recibe 200 [] sin consultar el repo."""
+    """R10: un advisor_id ajeno al roster recibe 200 [] sin consultar el repo."""
     repo = _CountingRepository()
     env = env_factory(repo=repo)
     env.add_case("case-open", status="open")
@@ -184,7 +184,7 @@ def test_actions_match_can_act_on_case_and_discard_other_cases(env_factory):
         expected = [
             action
             for action in ("reply", "assign", "close")
-            if can_act_on_case(case, "111", action, env.settings)
+            if can_act_on_case(case, "111", action, env.adapters)
             and not (action == "assign" and case.status == "assigned")
         ]
         assert listed[case.case_id] == expected
@@ -232,8 +232,8 @@ def test_default_limit_is_50(env_factory, monkeypatch):
 # --- R18-R20: forma de la respuesta y efectos ----------------------------------------------
 
 
-def test_response_only_exposes_the_four_contract_fields(env):
-    """R18: cada elemento solo tiene case_id, status, created_at y actions, sin datos."""
+def test_response_only_exposes_the_contract_fields(env):
+    """R18, #49: cada elemento solo expone los campos del contrato, sin datos."""
     case = env.add_case(
         "case-1",
         status="open",

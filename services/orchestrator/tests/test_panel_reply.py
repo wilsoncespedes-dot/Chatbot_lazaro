@@ -170,13 +170,14 @@ def test_authorize_happens_before_window_check(env_factory, panel):
     assert env.handover.authorized == [("case-1", "700", "reply")]
 
 
-def test_responder_command_on_closed_whatsapp_sends_failed_reply(env_factory, panel):
-    """R22: /responder a WhatsApp cerrada avisa con ADVISOR_COMMAND_FAILED_REPLY."""
+def test_responder_text_no_longer_sends_command_reply(env_factory, panel):
+    """R1, R47: `/responder` es texto ordinario y no llega al cliente de WhatsApp."""
     env = env_factory()
     _whatsapp_case(env, panel)
     env.post(text="/responder case-1 hola", user=111, chat=111)
-    assert (111, env.settings.advisor_command_failed_reply) in env.gateway.sent
     assert all(destination != "57301" for _, destination, _ in env.gateway.channel_sent)
+    assert env.handover.authorized == []
+    assert env.handover.closed == []
 
 
 def test_case_view_renders_selector_or_textarea(env_factory, panel):
@@ -190,13 +191,13 @@ def test_case_view_renders_selector_or_textarea(env_factory, panel):
     closed = env.client.get("/asesor/cases/case-wa")
     assert closed.status_code == 200
     assert '<select name="template">' in closed.text
-    assert '<textarea name="text"' not in closed.text
+    assert '<textarea name="text" maxlength="4096"' not in closed.text
 
     open_case = _whatsapp_case(env, panel, "case-open", last_user_at=panel.NOW - timedelta(hours=1))
     opened = env.client.get("/asesor/cases/case-open")
     assert opened.status_code == 200
-    assert '<textarea name="text"' in opened.text
+    assert '<textarea name="text" maxlength="4096"' in opened.text
     assert '<select name="template">' not in opened.text
 
     telegram = env.client.get("/asesor/cases/case-tg")
-    assert '<textarea name="text"' in telegram.text
+    assert '<textarea name="text" maxlength="4096"' in telegram.text

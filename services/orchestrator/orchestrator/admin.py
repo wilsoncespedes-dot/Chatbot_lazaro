@@ -8,6 +8,11 @@ from datetime import datetime
 from urllib.parse import quote
 
 CSP = "default-src 'self'; form-action 'self'; frame-ancestors 'none'"
+PANEL_CSP = (
+    "default-src 'self'; script-src 'self'; connect-src 'self'; "
+    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+    "object-src 'none'"
+)
 REDACTED = "[redactado]"
 
 ERROR_MESSAGES = {
@@ -22,6 +27,12 @@ ERROR_MESSAGES = {
     "template_not_found": "La plantilla no existe.",
     "invalid_transition": "La transición de estado no está permitida.",
     "notice_version_required": "Debes indicar una versión nueva al cambiar el texto legal.",
+    "tag_name_taken": "Ya existe una etiqueta con ese nombre.",
+    "tag_not_found": "La etiqueta no existe.",
+    "saved_reply_not_found": "La respuesta guardada no existe.",
+    "saved_reply_variables_not_allowed": (
+        "Las respuestas guardadas son texto plano y no admiten variables."
+    ),
 }
 
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+")
@@ -29,24 +40,133 @@ _LONG_DIGITS_RE = re.compile(r"\d{6,}")
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,}")
 
 ADMIN_CSS = """
-:root { color-scheme: light; }
-body { font-family: system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1f2933; }
-header { background: #1f3a5f; color: #fff; display: flex; align-items: center;
-  justify-content: space-between; padding: 0.75rem 1.5rem; }
-header h1 { font-size: 1.1rem; margin: 0; }
-main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
-table { width: 100%; border-collapse: collapse; background: #fff; }
-th, td { border: 1px solid #cbd2d9; padding: 0.4rem 0.6rem; text-align: left;
-  vertical-align: top; }
-th { background: #e4e7eb; }
-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
-  margin: 0.75rem 0; }
-label { display: flex; flex-direction: column; font-size: 0.85rem; gap: 0.2rem; }
-input, select, button { font: inherit; padding: 0.35rem 0.45rem; }
-button { cursor: pointer; }
-.error { background: #fde8e8; border: 1px solid #c81e1e; padding: 0.5rem; }
-code { background: #e4e7eb; padding: 0.1rem 0.3rem; }
-nav ul { list-style: none; padding: 0; display: flex; gap: 1rem; }
+:root {
+  color-scheme: light;
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --text: #1b2733;
+  --muted: #4a5568;
+  --primary: #1d4ed8;
+  --primary-contrast: #ffffff;
+  --border: #6b7a8d;
+  --focus: #0b63ce;
+  --ok: #14532d;
+  --ok-bg: #e6f4ea;
+  --warn: #7c4a03;
+  --warn-bg: #fff4d6;
+  --danger: #8a1c1c;
+  --danger-bg: #fdecec;
+  --info: #0b4f6c;
+  --info-bg: #e6f2f8;
+  --stripe: #f8fafc;
+  --hover: #eef2f7;
+  --radius: 0.5rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 2px 8px rgba(16, 24, 40, 0.06);
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+body { font-family: var(--font); margin: 0; background: var(--bg); color: var(--text);
+  line-height: 1.5; }
+h1, h2, h3 { line-height: 1.2; margin: 0 0 var(--space-2); }
+h1 { font-size: 1.5rem; letter-spacing: 0.02em; }
+h2 { font-size: 1.25rem; border-bottom: 2px solid var(--border);
+  padding-bottom: var(--space-1); }
+h3 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); }
+a { color: var(--primary); }
+a:hover { color: var(--text); }
+.site-header { background: var(--primary); color: var(--primary-contrast);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+.site-header h1 { color: var(--primary-contrast); margin: 0; }
+.site-nav ul { list-style: none; padding: 0; margin: 0 0 var(--space-3);
+  display: flex; flex-direction: column; gap: var(--space-1); }
+.site-nav a { display: block; padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius); text-decoration: none; color: var(--primary); }
+.site-nav a:hover { background: var(--hover); color: var(--text); }
+.site-nav a:disabled { opacity: 0.55; cursor: not-allowed; }
+.site-nav a[aria-current="page"] { background: var(--primary);
+  color: var(--primary-contrast); font-weight: 600; }
+.skip-link { position: absolute; left: -9999px; top: 0; background: var(--surface);
+  color: var(--text); padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius); }
+.skip-link:focus { left: var(--space-2); z-index: 10; }
+main { max-width: 64rem; margin: 0 auto; padding: var(--space-3); }
+main.wide { max-width: 90rem; }
+.card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--space-3);
+  margin: 0 0 var(--space-3); }
+form { display: flex; flex-direction: column; gap: var(--space-2);
+  align-items: stretch; margin: var(--space-3) 0; }
+label { display: flex; flex-direction: column; font-size: 0.9rem;
+  gap: var(--space-1); }
+input, select, textarea, button { font: inherit; padding: var(--space-2);
+  border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); }
+textarea { min-height: 4rem; }
+button, .btn { cursor: pointer; background: var(--primary);
+  color: var(--primary-contrast); border: 1px solid var(--primary);
+  font-weight: 600; }
+button:hover, .btn:hover { filter: brightness(1.08); }
+button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-secondary { background: var(--surface); color: var(--primary);
+  border-color: var(--primary); }
+.btn-danger { background: var(--danger); border-color: var(--danger);
+  color: var(--surface); }
+.badge { display: inline-block; padding: 0.1rem var(--space-2);
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 0.85rem;
+  font-weight: 600; }
+.badge-ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.badge-warn { background: var(--warn-bg); color: var(--warn);
+  border-color: var(--warn); }
+.badge-error { background: var(--danger-bg); color: var(--danger);
+  border-color: var(--danger); }
+.badge-info { background: var(--info-bg); color: var(--info);
+  border-color: var(--info); }
+.error, .ok { padding: var(--space-2); border-radius: var(--radius);
+  border: 1px solid var(--border); border-left-width: 6px;
+  margin: var(--space-2) 0; }
+.error { background: var(--danger-bg); color: var(--danger);
+  border-left-color: var(--danger); }
+.ok { background: var(--ok-bg); color: var(--ok); border-left-color: var(--ok); }
+.error::before { content: "Atención: "; font-weight: 700; }
+.ok::before { content: "Hecho: "; font-weight: 700; }
+input:user-invalid, select:user-invalid, textarea:user-invalid,
+[aria-invalid="true"] { border: 2px solid var(--danger); border-left-width: 6px; }
+.table-wrap { overflow-x: auto; max-width: 100%; margin: 0 0 var(--space-3); }
+table { width: 100%; border-collapse: collapse; background: var(--surface); }
+th, td { border: 1px solid var(--border); padding: var(--space-2);
+  text-align: left; vertical-align: top; }
+thead th { background: var(--bg); font-weight: 700; }
+tbody tr:nth-child(even) { background: var(--stripe); }
+tbody tr:hover { background: var(--hover); }
+code { background: var(--bg); padding: 0.1rem 0.3rem;
+  border-radius: var(--radius); }
+a:focus-visible, button:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: 3px solid var(--focus); outline-offset: 2px;
+}
+@media (max-width: 48rem) {
+  .site-header { flex-direction: column; align-items: stretch; }
+  .site-nav ul { flex-direction: column; }
+  form { flex-direction: column; align-items: stretch; }
+  input, select, textarea, button, .btn { width: 100%; }
+}
+@media (min-width: 48.01rem) {
+  .site-header { flex-direction: row; align-items: center; }
+  .site-nav ul { flex-direction: row; flex-wrap: wrap; }
+  form { flex-direction: row; flex-wrap: wrap; align-items: end; }
+  input, select, textarea, button, .btn { width: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important;
+    transition: none !important; scroll-behavior: auto !important; }
+}
 """
 
 
@@ -73,6 +193,15 @@ def security_headers() -> dict[str, str]:
     }
 
 
+def panel_security_headers() -> dict[str, str]:
+    """R29: CSP estricta del panel de asesores, sin scripts inline."""
+    return {
+        "Content-Security-Policy": PANEL_CSP,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+    }
+
+
 def _esc(value: object) -> str:
     return html.escape(str(value), quote=True)
 
@@ -81,30 +210,81 @@ def csrf_field(csrf: str) -> str:
     return f'<input type="hidden" name="csrf_token" value="{_esc(csrf)}">'
 
 
-def render_page(title: str, body_html: str, csrf: str | None = None) -> str:
+def _table_wrap(table_html: str) -> str:
+    """R8: contiene cada tabla en su propio contenedor con desplazamiento."""
+    return f'<div class="table-wrap">{table_html}</div>'
+
+
+def _toggle_class(active: bool) -> str:
+    """R4: desactivar es destructivo; activar es una acción secundaria."""
+    return "btn-danger" if active else "btn-secondary"
+
+
+def _skip_link() -> str:
+    """R15: primer elemento enfocable del cuerpo, apunta al contenido."""
+    return '<a class="skip-link" href="#contenido">Saltar al contenido</a>'
+
+
+def _nav_html(
+    links: list[tuple[str, str]],
+    current: str | None = None,
+    label: str = "Navegación",
+) -> str:
+    """R3, R16: misma cabecera y navegación para ambos paneles.
+
+    `advisor_panel` importa estos helpers privados a propósito para compartir la
+    estructura visual (decisión de #56).
+    """
+    items = []
+    for href, text in links:
+        is_current = bool(current) and (
+            current == href
+            or (href not in ("/admin", "/asesor") and current.startswith(f"{href}/"))
+        )
+        marker = ' aria-current="page"' if is_current else ""
+        items.append(
+            f'<li><a href="{_esc(href)}"{marker}>{_esc(text)}</a></li>'
+        )
+    return (
+        f'<nav class="site-nav" aria-label="{_esc(label)}"><ul>'
+        f"{''.join(items)}</ul></nav>\n"
+    )
+
+
+ADMIN_NAV_LINKS = [
+    ("/admin", "Inicio"),
+    ("/admin/profiles", "Perfiles y roles"),
+    ("/admin/events", "Eventos recientes"),
+    ("/admin/manuals", "Manuales"),
+    ("/admin/categories", "Categorías"),
+    ("/admin/etiquetas", "Etiquetas"),
+    ("/admin/respuestas", "Respuestas guardadas"),
+    ("/admin/texts", "Textos del flujo"),
+    ("/admin/clientes", "Clientes"),
+    ("/admin/plantillas", "Plantillas"),
+    ("/admin/ajustes", "Ajustes"),
+    ("/admin/metricas", "Métricas"),
+    ("/admin/supresiones", "Supresiones"),
+]
+
+
+def render_page(
+    title: str,
+    body_html: str,
+    csrf: str | None = None,
+    current_path: str | None = None,
+) -> str:
     logout = ""
     navigation = ""
     if csrf is not None:
         logout = (
             '<form method="post" action="/admin/logout">'
             f"{csrf_field(csrf)}"
-            '<button type="submit">Salir</button>'
+            '<button type="submit" class="btn-secondary">Salir</button>'
             "</form>"
         )
-        navigation = (
-            '<nav><ul>'
-            '<li><a href="/admin">Inicio</a></li>'
-            '<li><a href="/admin/profiles">Perfiles y roles</a></li>'
-            '<li><a href="/admin/events">Eventos recientes</a></li>'
-            '<li><a href="/admin/manuals">Manuales</a></li>'
-            '<li><a href="/admin/categories">Categorías</a></li>'
-            '<li><a href="/admin/texts">Textos del flujo</a></li>'
-            '<li><a href="/admin/clientes">Clientes</a></li>'
-            '<li><a href="/admin/plantillas">Plantillas</a></li>'
-            '<li><a href="/admin/ajustes">Ajustes</a></li>'
-            '<li><a href="/admin/metricas">Métricas</a></li>'
-            '<li><a href="/admin/supresiones">Supresiones</a></li>'
-            "</ul></nav>\n"
+        navigation = _nav_html(
+            ADMIN_NAV_LINKS, current_path, "Navegación administrativa"
         )
     return (
         "<!DOCTYPE html>\n"
@@ -116,23 +296,27 @@ def render_page(title: str, body_html: str, csrf: str | None = None) -> str:
         '<link rel="stylesheet" href="/admin/static/admin.css">\n'
         "</head>\n"
         "<body>\n"
-        f"<header><h1>Panel administrativo</h1>{logout}</header>\n"
-        f"<main>\n{navigation}<h2>{_esc(title)}</h2>\n{body_html}\n</main>\n"
+        f"{_skip_link()}\n"
+        f'<header class="site-header"><h1>Panel administrativo</h1>{logout}</header>\n'
+        f'<main id="contenido">\n{navigation}<h2>{_esc(title)}</h2>\n{body_html}\n</main>\n'
         "</body>\n"
         "</html>\n"
     )
 
 
-def render_login(message: str | None = None) -> str:
+def render_login(message: str | None = None, code: str | None = None) -> str:
     error = ""
     if message:
-        error = f'<p class="error" role="alert">{_esc(message)}</p>\n'
+        data = f' data-error="{_esc(code)}"' if code else ""
+        error = f'<p class="error" role="alert"{data}>{_esc(message)}</p>\n'
     body = (
         f"{error}"
-        '<form method="post" action="/admin/login">'
+        '<form method="post" action="/admin/login" class="card">'
         '<label>Usuario <input name="username" autocomplete="username" required></label>'
         '<label>Contraseña <input type="password" name="password" '
         'autocomplete="current-password" required></label>'
+        '<label>Código de verificación <input name="code" inputmode="numeric" '
+        'autocomplete="one-time-code"></label>'
         '<button type="submit">Entrar</button>'
         "</form>"
     )
@@ -140,7 +324,12 @@ def render_login(message: str | None = None) -> str:
 
 
 def render_home(csrf: str) -> str:
-    return render_page("Inicio", "<p>Selecciona una sección del panel.</p>", csrf)
+    return render_page(
+        "Inicio",
+        "<p>Selecciona una sección del panel.</p>",
+        csrf,
+        current_path="/admin",
+    )
 
 
 def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
@@ -150,7 +339,13 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         role_options = "".join(
             f'<option value="{_esc(role)}"'
             f'{" selected" if role == profile.role else ""}>{_esc(role)}</option>'
-            for role in ("admin", "asesor", "cliente")
+            for role in (
+                "admin",
+                "supervisor",
+                "asesor",
+                "responsable_datos",
+                "cliente",
+            )
         )
         rows.append(
             "<tr>"
@@ -161,13 +356,19 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
             f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/role">'
             f"{csrf_field(csrf)}"
             f'<select name="role">{role_options}</select>'
-            '<button type="submit">Cambiar rol</button>'
+            '<button type="submit" class="btn-secondary">Cambiar rol</button>'
             "</form>"
             "</td>"
             "<td>"
             f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/link-token">'
             f"{csrf_field(csrf)}"
-            '<button type="submit">Generar enlace</button>'
+            '<button type="submit" class="btn-secondary">Generar enlace</button>'
+            "</form>"
+            "</td>"
+            "<td>"
+            f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/2fa/reset">'
+            f"{csrf_field(csrf)}"
+            '<button type="submit" class="btn-danger">Restablecer 2FA</button>'
             "</form>"
             "</td>"
             "</tr>"
@@ -177,24 +378,29 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
     body = (
         f"{error_html}"
-        '<form method="post" action="/admin/profiles">'
+        '<form method="post" action="/admin/profiles" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Usuario <input name="username" autocomplete="off" required></label>'
         '<label>Rol <select name="role">'
         '<option value="admin">admin</option>'
+        '<option value="supervisor">supervisor</option>'
         '<option value="asesor">asesor</option>'
+        '<option value="responsable_datos">responsable_datos</option>'
         '<option value="cliente">cliente</option>'
         "</select></label>"
         '<label>Contraseña <input type="password" name="password" '
         'autocomplete="new-password" required></label>'
         '<button type="submit">Crear perfil</button>'
         "</form>"
-        "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Vinculado</th>"
-        "<th>Cambiar rol</th><th>Enlace de Telegram</th></tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        + _table_wrap(
+            "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Vinculado</th>"
+            "<th>Cambiar rol</th><th>Enlace de Telegram</th><th>Segundo factor</th>"
+            "</tr></thead><tbody>"
+            f"{''.join(rows)}"
+            "</tbody></table>"
+        )
     )
-    return render_page("Perfiles y roles", body, csrf)
+    return render_page("Perfiles y roles", body, csrf, "/admin/profiles")
 
 
 def render_link(token: str, link: str | None, expires_at: datetime, csrf: str) -> str:
@@ -204,7 +410,7 @@ def render_link(token: str, link: str | None, expires_at: datetime, csrf: str) -
         f"<p>Caduca: <code>{_esc(expires_at.isoformat())}</code></p>"
         '<p><a href="/admin/profiles">Volver a perfiles</a></p>'
     )
-    return render_page("Enlace de vinculación", body, csrf)
+    return render_page("Enlace de vinculación", body, csrf, "/admin/profiles")
 
 
 def render_events(events, csrf: str) -> str:
@@ -217,11 +423,11 @@ def render_events(events, csrf: str) -> str:
         "</tr>"
         for event in events
     )
-    body = (
+    body = _table_wrap(
         "<table><thead><tr><th>Contacto</th><th>Tipo</th><th>Motivo</th>"
         f"<th>Fecha</th></tr></thead><tbody>{rows}</tbody></table>"
     )
-    return render_page("Eventos recientes", body, csrf)
+    return render_page("Eventos recientes", body, csrf, "/admin/events")
 
 
 def render_manuals(manuals, csrf: str, error: str | None = None) -> str:
@@ -238,19 +444,20 @@ def render_manuals(manuals, csrf: str, error: str | None = None) -> str:
             "</tr>"
             for manual in manuals
         )
-        table = (
+        table = _table_wrap(
             "<table><thead><tr><th>Manual</th><th>Fragmentos</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
     upload = (
-        '<form method="post" action="/admin/manuals" enctype="multipart/form-data">'
+        '<form method="post" action="/admin/manuals" '
+        'enctype="multipart/form-data" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Nombre <input name="name" maxlength="200" required></label>'
         '<label>Archivo <input type="file" name="file" accept=".pdf,.docx" required></label>'
         '<button type="submit">Cargar manual</button>'
         "</form>"
     )
-    return render_page("Manuales", f"{error_html}{upload}\n{table}", csrf)
+    return render_page("Manuales", f"{error_html}{upload}\n{table}", csrf, "/admin/manuals")
 
 
 def render_manual_chunks(manual_id: str, chunks, csrf: str) -> str:
@@ -269,25 +476,29 @@ def render_manual_chunks(manual_id: str, chunks, csrf: str) -> str:
             f'<form method="post" action="/admin/chunks/{chunk_path}">'
             f"{csrf_field(csrf)}"
             f'<textarea name="text" required>{_esc(chunk.text)}</textarea>'
-            '<button type="submit">Guardar texto</button>'
+            '<button type="submit" class="btn-secondary">Guardar texto</button>'
             "</form>"
             "</td>"
             "<td>"
             f'<form method="post" action="/admin/chunks/{chunk_path}/active">'
             f"{csrf_field(csrf)}"
             f'<input type="hidden" name="active" value="{next_active}">'
-            f'<button type="submit">{action}</button>'
+            f'<button type="submit" class="{_toggle_class(chunk.active)}">{action}</button>'
             "</form>"
             "</td>"
             "</tr>"
         )
     body = (
         f'<p><a href="/admin/manuals">Volver a manuales</a></p>'
-        "<table><thead><tr><th>Orden</th><th>Texto</th><th>Activo</th>"
-        "<th>Editar texto</th><th>Estado</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
+        + _table_wrap(
+            "<table><thead><tr><th>Orden</th><th>Texto</th><th>Activo</th>"
+            "<th>Editar texto</th><th>Estado</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
     )
-    return render_page(f"Fragmentos del manual {manual_id}", body, csrf)
+    return render_page(
+        f"Fragmentos del manual {manual_id}", body, csrf, "/admin/manuals"
+    )
 
 
 def render_categories(categories, threshold: float, csrf: str, error: str | None = None) -> str:
@@ -311,14 +522,15 @@ def render_categories(categories, threshold: float, csrf: str, error: str | None
             'maxlength="60" required></label>'
             f'<label>Palabras clave <textarea name="keywords" required>'
             f"{_esc(keywords_text)}</textarea></label>"
-            '<button type="submit">Guardar</button>'
+            '<button type="submit" class="btn-secondary">Guardar</button>'
             "</form>"
             "</td>"
             "<td>"
             f'<form method="post" action="/admin/categories/{category_path}/active">'
             f"{csrf_field(csrf)}"
             f'<input type="hidden" name="active" value="{next_active}">'
-            f'<button type="submit">{action}</button>'
+            f'<button type="submit" class="{_toggle_class(category.active)}">'
+            f"{action}</button>"
             "</form>"
             "</td>"
             "</tr>"
@@ -327,7 +539,7 @@ def render_categories(categories, threshold: float, csrf: str, error: str | None
     if error:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
     create = (
-        '<form method="post" action="/admin/categories">'
+        '<form method="post" action="/admin/categories" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Código <input name="code" maxlength="16" required></label>'
         '<label>Nombre <input name="name" maxlength="60" required></label>'
@@ -338,20 +550,127 @@ def render_categories(categories, threshold: float, csrf: str, error: str | None
     threshold_text = f"{threshold:g}"
     threshold_form = (
         f"<p>Umbral vigente: <code>{_esc(threshold_text)}</code></p>"
-        '<form method="post" action="/admin/categories/threshold">'
+        '<form method="post" action="/admin/categories/threshold" class="card">'
         f"{csrf_field(csrf)}"
         f'<label>Umbral <input name="threshold" value="{_esc(threshold_text)}" '
         'inputmode="decimal" required></label>'
-        '<button type="submit">Guardar umbral</button>'
+        '<button type="submit" class="btn-secondary">Guardar umbral</button>'
         "</form>"
     )
     body = (
         f"{error_html}{threshold_form}\n{create}\n"
-        "<table><thead><tr><th>Código</th><th>Nombre</th><th>Palabras clave</th>"
-        "<th>Activa</th><th>Editar</th><th>Estado</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
+        + _table_wrap(
+            "<table><thead><tr><th>Código</th><th>Nombre</th><th>Palabras clave</th>"
+            "<th>Activa</th><th>Editar</th><th>Estado</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
     )
-    return render_page("Categorías", body, csrf)
+    return render_page("Categorías", body, csrf, "/admin/categories")
+
+
+def render_tags(tags, csrf: str, error: str | None = None) -> str:
+    """R14-R18, R29: administración de etiquetas sin JS."""
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    for tag in tags:
+        path = quote(tag.id, safe="")
+        state = "Sí" if tag.active else "No"
+        next_active = "0" if tag.active else "1"
+        action = "Desactivar" if tag.active else "Activar"
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(tag.name)}</td>"
+            f"<td>{state}</td>"
+            "<td>"
+            f'<form method="post" action="/admin/etiquetas/{path}">'
+            f"{csrf_field(csrf)}"
+            f'<label>Nombre <input name="name" value="{_esc(tag.name)}" '
+            'maxlength="100" required></label>'
+            '<button type="submit" class="btn-secondary">Renombrar</button>'
+            "</form>"
+            "</td>"
+            "<td>"
+            f'<form method="post" action="/admin/etiquetas/{path}/activa">'
+            f"{csrf_field(csrf)}"
+            f'<input type="hidden" name="active" value="{next_active}">'
+            f'<button type="submit" class="{_toggle_class(tag.active)}">'
+            f"{action}</button>"
+            "</form>"
+            "</td>"
+            "</tr>"
+        )
+    create = (
+        '<form method="post" action="/admin/etiquetas" class="card">'
+        f"{csrf_field(csrf)}"
+        '<label>Nombre <input name="name" maxlength="100" required></label>'
+        '<button type="submit">Crear etiqueta</button>'
+        "</form>"
+    )
+    body = (
+        f"{error_html}{create}\n"
+        + _table_wrap(
+            "<table><thead><tr><th>Nombre</th><th>Activa</th><th>Renombrar</th>"
+            f"<th>Estado</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
+    )
+    return render_page("Etiquetas", body, csrf, "/admin/etiquetas")
+
+
+def render_saved_replies(replies, csrf: str, error: str | None = None) -> str:
+    """R1-R3, R12, R21: administración de respuestas guardadas sin JS."""
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    for reply in replies:
+        path = quote(reply.id, safe="")
+        state = "Sí" if reply.active else "No"
+        next_active = "0" if reply.active else "1"
+        action = "Desactivar" if reply.active else "Activar"
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(reply.title)}</td>"
+            f"<td>{_esc(reply.body)}</td>"
+            f"<td>{state}</td>"
+            "<td>"
+            f'<form method="post" action="/admin/respuestas/{path}">'
+            f"{csrf_field(csrf)}"
+            f'<label>Título <input name="title" value="{_esc(reply.title)}" '
+            'maxlength="200" required></label>'
+            '<label>Texto <textarea name="body" maxlength="4096" required>'
+            f"{_esc(reply.body)}</textarea></label>"
+            '<button type="submit" class="btn-secondary">Guardar</button>'
+            "</form>"
+            "</td>"
+            "<td>"
+            f'<form method="post" action="/admin/respuestas/{path}/activa">'
+            f"{csrf_field(csrf)}"
+            f'<input type="hidden" name="active" value="{next_active}">'
+            f'<button type="submit" class="{_toggle_class(reply.active)}">'
+            f"{action}</button>"
+            "</form>"
+            "</td>"
+            "</tr>"
+        )
+    create = (
+        '<form method="post" action="/admin/respuestas" class="card">'
+        f"{csrf_field(csrf)}"
+        '<label>Título <input name="title" maxlength="200" required></label>'
+        '<label>Texto <textarea name="body" maxlength="4096" required></textarea></label>'
+        '<button type="submit">Crear respuesta</button>'
+        "</form>"
+    )
+    body = (
+        f"{error_html}{create}\n"
+        + _table_wrap(
+            "<table><thead><tr><th>Título</th><th>Texto</th><th>Activa</th>"
+            f"<th>Editar</th><th>Estado</th></tr></thead><tbody>{''.join(rows)}</tbody>"
+            "</table>"
+        )
+    )
+    return render_page("Respuestas guardadas", body, csrf, "/admin/respuestas")
 
 
 TEXT_FIELD_LABELS = {
@@ -398,7 +717,7 @@ def render_conversation_texts(
     fields_html = "".join(rows)
     body = (
         f"{error_html}"
-        '<form method="post" action="/admin/texts">'
+        '<form method="post" action="/admin/texts" class="card">'
         f"{csrf_field(csrf)}"
         f"{fields_html}"
         '<button type="submit">Guardar textos</button>'
@@ -406,7 +725,7 @@ def render_conversation_texts(
         '<p>La versión legal se guarda junto al texto; al cambiarla, los '
         "clientes deberán aceptar de nuevo antes de continuar.</p>"
     )
-    return render_page("Textos del flujo", body, csrf)
+    return render_page("Textos del flujo", body, csrf, "/admin/texts")
 
 
 def render_text_history(field: str, versions, csrf: str) -> str:
@@ -421,10 +740,12 @@ def render_text_history(field: str, versions, csrf: str) -> str:
     )
     body = (
         f'<p><a href="/admin/texts">Volver a textos</a></p>'
-        "<table><thead><tr><th>Versión</th><th>Autor</th><th>Fecha</th>"
-        f"<th>Valor</th></tr></thead><tbody>{rows}</tbody></table>"
+        + _table_wrap(
+            "<table><thead><tr><th>Versión</th><th>Autor</th><th>Fecha</th>"
+            f"<th>Valor</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
     )
-    return render_page(f"Historial de {field}", body, csrf)
+    return render_page(f"Historial de {field}", body, csrf, "/admin/texts")
 
 
 def render_clients(clients, csrf: str, error: str | None = None) -> str:
@@ -446,22 +767,22 @@ def render_clients(clients, csrf: str, error: str | None = None) -> str:
             "<td>"
             f'<form method="post" action="/admin/clientes/{path}/renovar">'
             f"{csrf_field(csrf)}"
-            '<button type="submit">Renovar</button>'
+            '<button type="submit" class="btn-secondary">Renovar</button>'
             "</form>"
             f'<form method="post" action="/admin/clientes/{path}/revocar">'
             f"{csrf_field(csrf)}"
-            '<button type="submit">Revocar</button>'
+            '<button type="submit" class="btn-danger">Revocar</button>'
             "</form>"
             f'<form method="post" action="/admin/clientes/{path}/cerrar-sesion">'
             f"{csrf_field(csrf)}"
-            '<button type="submit">Cerrar sesión</button>'
+            '<button type="submit" class="btn-secondary">Cerrar sesión</button>'
             "</form>"
             "</td>"
             "</tr>"
         )
     body = (
         f"{error_html}"
-        '<form method="post" action="/admin/clientes">'
+        '<form method="post" action="/admin/clientes" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Usuario <input name="username" autocomplete="off" required></label>'
         '<label>Contraseña <input type="password" name="password" '
@@ -470,11 +791,13 @@ def render_clients(clients, csrf: str, error: str | None = None) -> str:
         '<label>Válida hasta <input type="date" name="valid_until"></label>'
         '<button type="submit">Crear cliente</button>'
         "</form>"
-        "<table><thead><tr><th>Usuario</th><th>Estado</th><th>Desde</th>"
-        "<th>Hasta</th><th>Días</th><th>Sesión</th><th>Aviso</th>"
-        f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        + _table_wrap(
+            "<table><thead><tr><th>Usuario</th><th>Estado</th><th>Desde</th>"
+            "<th>Hasta</th><th>Días</th><th>Sesión</th><th>Aviso</th>"
+            f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
     )
-    return render_page("Clientes", body, csrf)
+    return render_page("Clientes", body, csrf, "/admin/clientes")
 
 
 def render_templates(templates, csrf: str, error: str | None = None) -> str:
@@ -504,7 +827,7 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
             f'<label>Idioma <input name="language" value="{_esc(template.language)}" required></label>'
             f'<label>Variables <input name="variables" value="{_esc(template.variables)}" required></label>'
             f'<label>Texto <textarea name="body" maxlength="1024" required>{_esc(template.body)}</textarea></label>'
-            '<button type="submit">Guardar</button>'
+            '<button type="submit" class="btn-secondary">Guardar</button>'
             "</form>"
             f'<form method="post" action="/admin/plantillas/{path}/estado">'
             f"{csrf_field(csrf)}"
@@ -514,13 +837,13 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
                 for status in ("pending", "approved", "rejected", "paused", "draft")
             )
             + "</select>"
-            '<button type="submit">Cambiar estado</button>'
+            '<button type="submit" class="btn-secondary">Cambiar estado</button>'
             "</form>"
             "</td>"
             "</tr>"
         )
     create = (
-        '<form method="post" action="/admin/plantillas">'
+        '<form method="post" action="/admin/plantillas" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Nombre <input name="name" required></label>'
         '<label>Propósito <select name="purpose">'
@@ -536,11 +859,13 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
     )
     body = (
         f"{error_html}{create}\n"
-        "<table><thead><tr><th>Nombre</th><th>Propósito</th><th>Idioma</th>"
-        "<th>Variables</th><th>Texto</th><th>Estado</th><th>Aprobación</th>"
-        f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        + _table_wrap(
+            "<table><thead><tr><th>Nombre</th><th>Propósito</th><th>Idioma</th>"
+            "<th>Variables</th><th>Texto</th><th>Estado</th><th>Aprobación</th>"
+            f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
     )
-    return render_page("Plantillas de WhatsApp", body, csrf)
+    return render_page("Plantillas de WhatsApp", body, csrf, "/admin/plantillas")
 
 
 def render_settings(settings_rows, csrf: str, error: str | None = None) -> str:
@@ -559,23 +884,37 @@ def render_settings(settings_rows, csrf: str, error: str | None = None) -> str:
             f"<td>{_esc(row['range'])}</td>"
             "</tr>"
         )
-        inputs.append(
-            f'<label>{_esc(row["key"])} '
-            f'<input name="{_esc(row["key"])}" value="{_esc(row["effective"])}" '
-            f'placeholder="{_esc(row["default"])}"></label>'
-        )
+        if row.get("options"):
+            choices = "".join(
+                f'<option value="{_esc(option)}"'
+                f'{" selected" if option == row["effective"] else ""}>'
+                f"{_esc(option)}</option>"
+                for option in row["options"]
+            )
+            inputs.append(
+                f'<label>{_esc(row["key"])} '
+                f'<select name="{_esc(row["key"])}">{choices}</select></label>'
+            )
+        else:
+            inputs.append(
+                f'<label>{_esc(row["key"])} '
+                f'<input name="{_esc(row["key"])}" value="{_esc(row["effective"])}" '
+                f'placeholder="{_esc(row["default"])}"></label>'
+            )
     body = (
         f"{error_html}"
-        "<table><thead><tr><th>Clave</th><th>Efectivo</th><th>Por defecto</th>"
-        f"<th>Origen</th><th>Rango</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
-        '<form method="post" action="/admin/ajustes">'
+        + _table_wrap(
+            "<table><thead><tr><th>Clave</th><th>Efectivo</th><th>Por defecto</th>"
+            f"<th>Origen</th><th>Rango</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
+        + '<form method="post" action="/admin/ajustes" class="card">'
         f"{csrf_field(csrf)}"
         f"{''.join(inputs)}"
         '<button type="submit">Guardar ajustes</button>'
         "</form>"
         "<p>Deja un campo vacío para volver al valor de entorno.</p>"
     )
-    return render_page("Ajustes operativos", body, csrf)
+    return render_page("Ajustes operativos", body, csrf, "/admin/ajustes")
 
 
 def render_metrics(metrics, csrf: str) -> str:
@@ -604,13 +943,13 @@ def render_metrics(metrics, csrf: str) -> str:
         f"Sin respuesta: {_esc(first.unanswered)} · Promedio: {_esc(average)} min · "
         f"Mediana: {_esc(median)} min</p>"
         "<h3>Conversaciones por asesor</h3>"
-        f"<table><tbody>{advisors}</tbody></table>"
-        "<h3>Motivos de escalamiento</h3>"
-        f"<table><tbody>{reasons}</tbody></table>"
-        f"<h3>Preguntas sin respuesta: {_esc(metrics.unanswered_total)}</h3>"
+        + _table_wrap(f"<table><tbody>{advisors}</tbody></table>")
+        + "<h3>Motivos de escalamiento</h3>"
+        + _table_wrap(f"<table><tbody>{reasons}</tbody></table>")
+        + f"<h3>Preguntas sin respuesta: {_esc(metrics.unanswered_total)}</h3>"
         f"<ul>{samples}</ul>"
     )
-    return render_page("Métricas", body, csrf)
+    return render_page("Métricas", body, csrf, "/admin/metricas")
 
 
 def render_error(status: int, code: str, csrf: str | None = None) -> str:

@@ -21,7 +21,8 @@ No ejecutes `init.sh` mientras trabajas únicamente en specs o documentación.
 - `in_progress`: reanuda el implementer existente; no reinicies su análisis.
 - Si el reviewer pide cambios de código, OpenCode corrige exclusivamente esos
   hallazgos y se hace una revisión dirigida. Máximo dos ciclos de corrección.
-- Marca `done` solo tras aprobación del reviewer de código y `init.sh` verde.
+- Tras aprobación del reviewer de código y `init.sh` verde, relanza al implementer
+  para que marque `done` y archive el resumen de `progress/current.md`.
 
 Bloquea únicamente si falta una decisión de producto material que no esté en
 el acceptance, `docs/proyecto.md`, decisiones previas o defaults configurables

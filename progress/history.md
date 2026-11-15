@@ -557,3 +557,64 @@
 - #48 `retirar_asesores_telegram`, #49 `roles_supervisor_responsable_datos`, #50 `notas_internas_y_etiquetas`, #51 `respuestas_guardadas`, #52 `asignacion_automatica_carga`, #53 `panel_tiempo_real`, #54 `segundo_factor_panel`, #55 `evaluacion_ataques_y_preguntas_reales`.
 - Supuestos por confirmar recogidos en el acceptance: `no_advisors` sin aviso Telegram (#48), reasignación solo a asesores disponibles (#49), casos en cola sin reasignación automática posterior (#52), TOTP como segundo factor y obligatorio en producción (#54).
 - Siguen fuera del repositorio y a cargo del dueño: validación legal, manuales reales para calibrar embeddings y umbral, costo de plantillas de Meta y despliegue en Render.
+
+## 2026-11-12 — Feature #48 retirar_asesores_telegram (done)
+- **Modo:** supervisado; spec aprobado en `progress/specreview_retirar_asesores_telegram.md` y código `APPROVED` en `progress/review_retirar_asesores_telegram.md`.
+- Se retiraron los comandos de asesor por Telegram y `ADVISOR_CHAT_IDS`; handover usa el roster de perfiles sincronizado con generación compartida y la bandeja del panel.
+- Writer OpenCode Go con `deepseek-v4.1-flash`; T1–T12 completas. Trazabilidad R1–R52 en `progress/impl_retirar_asesores_telegram.md`.
+- `bash ./init.sh`: 3076 passed, 1 skipped, 2 warnings; Claude reviewer repitió la suite y aprobó.
+
+## 2026-11-12 — Revisión del harness Claude/OpenCode
+- El writer queda fijado a `opencode-go/deepseek-v4.1-flash`; `opencode-go` es el único proveedor del proyecto. El puente supervisado y `nocturno.sh` comparten el mismo preflight de autenticación.
+- Claude usa `sonnet` como modelo del proyecto y tiene `Agent` permitido en ambos modos. Se aclaró quién marca `done` y que el writer largo debe continuar en segundo plano sin duplicarse.
+- Se actualizó la guía de conexión, se arregló la invocación del fallback `py -3` de Windows, se añadieron finales LF a los scripts, se protegieron los tests del harness frente al writer y se añadieron pruebas para modelo, invocación y credenciales.
+- Verificación: `claude doctor` sin problemas; prueba de modelo Claude y de subagente Explore correctas; OpenCode listó y respondió con `opencode-go/deepseek-v4.1-flash`; tests de preflight y shell correctos; `bash ./init.sh`: 3081 passed, 1 skipped, 2 warnings de deprecación.
+- `nocturno.sh` muestra avisos si no hay GNU `timeout` o inhibidor de suspensión. No se ejecutó el bucle nocturno: el árbol conserva cambios locales y la siguiente feature no está aprobada para implementación.
+
+## 2026-11-12 — Revisión final del harness
+- Claude leader lanzó un subagente Explore en solo lectura; resultado `REVIEW_OK`, sin hallazgos funcionales pendientes en los 12 archivos del harness revisados.
+- La ejecución del reviewer fue separada de `./init.sh`: 3081 passed, 1 skipped y 2 warnings de deprecación. No se ejecutó una feature del writer porque la siguiente (#49) sigue pending y el puente exige `in_progress` con spec aprobada.
+
+## 2026-11-12 — #49 roles_supervisor_responsable_datos
+- **Modo:** supervisado; reviewer `APPROVED` (`progress/review_roles_supervisor_responsable_datos.md`). Writer OpenCode `deepseek-v4.1-flash`; T1–T11 completas, trazabilidad R1–R30 en `progress/impl_roles_supervisor_responsable_datos.md`.
+- Añade los roles `supervisor` y `responsable_datos`; reasignación decidida por handover (escritura condicional y auditada, 403 para asesores) y cola de supresión restringida.
+- Dos correcciones de review: 403 sin revelar ids/nombres en caso ajeno y rechazo de login de `cliente` con credenciales válidas.
+- `bash ./init.sh` verde (3214 passed, 1 skipped al cierre de la primera pasada; repetido tras las correcciones).
+
+## 2026-11-13 — Harness Claude + DeepSeek y feature #50 (done)
+- Verificado el flujo supervisado de extremo a extremo: Claude Code `leader` coordinó, DeepSeek V4.1 Flash implementó mediante `scripts/run_opencode_writer.sh`, y Claude `reviewer` aprobó la feature #50.
+- Revisión detectó falta de auditoría en fallos CSRF para las siete rutas POST nuevas; DeepSeek la corrigió y añadió pruebas de regresión. Informe: `progress/review_notas_internas_y_etiquetas.md`; trazabilidad R1–R40: `progress/impl_notas_internas_y_etiquetas.md`.
+- `bash ./init.sh`: 3274 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+- Se preservó el resto de los cambios locales existentes; no se hizo commit.
+
+## 2026-11-13 — Feature #51 respuestas_guardadas (done)
+- Modo supervisado: Claude `spec_author` y `reviewer` aprobaron el spec (`progress/specreview_respuestas_guardadas.md`); DeepSeek V4.1 Flash implementó T1–T12 y Claude aprobó el código (`progress/review_respuestas_guardadas.md`).
+- Añade gestión administrativa de respuestas guardadas y carga editable desde el panel de asesores; el envío conserva autorización y reglas de canal existentes.
+- Trazabilidad R1–R24 en `progress/impl_respuestas_guardadas.md`. `bash ./init.sh`: 3325 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+
+## 2026-11-13 — Feature #52 asignacion_automatica_carga (done)
+- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_asignacion_automatica_carga.md`); DeepSeek V4.1 Flash implementó T1–T20; Claude aprobó el código (`progress/review_asignacion_automatica_carga.md`).
+- El orchestrator ofrece modo manual/automático configurable; handover elige al asesor con menor carga y asigna en una transacción serializada, sin pisar acciones humanas ni redistribuir casos antiguos en cola.
+- Trazabilidad R1–R26 en `progress/impl_asignacion_automatica_carga.md`. Tras una corrección documental dirigida, `bash ./init.sh`: 3367 passed, 1 skipped, 2 warnings, exit 0.
+
+## 2026-11-13 — Feature #53 panel_tiempo_real (done)
+- Claude `spec_author` y reviewer aprobaron el spec (`progress/specreview_panel_tiempo_real.md`); el dueño autorizó añadir e instalar `websockets>=13,<16`; DeepSeek V4.1 Flash implementó T1–T20 y Claude aprobó el código (`progress/review_panel_tiempo_real.md`).
+- Añade avisos websocket autorizados por sesión/caso, eventos compartidos en Postgres, fragmentos HTML de recuperación, JavaScript propio con CSP estricta y fallback periódico.
+- Trazabilidad R1–R35 en `progress/impl_panel_tiempo_real.md`. `bash ./init.sh`: 3416 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+
+## 2026-11-13 — Feature #54 segundo_factor_panel (done)
+- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_segundo_factor_panel.md`) tras definir recuperación operativa SQL para el último administrador y pérdida de clave; el dueño autorizó añadir e instalar `cryptography>=43,<48`.
+- DeepSeek V4.1 Flash implementó T0–T18; Claude aprobó el código (`progress/review_segundo_factor_panel.md`). TOTP RFC 6238, secretos Fernet, anti-replay, códigos de recuperación, sesiones restringidas, reset auditado y recuperación operacional documentada.
+- Trazabilidad R1–R48 en `progress/impl_segundo_factor_panel.md`. `bash ./init.sh`: 3489 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+
+## 2026-11-13 — Feature #55 evaluacion_ataques_y_preguntas_reales (done)
+- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_evaluacion_ataques_y_preguntas_reales.md`); DeepSeek V4.1 Flash implementó T1–T14; Claude aprobó el código (`progress/review_evaluacion_ataques_y_preguntas_reales.md`).
+- Añade dataset sintético de ataques, scoring separado y salida de fallo, plantilla vacía para preguntas reales, mínimo configurable/documentado y compatibilidad de `--url` y `--preguntas` repetible.
+- Trazabilidad R1–R33 en `progress/impl_evaluacion_ataques_y_preguntas_reales.md`. `bash ./init.sh`: 3537 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+
+## 2026-11-13 — Feature #56 rediseño_visual_paneles (done)
+- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_rediseño_visual_paneles.md`); DeepSeek V4.1 Flash implementó T1–T13; Claude aprobó el código (`progress/review_rediseño_visual_paneles.md`).
+- Rediseña la presentación compartida de admin y asesores, con tablas adaptables, accesibilidad, foco visible, contraste WCAG y navegación coherente, sin cambiar lógica ni CSP.
+- Se reparó la validación del puente writer para aceptar la `ñ` del nombre de feature; se añadió una prueba de regresión.
+- Trazabilidad R1–R27 en `progress/impl_rediseño_visual_paneles.md`. `bash ./init.sh`: 3558 passed, 1 skipped, 2 warnings de deprecación, exit 0.
+- Se preservaron los demás cambios locales preexistentes; no se hicieron commits.

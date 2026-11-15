@@ -309,10 +309,10 @@ def test_rag_and_llm_errors_do_not_count_or_break_the_streak(env):
     assert len(env.handover.requests) == 1
 
 
-def test_commands_privacy_and_user_request_are_not_counted(env):
-    """R2: comandos, aviso de privacidad y petición explícita no crean racha."""
+def test_staff_commands_privacy_and_user_request_are_not_counted(env):
+    """R2: comandos de personal, aviso de privacidad y petición explícita no crean racha."""
     env.settings.auto_handover_failure_threshold = 3
-    env.post(text="/responder case-1 hola", update_id=1)
+    env.post(text="/consultar cuántos pedidos hay", update_id=1)
     assert env.repo.rag_streaks == {}
     env.post(text="hola", update_id=2, user=30, chat=300, consent=False)
     assert env.repo.rag_streaks == {}
@@ -329,7 +329,7 @@ def test_forwarded_assigned_conversation_is_not_counted(env):
     env.settings.auto_handover_failure_threshold = 1
     contact = env.repo.get_or_create_contact(10, 100, env.adapters.clock())
     env.repo.link_case("case-1", contact.id, env.adapters.clock())
-    env.handover.client_message_status = "forwarded"
+    env.handover.client_message_status = "available_in_panel"
     env.post(text="hola asesor", update_id=1)
     assert env.rag.calls == []
     assert env.repo.rag_streaks == {}

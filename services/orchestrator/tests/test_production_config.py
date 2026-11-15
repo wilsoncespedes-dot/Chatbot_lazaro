@@ -1,12 +1,15 @@
 """Tests del arranque seguro en producción de orchestrator (#24)."""
 from __future__ import annotations
 
+import base64
+
 import pytest
 from pydantic import ValidationError
 
 from orchestrator.config import Settings
 
 TOKEN = "s" * 40
+PANEL_2FA_KEY = base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
 VALID = {
     "app_env": "production",
     "service_token": TOKEN,
@@ -25,6 +28,8 @@ VALID = {
     "identity_public_base_url": "https://orchestrator.example",
     "identity_link_signing_key": "k" * 32,
     "identity_login_required": True,
+    # #54: segundo factor
+    "panel_2fa_encryption_key": PANEL_2FA_KEY,
 }
 
 

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from lazaro_contracts import AdvisorRosterEntry
 
 from handover.adapters.gateway import FakeGatewayClient
 from handover.adapters.repository import FakeCaseRepository
@@ -16,7 +17,7 @@ from handover.main import create_app
 SERVICE_TOKEN = "svc-token"
 HEADERS = {"X-Service-Token": SERVICE_TOKEN}
 START = datetime(2026, 1, 2, 3, 0, 0, tzinfo=timezone.utc)
-ADVISORS = [111, 222, 333]
+ADVISORS = ["111", "222", "333"]
 TIMEOUT_REPLY = "Sigue en espera"
 
 
@@ -79,15 +80,14 @@ class Env:
 
 
 def make_env(
-    advisors: list[int] | None = None,
+    advisors: list[int | str] | None = None,
     repo: FakeCaseRepository | None = None,
     gateway: FakeGatewayClient | None = None,
     settings_overrides: dict | None = None,
 ) -> Env:
-    ids = ADVISORS if advisors is None else advisors
+    ids = ADVISORS if advisors is None else [str(advisor) for advisor in advisors]
     values = {
         "service_token": SERVICE_TOKEN,
-        "advisor_chat_ids": ",".join(str(i) for i in ids),
         "handover_timeout_seconds": 300,
         "handover_timeout_reply": TIMEOUT_REPLY,
         "privacy_retention_days": "30",
@@ -96,6 +96,10 @@ def make_env(
     values.update(settings_overrides or {})
     settings = Settings(**values)
     repo = repo or FakeCaseRepository()
+    repo.replace_roster(
+        [AdvisorRosterEntry(profile_id=advisor, role="asesor") for advisor in ids],
+        generation=1,
+    )
     gateway = gateway or FakeGatewayClient()
     clock = FakeClock()
     adapters = Adapters(repository=repo, gateway=gateway, clock=clock)

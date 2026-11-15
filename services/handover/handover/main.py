@@ -12,8 +12,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from lazaro_contracts import (
     SERVICE_TOKEN_HEADER,
+    AdvisorRosterSyncRequest,
+    AdvisorRosterSyncResponse,
     CaseAssignRequest,
     CaseAssignResponse,
+    CaseAutoAssignRequest,
+    CaseAutoAssignResponse,
     CaseAuthorizeRequest,
     CaseAuthorizeResponse,
     CaseClientMessageRequest,
@@ -22,6 +26,8 @@ from lazaro_contracts import (
     CaseCloseResponse,
     CaseListQuery,
     CaseListResponse,
+    CaseReassignRequest,
+    CaseReassignResponse,
     CaseTransferRequest,
     CaseTransferResponse,
     CheckTimeoutsRequest,
@@ -42,20 +48,26 @@ from .config import Settings
 from .domain import (
     Adapters,
     DomainError,
+    RosterOutOfSync,
     assign_case,
+    auto_assign_case,
     authorize_case,
     check_timeouts,
     close_case,
     forward_client_message,
     list_advisor_cases,
+    list_all_cases,
     log_orphan_cases,
     open_case,
     purge_personal_data,
+    reassign_case,
+    sync_advisor_roster,
     transfer_case,
 )
 
 logger = logging.getLogger(__name__)
 
+ROSTER_GENERATION_HEADER = "X-Advisor-Roster-Generation"
 SERVICE_NAME = "handover"
 PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -89,18 +101,35 @@ def build_default_adapters(settings: Settings) -> Adapters:
 
 def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
     settings = settings or Settings()
-    advisor_count = len(settings.advisor_ids)
-    logger.info("advisors_configured count=%d", advisor_count)
-    if advisor_count == 0:
-        logger.warning("no_advisors_configured")
     adapters = adapters or build_default_adapters(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        try:
+            roster = await run_in_threadpool(adapters.repository.get_roster)
+        except Exception:
+            logger.warning("advisor_roster_unavailable")
+        else:
+            logger.info("advisors_configured count=%d", len(roster))
+            if not roster:
+                logger.warning("no_advisors_configured")
         await run_in_threadpool(log_orphan_cases, settings, adapters)
         yield
 
     app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
+
+    def _require_current_generation(request: Request) -> None:
+        raw = request.headers.get(ROSTER_GENERATION_HEADER)
+        if raw is None:
+            return
+        try:
+            requested = int(raw)
+        except ValueError:
+            raise RosterOutOfSync("La generación del roster no es válida.") from None
+        if requested != adapters.repository.get_roster_generation():
+            raise RosterOutOfSync(
+                "El roster de asesores está desactualizado; vuelve a sincronizarlo."
+            )
 
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):
@@ -161,11 +190,21 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         return HealthResponse(status="ok", service=SERVICE_NAME)
 
     @app.get("/cases", response_model=CaseListResponse)
-    def get_cases(query: Annotated[CaseListQuery, Query()]) -> CaseListResponse:
+    def get_cases(
+        query: Annotated[CaseListQuery, Query()], request: Request
+    ) -> CaseListResponse:
+        _require_current_generation(request)
+        if query.scope == "all":
+            return list_all_cases(query.advisor_id, settings, adapters)
         return list_advisor_cases(query.advisor_id, settings, adapters)
 
+    @app.post("/advisors/sync", response_model=AdvisorRosterSyncResponse)
+    def post_advisors_sync(body: AdvisorRosterSyncRequest) -> AdvisorRosterSyncResponse:
+        return sync_advisor_roster(body, settings, adapters)
+
     @app.post("/handover", response_model=HandoverResponse)
-    def post_handover(body: HandoverRequest) -> HandoverResponse:
+    def post_handover(body: HandoverRequest, request: Request) -> HandoverResponse:
+        _require_current_generation(request)
         return open_case(body, settings, adapters)
 
     @app.post("/cases/check-timeouts", response_model=CheckTimeoutsResponse)
@@ -173,19 +212,45 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         return check_timeouts(settings, adapters)
 
     @app.post("/cases/{case_id}/assign", response_model=CaseAssignResponse)
-    def post_assign(case_id: str, body: CaseAssignRequest) -> CaseAssignResponse:
+    def post_assign(
+        case_id: str, body: CaseAssignRequest, request: Request
+    ) -> CaseAssignResponse:
+        _require_current_generation(request)
         return assign_case(case_id, body.advisor_id, settings, adapters)
 
+    @app.post("/cases/{case_id}/auto-assign", response_model=CaseAutoAssignResponse)
+    def post_auto_assign(
+        case_id: str, body: CaseAutoAssignRequest, request: Request
+    ) -> CaseAutoAssignResponse:
+        _require_current_generation(request)
+        return auto_assign_case(case_id, body, settings, adapters)
+
     @app.post("/cases/{case_id}/close", response_model=CaseCloseResponse)
-    def post_close(case_id: str, body: CaseCloseRequest) -> CaseCloseResponse:
+    def post_close(
+        case_id: str, body: CaseCloseRequest, request: Request
+    ) -> CaseCloseResponse:
+        _require_current_generation(request)
         return close_case(case_id, body.advisor_id, settings, adapters)
 
     @app.post("/cases/{case_id}/transfer", response_model=CaseTransferResponse)
-    def post_transfer(case_id: str, body: CaseTransferRequest) -> CaseTransferResponse:
+    def post_transfer(
+        case_id: str, body: CaseTransferRequest, request: Request
+    ) -> CaseTransferResponse:
+        _require_current_generation(request)
         return transfer_case(case_id, body, settings, adapters)
 
+    @app.post("/cases/{case_id}/reassign", response_model=CaseReassignResponse)
+    def post_reassign(
+        case_id: str, body: CaseReassignRequest, request: Request
+    ) -> CaseReassignResponse:
+        _require_current_generation(request)
+        return reassign_case(case_id, body, settings, adapters)
+
     @app.post("/cases/{case_id}/authorize", response_model=CaseAuthorizeResponse)
-    def post_authorize(case_id: str, body: CaseAuthorizeRequest) -> CaseAuthorizeResponse:
+    def post_authorize(
+        case_id: str, body: CaseAuthorizeRequest, request: Request
+    ) -> CaseAuthorizeResponse:
+        _require_current_generation(request)
         return authorize_case(case_id, body, settings, adapters)
 
     @app.post("/cases/{case_id}/client-message", response_model=CaseClientMessageResponse)

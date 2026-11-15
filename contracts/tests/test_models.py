@@ -16,8 +16,12 @@ from lazaro_contracts import (
     MAX_MANUAL_NAME_LENGTH,
     MAX_TEXT_LENGTH,
     MAX_TOP_K,
+    AdvisorRosterSyncRequest,
+    AdvisorRosterSyncResponse,
     CaseAssignRequest,
     CaseAssignResponse,
+    CaseAutoAssignRequest,
+    CaseAutoAssignResponse,
     CaseAuthorizeAction,
     CaseAuthorizeRequest,
     CaseAuthorizeResponse,
@@ -25,6 +29,8 @@ from lazaro_contracts import (
     CaseClientMessageResponse,
     CaseCloseRequest,
     CaseCloseResponse,
+    CaseReassignRequest,
+    CaseReassignResponse,
     CaseReplyRequest,
     CaseReplyResponse,
     CheckTimeoutsRequest,
@@ -62,6 +68,8 @@ BASE_EXAMPLES: dict[type[BaseModel], tuple[str, str | None]] = {
     HandoverRequest: ("handover_request.json", None),
     LastMessage: ("handover_request.json", "last_messages"),
     HandoverResponse: ("handover_response.json", None),
+    AdvisorRosterSyncRequest: ("advisor_roster_sync_request.json", None),
+    AdvisorRosterSyncResponse: ("advisor_roster_sync_response.json", None),
     CaseReplyRequest: ("case_reply_request.json", None),
     CaseReplyResponse: ("case_reply_response.json", None),
     ManualUploadRequest: ("manual_upload_request.json", None),
@@ -70,10 +78,14 @@ BASE_EXAMPLES: dict[type[BaseModel], tuple[str, str | None]] = {
     CaseCloseResponse: ("case_close_response.json", None),
     CaseAssignRequest: ("case_assign_request.json", None),
     CaseAssignResponse: ("case_assign_response.json", None),
+    CaseAutoAssignRequest: ("case_auto_assign_request.json", None),
+    CaseAutoAssignResponse: ("case_auto_assign_response.json", None),
     CaseAuthorizeRequest: ("case_authorize_request.json", None),
     CaseAuthorizeResponse: ("case_authorize_response.json", None),
     CaseClientMessageRequest: ("case_client_message_request.json", None),
     CaseClientMessageResponse: ("case_client_message_response.json", None),
+    CaseReassignRequest: ("case_reassign_request.json", None),
+    CaseReassignResponse: ("case_reassign_response.json", None),
     CheckTimeoutsRequest: ("check_timeouts_request.json", None),
     CheckTimeoutsResponse: ("check_timeouts_response.json", None),
     ChunkUpdateRequest: ("chunk_update_request.json", None),
@@ -200,6 +212,10 @@ IDENTIFIER_FIELDS = [
     (ManualUploadResponse, "manual_id"),
     (CaseAssignRequest, "advisor_id"),
     (CaseAssignResponse, "case_id"),
+    (CaseReassignRequest, "advisor_id"),
+    (CaseReassignRequest, "target_advisor_id"),
+    (CaseReassignResponse, "case_id"),
+    (CaseReassignResponse, "advisor_id"),
     (CaseAuthorizeRequest, "advisor_id"),
     (CaseAuthorizeResponse, "case_id"),
     (CaseClientMessageResponse, "case_id"),
@@ -407,19 +423,19 @@ def test_last_message_rejects_invalid_role(role: str) -> None:
         _validate(LastMessage, _with(LastMessage, role=role))
 
 
-@pytest.mark.parametrize("status", ["notified", "no_advisors"])
+@pytest.mark.parametrize("status", ["queued", "no_advisors"])
 def test_handover_response_accepts_valid_status(status: str) -> None:
-    """R35: HandoverResponse acepta status notified y no_advisors."""
+    """R14, R15: HandoverResponse acepta status queued y no_advisors."""
     _validate(HandoverResponse, _with(HandoverResponse, status=status))
 
 
 def test_handover_response_requires_status_and_case_id() -> None:
-    """R35: HandoverResponse exige status (notified o no_advisors) y case_id."""
+    """R14: HandoverResponse exige status (queued o no_advisors) y case_id."""
     assert {
         name for name, f in HandoverResponse.model_fields.items() if f.is_required()
     } == {"status", "case_id"}
     with pytest.raises(ValidationError):
-        _validate(HandoverResponse, _with(HandoverResponse, status="pending"))
+        _validate(HandoverResponse, _with(HandoverResponse, status="notified"))
 
 
 def test_case_reply_request_requires_advisor_id_and_text() -> None:
@@ -713,9 +729,9 @@ def test_case_client_message_response_requires_status_and_case_id() -> None:
     } == {"status", "case_id"}
 
 
-@pytest.mark.parametrize("status", ["forwarded", "not_assigned"])
+@pytest.mark.parametrize("status", ["available_in_panel", "not_assigned"])
 def test_case_client_message_response_accepts_valid_status(status: str) -> None:
-    """contrato_conversacion_caso R24: forwarded y not_assigned son válidos."""
+    """R27, R28: available_in_panel y not_assigned son válidos."""
     _validate(
         CaseClientMessageResponse,
         {"status": status, "case_id": "case-1"},
@@ -723,10 +739,10 @@ def test_case_client_message_response_accepts_valid_status(status: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "status", ["assigned", "open", "closed", "FORWARDED", "sent", ""]
+    "status", ["forwarded", "assigned", "open", "closed", "AVAILABLE_IN_PANEL", ""]
 )
 def test_case_client_message_response_rejects_invalid_status(status: str) -> None:
-    """contrato_conversacion_caso R25: un status fuera de la lista lanza ValidationError."""
+    """R27: un status fuera de la lista lanza ValidationError."""
     with pytest.raises(ValidationError):
         _validate(
             CaseClientMessageResponse,
@@ -780,4 +796,81 @@ def test_chunk_update_response_rejects_invalid_order() -> None:
     """edicion_fragmentos R8: order menor que 1 lanza ValidationError."""
     with pytest.raises(ValidationError):
         _validate(ChunkUpdateResponse, _with(ChunkUpdateResponse, order=0))
+
+
+# ── retirar_asesores_telegram (feature #48) ─────────────────────────────────
+
+ROSTER = {
+    "generation": 7,
+    "profiles": [
+        {"profile_id": "perfil-ana", "role": "asesor", "telegram_user_id": 111},
+        {"profile_id": "perfil-luis", "role": "asesor"},
+        {"profile_id": "perfil-cliente", "role": "otro"},
+    ],
+}
+
+
+def test_advisor_roster_sync_request_requires_generation_and_profiles() -> None:
+    """R39, R41: el request exige generación y lista de perfiles."""
+    assert issubclass(AdvisorRosterSyncRequest, ContractModel)
+    request = AdvisorRosterSyncRequest.model_validate(ROSTER)
+    assert request.generation == 7
+    assert [entry.profile_id for entry in request.profiles] == [
+        "perfil-ana",
+        "perfil-luis",
+        "perfil-cliente",
+    ]
+    for field in ("generation", "profiles"):
+        body = {key: value for key, value in ROSTER.items() if key != field}
+        with pytest.raises(ValidationError):
+            AdvisorRosterSyncRequest.model_validate(body)
+
+
+@pytest.mark.parametrize("generation", [-1, "x"])
+def test_advisor_roster_request_rejects_invalid_generation(generation: Any) -> None:
+    """R41: la generación debe ser un entero >= 0."""
+    with pytest.raises(ValidationError):
+        AdvisorRosterSyncRequest.model_validate({**ROSTER, "generation": generation})
+
+
+@pytest.mark.parametrize("role", ["asesor", "supervisor", "responsable_datos", "otro"])
+def test_advisor_roster_entry_accepts_valid_roles(role: str) -> None:
+    """R28: role admite asesor, supervisor, responsable_datos y otro."""
+    request = AdvisorRosterSyncRequest.model_validate(
+        {**ROSTER, "profiles": [{"profile_id": "p1", "role": role}]}
+    )
+    assert request.profiles[0].role == role
+
+
+@pytest.mark.parametrize("role", ["admin", "cliente", ""])
+def test_advisor_roster_entry_rejects_invalid_roles(role: str) -> None:
+    """R28: un rol no documentado se rechaza."""
+    with pytest.raises(ValidationError):
+        AdvisorRosterSyncRequest.model_validate(
+            {**ROSTER, "profiles": [{"profile_id": "p1", "role": role}]}
+        )
+
+
+def test_advisor_roster_entry_requires_profile_id() -> None:
+    """R41: profile_id es obligatorio."""
+    with pytest.raises(ValidationError):
+        AdvisorRosterSyncRequest.model_validate(
+            {**ROSTER, "profiles": [{"role": "asesor"}]}
+        )
+
+
+def test_advisor_roster_sync_response_requires_only_synced() -> None:
+    """R41: status solo admite synced y los conteos son >= 0."""
+    response = AdvisorRosterSyncResponse(
+        status="synced", generation=7, advisors=2, orphaned_cases=0
+    )
+    assert response.status == "synced"
+    with pytest.raises(ValidationError):
+        AdvisorRosterSyncResponse(
+            status="pending", generation=7, advisors=2, orphaned_cases=0  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError):
+        AdvisorRosterSyncResponse(
+            status="synced", generation=7, advisors=-1, orphaned_cases=0
+        )
 

@@ -25,7 +25,7 @@ def _transfer(env, panel, target_profile_id: str = "target"):
 def _target(env, panel, role: str = "asesor", telegram_user_id: int | None = 222,
             available: bool = True):
     profile = panel.make_profile(env, "destino", role, telegram_user_id)
-    if available and telegram_user_id is not None:
+    if available:
         panel.set_presence(env, profile.id, "available")
     return profile
 
@@ -52,10 +52,10 @@ def test_transfer_success_records_handover_and_event(env_factory, panel):
 
 @pytest.mark.parametrize(
     "setup",
-    ["missing", "client", "unlinked", "self"],
+    ["missing", "client", "self"],
 )
 def test_transfer_invalid_target_is_422_without_handover(env_factory, setup, panel):
-    """R33: destino inexistente, no asesor, sin Telegram o el propio actor."""
+    """R33, R5: destino inexistente, no asesor o el propio actor."""
     env = env_factory()
     actor = panel.login(env)
     panel.link_case(env, "case-1")
@@ -63,14 +63,24 @@ def test_transfer_invalid_target_is_422_without_handover(env_factory, setup, pan
         target_id = "no-existe"
     elif setup == "client":
         target_id = _target(env, panel, role="cliente").id
-    elif setup == "unlinked":
-        target_id = _target(env, panel, telegram_user_id=None).id
     else:
         target_id = actor.id
     response = _transfer(env, panel, target_id)
     assert response.status_code == 422
     assert 'data-code="validation_error"' in response.text
     assert env.handover.transferred == []
+
+
+def test_transfer_to_unlinked_advisor_is_allowed(env_factory, panel):
+    """R5: un asesor sin Telegram vinculado puede recibir el caso."""
+    env = env_factory()
+    panel.login(env)
+    panel.link_case(env, "case-1")
+    target = _target(env, panel, telegram_user_id=None)
+    response = _transfer(env, panel, target.id)
+    assert response.status_code == 303
+    assert env.handover.transferred[0][0] == "case-1"
+    assert env.handover.transferred[0][2] == target.id
 
 
 def test_transfer_away_target_is_409_without_handover(env_factory, panel):

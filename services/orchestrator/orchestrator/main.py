@@ -5,6 +5,7 @@ import hmac
 import logging
 import re
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -40,7 +41,7 @@ from .adapters.llm import HttpLLMClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
 from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
-from .advisor_routes import create_advisor_router
+from .advisor_routes import AdvisorAccessDenied, create_advisor_router
 from .config import Settings
 from .domain import (
     Adapters,
@@ -57,6 +58,7 @@ from .domain import (
     issue_link_token,
     process_channel_message,
     process_message,
+    publish_advisor_roster,
     purge_personal_data,
     renew_credential,
     reply_to_case,
@@ -64,13 +66,15 @@ from .domain import (
     send_expiry_notices,
 )
 from .identity_routes import create_identity_router
+from .panel_live_routes import create_panel_live_router
+from .two_factor_routes import create_two_factor_router
 
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "orchestrator"
 PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
 
-Role = Literal["admin", "asesor", "cliente"]
+Role = Literal["admin", "supervisor", "asesor", "responsable_datos", "cliente"]
 
 
 class ProfileCreateRequest(BaseModel):
@@ -205,14 +209,23 @@ def build_default_adapters(settings: Settings) -> Adapters:
         )
     else:
         client_data = UnavailableClientData()
+    repository = PostgresRepository(
+        settings.database_url,
+        panel_events_retention_hours=settings.panel_events_retention_hours,
+    )
     return Adapters(
-        repository=PostgresRepository(settings.database_url),
+        repository=repository,
         rag=HttpRagClient(settings.rag_url, settings.service_token, timeout),
         llm=HttpLLMClient(
             settings.llm_base_url, settings.llm_api_key, settings.llm_model, timeout
         ),
         gateway=HttpGatewayClient(settings.telegram_gateway_url, settings.service_token, timeout),
-        handover=HttpHandoverClient(settings.handover_url, settings.service_token, timeout),
+        handover=HttpHandoverClient(
+            settings.handover_url,
+            settings.service_token,
+            timeout,
+            generation_provider=lambda: repository.get_advisor_roster_state()[0],
+        ),
         db_query=db_query,
         client_data=client_data,
         clock=lambda: datetime.now(timezone.utc),
@@ -224,7 +237,13 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     settings = settings or Settings()
     adapters = adapters or build_default_adapters(settings)
     install_access_log_redaction()
-    app = FastAPI(title=SERVICE_NAME)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        await run_in_threadpool(publish_advisor_roster, adapters)
+        yield
+
+    app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):
@@ -250,25 +269,40 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @app.exception_handler(LoginRequired)
     async def handle_login_required(request: Request, exc: LoginRequired):
-        target = (
-            "/asesor/login"
-            if request.url.path == "/asesor" or request.url.path.startswith("/asesor/")
-            else "/admin/login"
+        is_advisor = (
+            request.url.path == "/asesor"
+            or request.url.path.startswith("/asesor/")
         )
-        return RedirectResponse(
-            url=target, status_code=303, headers=admin.security_headers()
+        target = "/asesor/login" if is_advisor else "/admin/login"
+        headers = (
+            admin.panel_security_headers()
+            if is_advisor
+            else admin.security_headers()
+        )
+        return RedirectResponse(url=target, status_code=303, headers=headers)
+
+    @app.exception_handler(AdvisorAccessDenied)
+    async def handle_advisor_access_denied(
+        request: Request, exc: AdvisorAccessDenied
+    ):
+        return HTMLResponse(
+            content=advisor_panel.render_advisor_error(403, "forbidden"),
+            status_code=403,
+            headers=admin.panel_security_headers(),
         )
 
     @app.exception_handler(CsrfInvalid)
     async def handle_csrf_invalid(request: Request, exc: CsrfInvalid):
         if request.url.path == "/asesor" or request.url.path.startswith("/asesor/"):
             content = advisor_panel.render_advisor_error(403, "forbidden")
+            headers = admin.panel_security_headers()
         else:
             content = admin.render_message("Acceso denegado", "Token CSRF inválido.")
+            headers = admin.security_headers()
         return HTMLResponse(
             content=content,
             status_code=403,
-            headers=admin.security_headers(),
+            headers=headers,
         )
 
     @app.exception_handler(DomainError)
@@ -319,6 +353,9 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     # `include_router` las deja dentro de un objeto sin `path` en `app.routes`.
     app.router.routes.extend(create_admin_router(settings, adapters).routes)
     app.router.routes.extend(create_advisor_router(settings, adapters).routes)
+    app.router.routes.extend(create_two_factor_router(settings, adapters, "admin").routes)
+    app.router.routes.extend(create_two_factor_router(settings, adapters, "asesor").routes)
+    app.router.routes.extend(create_panel_live_router(settings, adapters).routes)
     app.router.routes.extend(create_identity_router(settings, adapters).routes)
 
     def _process(message: MessageRequest, active: Adapters) -> None:

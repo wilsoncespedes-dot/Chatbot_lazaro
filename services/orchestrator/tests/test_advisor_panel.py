@@ -108,7 +108,11 @@ def _create_profile(
     assert response.status_code == 201, response.text
     profile = response.json()
     if telegram_user_id is not None:
-        env.repo.profiles[profile["id"]].telegram_user_id = telegram_user_id
+        stored = env.repo.profiles.pop(profile["id"])
+        stored.telegram_user_id = telegram_user_id
+        stored.id = str(telegram_user_id)
+        env.repo.profiles[stored.id] = stored
+        profile["id"] = stored.id
     return profile
 
 
@@ -374,8 +378,13 @@ def test_post_without_valid_csrf_is_forbidden_without_calls(env, path, body, csr
 
 
 def test_advisor_html_has_csp_and_no_external_resources(env):
-    """R7: CSP y cabeceras equivalentes a /admin, sin recursos externos."""
-    expected = "default-src 'self'; form-action 'self'; frame-ancestors 'none'"
+    """R7, #53 R27-R29: CSP estricta y solo el JS propio de mismo origen."""
+    expected = (
+        "default-src 'self'; script-src 'self'; connect-src 'self'; "
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+        "object-src 'none'"
+    )
+    live_script = '<script src="/asesor/static/panel_live.js" defer>'
     _create_profile(env)
     _login_ok(env)
     csrf = _csrf(env)
@@ -390,7 +399,7 @@ def test_advisor_html_has_csp_and_no_external_resources(env):
         assert response.headers["content-security-policy"] == expected
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["cache-control"] == "no-store"
-        assert "<script" not in response.text.lower()
+        assert response.text.count("<script") == response.text.count(live_script)
         for value in re.findall(r'(?:src|href)="([^"]*)"', response.text):
             assert not value.startswith(("http://", "https://", "//"))
 
@@ -414,29 +423,29 @@ def test_advisor_responses_never_include_secrets(env):
         assert "pbkdf2_sha256$" not in haystack
 
 
-# --- R9: perfil sin vínculo ------------------------------------------------------------
+# --- R5: perfil sin vínculo puede actuar usando profile.id -----------------------------
 
 
 @pytest.mark.parametrize(
-    ("path", "body"),
-    [
-        ("/asesor/reply", {"case_id": "case-1", "text": "hola"}),
-        ("/asesor/assign", {"case_id": "case-1"}),
-        ("/asesor/close", {"case_id": "case-1"}),
-    ],
+    "path", ["/asesor/reply", "/asesor/assign", "/asesor/close"]
 )
-def test_unlinked_profile_cannot_act(env, path, body):
-    """R9: sin telegram_user_id -> 403 telegram_not_linked sin llamadas."""
-    _create_profile(env, telegram_user_id=None)
+def test_unlinked_profile_can_act_with_profile_id(env, path):
+    """R4, R5: sin telegram_user_id el panel usa el profile.id y permite actuar."""
+    profile = _create_profile(env, telegram_user_id=None)
+    _link_case(env)
     _login_ok(env)
-    response = _post(env, path, {**body, "csrf_token": _csrf(env)})
+    body = {"case_id": "case-1", "csrf_token": _csrf(env)}
+    if path == "/asesor/reply":
+        body["text"] = "hola"
+    response = _post(env, path, body)
 
-    assert response.status_code == 403
-    assert "telegram_not_linked" in response.text
-    assert env.handover.authorized == []
-    assert env.handover.try_assigned == []
-    assert env.handover.closed == []
-    assert env.gateway.sent == []
+    assert response.status_code == 303
+    ids = (
+        [advisor for _, advisor, _ in env.handover.authorized]
+        + [advisor for _, advisor in env.handover.try_assigned]
+        + [advisor for _, advisor in env.handover.closed]
+    )
+    assert ids and all(advisor == profile["id"] for advisor in ids)
 
 
 # --- R10, R11 y R12: acciones ----------------------------------------------------------
@@ -820,3 +829,46 @@ def test_http_list_cases_uses_session_advisor_and_token(http_handover):
     holder["get"] = httpx.Response(500, json={"error": "internal_error", "message": "x"})
     with pytest.raises(ServiceUnavailable):
         HttpHandoverClient("http://ho", "tok").list_cases("700")
+
+
+def test_http_list_cases_scope_all_sends_scope(http_handover):
+    """R9: la vista global viaja como scope=all en GET /cases."""
+    requests, holder = http_handover
+    holder["get"] = httpx.Response(200, json=[])
+    HttpHandoverClient("http://ho:8000/", "tok", 3).list_cases("900", "all")
+
+    _, request, _ = requests[0]
+    assert request.url.params["advisor_id"] == "900"
+    assert request.url.params["scope"] == "all"
+
+
+def test_http_reassign_posts_contract_and_maps_denials(http_handover):
+    """R11, R13: POST /cases/{id}/reassign con token y errores de carrera."""
+    requests, holder = http_handover
+    holder["post"] = httpx.Response(
+        200,
+        json={
+            "status": "assigned",
+            "case_id": "case-1",
+            "previous_advisor_id": "222",
+            "advisor_id": "333",
+        },
+    )
+    response = HttpHandoverClient("http://ho:8000/", "tok", 3).reassign(
+        "case-1", "999", "333"
+    )
+    assert (response.previous_advisor_id, response.advisor_id) == ("222", "333")
+    _, request, timeout = requests[0]
+    assert request.url.path == "/cases/case-1/reassign"
+    assert request.headers["X-Service-Token"] == "tok"
+    assert timeout == 3
+    assert json.loads(request.content) == {
+        "advisor_id": "999",
+        "target_advisor_id": "333",
+    }
+
+    for code in ("case_changed", "case_not_assigned"):
+        holder["post"] = httpx.Response(409, json={"error": code, "message": "x"})
+        with pytest.raises(AuthorizationDenied) as excinfo:
+            HttpHandoverClient("http://ho", "tok").reassign("case-1", "999", "333")
+        assert excinfo.value.code == code

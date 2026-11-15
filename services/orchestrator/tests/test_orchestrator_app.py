@@ -153,6 +153,7 @@ def test_requirements_txt_matches_design():
     ]
     names = sorted(re.split(r"[<>=]", ln)[0] for ln in lines)
     assert names == [
+        "cryptography",
         "fastapi",
         "httpx",
         "pg8000",
@@ -160,6 +161,7 @@ def test_requirements_txt_matches_design():
         "pydantic-settings",
         "python-multipart",
         "uvicorn",
+        "websockets",
     ]
     for ln in lines:
         assert ">=" in ln and "<" in ln, ln

@@ -202,6 +202,7 @@ def make_env(**settings_overrides) -> Env:
     values.update(settings_overrides)
     settings = Settings(**values)
     repo = FakeRepository()
+    repo.panel_events_retention_hours = settings.panel_events_retention_hours
     rag = FakeRagClient(results=make_chunks())
     llm = FakeLLM(reply=llm_json("Respuesta final", "ch1", "texto del fragmento 1"))
     gateway = FakeGatewayClient()
@@ -243,8 +244,13 @@ CSRF = "csrf-token"
 def make_profile(env, username: str, role: str = "asesor", telegram_user_id=700):
     profile = env.repo.create_profile(username, role, "hash", NOW)
     if telegram_user_id is not None:
-        env.repo.profiles[profile.id].telegram_user_id = telegram_user_id
-    return env.repo.get_profile(profile.id) or profile
+        stored = env.repo.profiles.pop(profile.id)
+        stored.telegram_user_id = telegram_user_id
+        stored.id = str(telegram_user_id)
+        env.repo.profiles[stored.id] = stored
+    return env.repo.get_profile(str(telegram_user_id)) if telegram_user_id is not None else (
+        env.repo.get_profile(profile.id) or profile
+    )
 
 
 def login(env, role: str = "asesor", username: str | None = None, telegram_user_id=700):

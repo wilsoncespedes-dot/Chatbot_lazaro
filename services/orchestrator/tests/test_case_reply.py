@@ -3,7 +3,7 @@ POST /cases/{id}/reply."""
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -72,7 +72,7 @@ def test_case_is_linked_to_contact_after_handover(env):
 
 def test_case_link_uses_effective_case_id(env):
     """R28: se vincula el case_id efectivo que devuelve handover, no el propuesto."""
-    env.handover.request = lambda req: HandoverResponse(status="notified", case_id="reused-9")
+    env.handover.request = lambda req: HandoverResponse(status="queued", case_id="reused-9")
     contact = _open_case(env)
     assert env.repo.get_case_contact("reused-9") == contact
     assert env.repo.get_case_contact("case-1") is None
@@ -240,7 +240,11 @@ class _Conn:
 
 
 def test_postgres_case_links_use_parameters_only():
-    """R28, R31: case_links se crea y se consulta con SQL parametrizado."""
+    """R28, R31: case_links se crea y se consulta con SQL parametrizado.
+
+    #53 R16/R21: `link_case` publica además `case_created` y limpia la retención
+    de `panel_events` en la misma transacción.
+    """
     conn = _Conn()
     repo = PostgresRepository("postgresql://x", connect=lambda: conn)
     secret = "'; DROP TABLE case_links; --"
@@ -249,7 +253,22 @@ def test_postgres_case_links_use_parameters_only():
     assert contact == Contact(id="c1", telegram_user_id=10, chat_id=100)
     assert any("CREATE TABLE IF NOT EXISTS case_links" in sql for sql, _ in conn.log)
     statements = [(sql, p) for sql, p in conn.log if not sql.startswith("CREATE")]
-    assert len(statements) == 2
+    assert len(statements) == 4
     for sql, params in statements:
         assert secret not in sql and sql.count("%s") == len(params)
-        assert secret in params
+
+    link_sql, link_params = statements[0]
+    assert "INSERT INTO case_links" in link_sql
+    assert link_params == (secret, "c1", FIXED_NOW, None)
+
+    event_sql, event_params = statements[1]
+    assert "INSERT INTO panel_events" in event_sql
+    assert event_params == (secret, "case_created", FIXED_NOW)
+
+    purge_sql, purge_params = statements[2]
+    assert "DELETE FROM panel_events" in purge_sql
+    assert purge_params == (FIXED_NOW - timedelta(hours=24),)
+
+    select_sql, select_params = statements[3]
+    assert "FROM case_links" in select_sql
+    assert select_params == (secret,)

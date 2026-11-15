@@ -11,7 +11,7 @@ SCRYPT_SCHEME = "scrypt"
 SALT_BYTES = 16
 SCRYPT_KEY_BYTES = 32
 SCRYPT_MAXMEM = 64 * 1024 * 1024
-ROLES = ("admin", "asesor", "cliente")
+ROLES = ("admin", "supervisor", "asesor", "responsable_datos", "cliente")
 USERNAME_PATTERN = re.compile(r"^[a-z0-9_.-]{3,64}$")
 
 

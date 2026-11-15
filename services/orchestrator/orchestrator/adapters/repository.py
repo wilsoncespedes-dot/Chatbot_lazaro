@@ -2,24 +2,29 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import unquote, urlparse
 
 from lazaro_contracts import LastMessage
 
 from ..classifier import Category
+from ..panel_live import PanelEvent
 from ..domain import (
+    CaseNote,
+    CaseTag,
     ClientCredential,
     ClientSession,
     ClientStatus,
     Contact,
     ConversationState,
     Profile,
+    SavedReply,
     SummaryView,
     TemplateExists,
     UsernameTaken,
@@ -30,6 +35,8 @@ from ..privacy import (
     conversation_text_settings,
     parse_conversation_texts,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Repository(Protocol):
@@ -52,6 +59,18 @@ class Repository(Protocol):
     ) -> Contact: ...
 
     def add_message(self, contact_id: str, role: str, text: str, at: datetime) -> None: ...
+
+    def publish_panel_event(self, case_id: str, kind: str, at: datetime) -> None: ...
+
+    def panel_events_cursor(self) -> int: ...
+
+    def panel_events_since(
+        self, after_id: int, since: datetime, limit: int
+    ) -> list[PanelEvent]: ...
+
+    def delete_panel_events_before(self, before: datetime) -> int: ...
+
+    def latest_case_for_contact(self, contact_id: str) -> str | None: ...
 
     def last_messages(self, contact_id: str, limit: int) -> list[LastMessage]: ...
 
@@ -188,19 +207,62 @@ class Repository(Protocol):
 
     def list_profiles(self) -> list[Profile]: ...
 
+    def get_advisor_roster_state(self) -> tuple[int, str]: ...
+
+    def begin_advisor_roster_change(self) -> int: ...
+
+    def mark_advisor_roster_synced(self, generation: int) -> bool: ...
+
     def set_role(self, profile_id: str, role: str) -> bool: ...
 
     def create_session(
-        self, token_hash: str, profile_id: str, csrf_token: str, expires_at: datetime
+        self,
+        token_hash: str,
+        profile_id: str,
+        csrf_token: str,
+        expires_at: datetime,
+        enroll_only: bool = False,
     ) -> None: ...
 
     def get_session(self, token_hash: str, now: datetime) -> "AdminSession | None": ...
+
+    def get_session_any(
+        self, token_hash: str, now: datetime
+    ) -> "AdminSession | None": ...
 
     def get_session_for_role(
         self, token_hash: str, now: datetime, role: str
     ) -> "AdminSession | None": ...
 
+    def get_session_for_roles(
+        self, token_hash: str, now: datetime, roles: Sequence[str]
+    ) -> "AdminSession | None": ...
+
+    def promote_session(self, token_hash: str) -> None: ...
+
     def delete_session(self, token_hash: str) -> None: ...
+
+    def delete_sessions_for_profile(
+        self, profile_id: str, keep_token_hash: str | None = None
+    ) -> None: ...
+
+    def get_two_factor(self, profile_id: str) -> "TwoFactorRecord | None": ...
+
+    def save_pending_two_factor(
+        self, profile_id: str, ciphertext: str, now: datetime
+    ) -> bool: ...
+
+    def activate_two_factor(
+        self, profile_id: str, step: int, code_hashes: Sequence[str], now: datetime
+    ) -> bool: ...
+
+    def advance_two_factor_step(self, profile_id: str, step: int) -> bool: ...
+
+    def consume_recovery_code(
+        self, profile_id: str, code_hash: str, now: datetime
+    ) -> bool: ...
+
+    def delete_two_factor(self, profile_id: str) -> bool: ...
 
     def recent_events(self, limit: int) -> list["StoredEvent"]: ...
 
@@ -410,6 +472,67 @@ class Repository(Protocol):
         self, request_id: str, executed_by: str, idle_minutes: int, now: datetime
     ) -> dict[str, int] | None: ...
 
+    # notas internas y etiquetas (#50)
+    def add_case_note(self, note: CaseNote, contact_id: str) -> None: ...
+
+    def list_case_notes(self, case_id: str) -> list[CaseNote]: ...
+
+    def get_case_note(self, note_id: str) -> CaseNote | None: ...
+
+    def delete_case_note(self, note_id: str) -> bool: ...
+
+    def count_case_notes(self, case_id: str) -> int: ...
+
+    def create_case_tag(
+        self, tag: CaseTag, name_key: str, now: datetime
+    ) -> bool: ...
+
+    def rename_case_tag(
+        self, tag_id: str, name: str, name_key: str, now: datetime
+    ) -> bool: ...
+
+    def set_case_tag_active(
+        self, tag_id: str, active: bool, now: datetime
+    ) -> bool: ...
+
+    def get_case_tag(self, tag_id: str) -> CaseTag | None: ...
+
+    def list_case_tags(self, only_active: bool = False) -> list[CaseTag]: ...
+
+    def add_case_tag(
+        self,
+        case_id: str,
+        tag_id: str,
+        contact_id: str,
+        assigned_by: str,
+        now: datetime,
+    ) -> None: ...
+
+    def remove_case_tag(self, case_id: str, tag_id: str) -> bool: ...
+
+    def count_case_tags(self, case_id: str) -> int: ...
+
+    def case_tag_map(
+        self, case_ids: Sequence[str]
+    ) -> dict[str, tuple[str, ...]]: ...
+
+    # respuestas guardadas (#51)
+    def add_saved_reply(self, reply: SavedReply) -> None: ...
+
+    def update_saved_reply(
+        self, reply_id: str, title: str, body: str, now: datetime
+    ) -> bool: ...
+
+    def set_saved_reply_active(
+        self, reply_id: str, active: bool, now: datetime
+    ) -> bool: ...
+
+    def get_saved_reply(self, reply_id: str) -> SavedReply | None: ...
+
+    def list_saved_replies(self, only_active: bool = False) -> list[SavedReply]: ...
+
+    def count_saved_replies(self) -> int: ...
+
     # administración y avisos (#42)
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]: ...
 
@@ -495,6 +618,7 @@ class Repository(Protocol):
 
 
 RAG_OUTCOMES = frozenset({"no_relevant_chunks", "invalid_answer", "rag_answer"})
+PANEL_MESSAGE_ROLES = frozenset({"user", "bot", "advisor"})
 
 
 @dataclass
@@ -561,6 +685,16 @@ class AdminSession:
     profile_id: str
     csrf_token: str
     expires_at: datetime
+    enroll_only: bool = False
+
+
+@dataclass
+class TwoFactorRecord:
+    profile_id: str
+    secret_ciphertext: str
+    enabled_at: datetime | None
+    last_used_step: int
+    created_at: datetime
 
 
 @dataclass
@@ -719,6 +853,9 @@ class FakeRepository:
         self.profiles: dict[str, StoredProfile] = {}
         self.link_tokens: dict[str, StoredLinkToken] = {}
         self.sessions: dict[str, AdminSession] = {}
+        self.two_factor: dict[str, TwoFactorRecord] = {}
+        self.recovery_codes: dict[str, dict[str, Any]] = {}
+        self._two_factor_lock = threading.Lock()
         self.login_failures: list[StoredLoginFailure] = []
         self.categories: dict[str, Category] = {}
         self.classifier_threshold: float | None = None
@@ -731,6 +868,10 @@ class FakeRepository:
         self.fail_db_query_audit = False
         self.contact_created_at: dict[str, datetime] = {}
         self.case_link_created_at: dict[str, datetime] = {}
+        self.panel_events: list[PanelEvent] = []
+        self.panel_events_retention_hours = 24
+        self._panel_event_times: dict[int, datetime] = {}
+        self._panel_event_seq = 0
         self.privacy_consents: list[PrivacyConsent] = []
         self.privacy_purge_runs: list[dict[str, Any]] = []
         self.fail_privacy_consent = False
@@ -747,6 +888,10 @@ class FakeRepository:
         self.case_profiles: dict[str, str | None] = {}
         self.advisor_presence: dict[str, tuple[str, datetime]] = {}
         self.panel_audit: list[PanelAudit] = []
+        self.case_notes: list[tuple[CaseNote, str]] = []
+        self.case_tags: dict[str, dict[str, Any]] = {}
+        self.case_tag_assignments: list[tuple[str, str, str, str, datetime]] = []
+        self.saved_replies: dict[str, SavedReply] = {}
         self.text_versions: list[TextVersion] = []
         self.whatsapp_templates: dict[str, WhatsAppTemplate] = {}
         self.expiry_notices: dict[tuple[str, datetime], dict[str, Any]] = {}
@@ -758,6 +903,22 @@ class FakeRepository:
         self._identity_lock = threading.Lock()
         self.health_checks: list[float] = []
         self.health_error: BaseException | None = None
+        self.advisor_roster_generation = 0
+        self.advisor_roster_status = "synced"
+
+    def get_advisor_roster_state(self) -> tuple[int, str]:
+        return self.advisor_roster_generation, self.advisor_roster_status
+
+    def begin_advisor_roster_change(self) -> int:
+        self.advisor_roster_generation += 1
+        self.advisor_roster_status = "pending"
+        return self.advisor_roster_generation
+
+    def mark_advisor_roster_synced(self, generation: int) -> bool:
+        if generation != self.advisor_roster_generation:
+            return False
+        self.advisor_roster_status = "synced"
+        return True
 
     def health_check(self, timeout_seconds: float) -> None:
         """healthcheck_dependencias R4, R8: fallo y timeout controlables en tests."""
@@ -832,13 +993,77 @@ class FakeRepository:
 
     def add_message(self, contact_id: str, role: str, text: str, at: datetime) -> None:
         self.messages.append(StoredMessage(contact_id, role, text, at))
+        if role not in PANEL_MESSAGE_ROLES:
+            return
+        case_id = self.latest_case_for_contact(contact_id)
+        if case_id is None:
+            return
+        try:
+            self.publish_panel_event(case_id, "message", at)
+        except Exception:
+            # R18: el evento es un aviso; nunca debe hacer fallar el mensaje.
+            return
 
-    def last_messages(self, contact_id: str, limit: int) -> list[LastMessage]:
-        own = [m for m in self.messages if m.contact_id == contact_id]
-        return [LastMessage(role=m.role, text=m.text, at=m.at) for m in own[-limit:]]  # type: ignore[arg-type]
+    def publish_panel_event(self, case_id: str, kind: str, at: datetime) -> None:
+        next_id = max(
+            max((event.id for event in self.panel_events), default=0),
+            self._panel_event_seq,
+        ) + 1
+        self._panel_event_seq = next_id
+        self.panel_events.append(PanelEvent(id=next_id, case_id=case_id, kind=kind))
+        self._panel_event_times[next_id] = at
+        self.delete_panel_events_before(
+            at - timedelta(hours=self.panel_events_retention_hours)
+        )
 
-    def add_event(self, contact_id: str, type: str, reason: str, at: datetime) -> None:
-        self.events.append(StoredEvent(contact_id, type, reason, at))
+    def panel_events_cursor(self) -> int:
+        return max((event.id for event in self.panel_events), default=0)
+
+    def panel_events_since(
+        self, after_id: int, since: datetime, limit: int
+    ) -> list[PanelEvent]:
+        events = [
+            event
+            for event in self.panel_events
+            if event.id > after_id or self._panel_event_at(event) >= since
+        ]
+        events.sort(key=lambda event: event.id)
+        return events[:limit]
+
+    def _panel_event_at(self, event: PanelEvent) -> datetime:
+        return self._panel_event_times.get(
+            event.id, datetime.min.replace(tzinfo=timezone.utc)
+        )
+
+    def delete_panel_events_before(self, before: datetime) -> int:
+        kept = [
+            event
+            for event in self.panel_events
+            if self._panel_event_at(event) >= before
+        ]
+        deleted = len(self.panel_events) - len(kept)
+        self.panel_events = kept
+        if deleted:
+            live_ids = {event.id for event in kept}
+            self._panel_event_times = {
+                event_id: at
+                for event_id, at in self._panel_event_times.items()
+                if event_id in live_ids
+            }
+        return deleted
+
+    def latest_case_for_contact(self, contact_id: str) -> str | None:
+        latest: tuple[datetime, int, str] | None = None
+        for index, (case_id, linked_contact_id) in enumerate(self.case_links.items()):
+            if linked_contact_id != contact_id:
+                continue
+            created_at = self.case_link_created_at.get(case_id)
+            if created_at is None:
+                continue
+            candidate = (created_at, index, case_id)
+            if latest is None or candidate > latest:
+                latest = candidate
+        return latest[2] if latest is not None else None
 
     def link_case(
         self,
@@ -847,9 +1072,24 @@ class FakeRepository:
         at: datetime,
         profile_id: str | None = None,
     ) -> None:
+        is_new = case_id not in self.case_links
         self.case_links.setdefault(case_id, contact_id)
         self.case_link_created_at.setdefault(case_id, at)
         self.case_profiles.setdefault(case_id, profile_id)
+        if not is_new:
+            return
+        try:
+            self.publish_panel_event(case_id, "case_created", at)
+        except Exception:
+            # R18: el enlace del caso no falla porque no se pueda publicar el aviso.
+            return
+
+    def last_messages(self, contact_id: str, limit: int) -> list[LastMessage]:
+        own = [m for m in self.messages if m.contact_id == contact_id]
+        return [LastMessage(role=m.role, text=m.text, at=m.at) for m in own[-limit:]]  # type: ignore[arg-type]
+
+    def add_event(self, contact_id: str, type: str, reason: str, at: datetime) -> None:
+        self.events.append(StoredEvent(contact_id, type, reason, at))
 
     def get_case_contact(self, case_id: str) -> Contact | None:
         contact_id = self.case_links.get(case_id)
@@ -1251,31 +1491,136 @@ class FakeRepository:
             return True
 
     def create_session(
-        self, token_hash: str, profile_id: str, csrf_token: str, expires_at: datetime
+        self,
+        token_hash: str,
+        profile_id: str,
+        csrf_token: str,
+        expires_at: datetime,
+        enroll_only: bool = False,
     ) -> None:
         self.sessions[token_hash] = AdminSession(
             token_hash=token_hash,
             profile_id=profile_id,
             csrf_token=csrf_token,
             expires_at=expires_at,
+            enroll_only=enroll_only,
         )
 
     def get_session(self, token_hash: str, now: datetime) -> AdminSession | None:
         return self.get_session_for_role(token_hash, now, "admin")
 
-    def get_session_for_role(
-        self, token_hash: str, now: datetime, role: str
-    ) -> AdminSession | None:
+    def get_session_any(self, token_hash: str, now: datetime) -> AdminSession | None:
         session = self.sessions.get(token_hash)
         if session is None or session.expires_at <= now:
             return None
+        return session
+
+    def get_session_for_role(
+        self, token_hash: str, now: datetime, role: str
+    ) -> AdminSession | None:
+        return self.get_session_for_roles(token_hash, now, [role])
+
+    def get_session_for_roles(
+        self, token_hash: str, now: datetime, roles: Sequence[str]
+    ) -> AdminSession | None:
+        session = self.get_session_any(token_hash, now)
+        if session is None or session.enroll_only:
+            return None
         profile = self.profiles.get(session.profile_id)
-        if profile is None or profile.role != role:
+        if profile is None or profile.role not in set(roles):
             return None
         return session
 
+    def promote_session(self, token_hash: str) -> None:
+        session = self.sessions.get(token_hash)
+        if session is not None:
+            session.enroll_only = False
+
     def delete_session(self, token_hash: str) -> None:
         self.sessions.pop(token_hash, None)
+
+    def delete_sessions_for_profile(
+        self, profile_id: str, keep_token_hash: str | None = None
+    ) -> None:
+        for token_hash in [
+            token
+            for token, session in self.sessions.items()
+            if session.profile_id == profile_id and token != keep_token_hash
+        ]:
+            self.sessions.pop(token_hash, None)
+
+    def get_two_factor(self, profile_id: str) -> TwoFactorRecord | None:
+        return self.two_factor.get(profile_id)
+
+    def save_pending_two_factor(
+        self, profile_id: str, ciphertext: str, now: datetime
+    ) -> bool:
+        with self._two_factor_lock:
+            current = self.two_factor.get(profile_id)
+            if current is not None and current.enabled_at is not None:
+                return False
+            self.two_factor[profile_id] = TwoFactorRecord(
+                profile_id=profile_id,
+                secret_ciphertext=ciphertext,
+                enabled_at=None,
+                last_used_step=0,
+                created_at=now,
+            )
+            return True
+
+    def activate_two_factor(
+        self, profile_id: str, step: int, code_hashes: Sequence[str], now: datetime
+    ) -> bool:
+        with self._two_factor_lock:
+            record = self.two_factor.get(profile_id)
+            if record is None or record.enabled_at is not None:
+                return False
+            record.enabled_at = now
+            record.last_used_step = step
+            for code_hash in code_hashes:
+                self.recovery_codes[code_hash] = {
+                    "profile_id": profile_id,
+                    "created_at": now,
+                    "used_at": None,
+                }
+            return True
+
+    def advance_two_factor_step(self, profile_id: str, step: int) -> bool:
+        with self._two_factor_lock:
+            record = self.two_factor.get(profile_id)
+            if (
+                record is None
+                or record.enabled_at is None
+                or record.last_used_step >= step
+            ):
+                return False
+            record.last_used_step = step
+            return True
+
+    def consume_recovery_code(
+        self, profile_id: str, code_hash: str, now: datetime
+    ) -> bool:
+        with self._two_factor_lock:
+            stored = self.recovery_codes.get(code_hash)
+            if (
+                stored is None
+                or stored["profile_id"] != profile_id
+                or stored["used_at"] is not None
+            ):
+                return False
+            stored["used_at"] = now
+            return True
+
+    def delete_two_factor(self, profile_id: str) -> bool:
+        with self._two_factor_lock:
+            existed = self.two_factor.pop(profile_id, None) is not None
+            for code_hash in [
+                code
+                for code, stored in self.recovery_codes.items()
+                if stored["profile_id"] == profile_id
+            ]:
+                self.recovery_codes.pop(code_hash, None)
+            return existed
 
     def recent_events(self, limit: int) -> list[StoredEvent]:
         indexed = list(enumerate(self.events))
@@ -1501,6 +1846,16 @@ class FakeRepository:
         self.events = [
             event for event in self.events if event.contact_id != contact_id
         ]
+        self.case_notes = [
+            (note, note_contact_id)
+            for note, note_contact_id in self.case_notes
+            if note_contact_id != contact_id
+        ]
+        self.case_tag_assignments = [
+            assignment
+            for assignment in self.case_tag_assignments
+            if assignment[2] != contact_id
+        ]
         self.case_links = {
             case_id: linked
             for case_id, linked in self.case_links.items()
@@ -1653,6 +2008,22 @@ class FakeRepository:
         for key in expired_summaries:
             self.conversation_summaries.pop(key, None)
 
+        expired_notes = {
+            note.id
+            for note, contact_id in self.case_notes
+            if note.created_at < cutoff or contact_id in inactive_ids
+        }
+        self.case_notes = [
+            (note, contact_id)
+            for note, contact_id in self.case_notes
+            if note.id not in expired_notes
+        ]
+        self.case_tag_assignments = [
+            assignment
+            for assignment in self.case_tag_assignments
+            if assignment[2] not in inactive_ids
+        ]
+
         counts = {
             "messages": deleted_messages,
             "events": deleted_events,
@@ -1662,6 +2033,7 @@ class FakeRepository:
             "auto_handover_streaks": len(expired_streaks),
             "tool_calls": deleted_tool_calls,
             "conversation_summaries": len(expired_summaries),
+            "case_notes": len(expired_notes),
         }
         self.privacy_purge_runs.append(
             {"ran_at": ran_at, "cutoff": cutoff, "counts": dict(counts)}
@@ -1989,6 +2361,40 @@ class FakeRepository:
                 )
                 for session in sessions
             ]
+            session_contact_ids = {session.contact_id for session in sessions}
+            purged_case_ids = {
+                case_id
+                for case_id, contact_id in self.case_links.items()
+                if contact_id in session_contact_ids
+            }
+            if purged_case_ids:
+                # R22: los avisos de los casos purgados no sobreviven a la supresión.
+                self.panel_events = [
+                    event
+                    for event in self.panel_events
+                    if event.case_id not in purged_case_ids
+                ]
+                live_ids = {event.id for event in self.panel_events}
+                self._panel_event_times = {
+                    event_id: at
+                    for event_id, at in self._panel_event_times.items()
+                    if event_id in live_ids
+                }
+            deleted_notes = sum(
+                1
+                for note, contact_id in self.case_notes
+                if contact_id in session_contact_ids
+            )
+            self.case_notes = [
+                (note, contact_id)
+                for note, contact_id in self.case_notes
+                if contact_id not in session_contact_ids
+            ]
+            self.case_tag_assignments = [
+                assignment
+                for assignment in self.case_tag_assignments
+                if assignment[2] not in session_contact_ids
+            ]
             keep: list[StoredMessage] = []
             deleted_messages = 0
             for message in self.messages:
@@ -2019,12 +2425,202 @@ class FakeRepository:
                 "messages": deleted_messages,
                 "conversation_summaries": deleted_summaries,
                 "client_memory": deleted_memory,
+                "case_notes": deleted_notes,
             }
             request.status = "executed"
             request.executed_at = now
             request.executed_by = executed_by
             request.removed_counts = dict(counts)
             return counts
+
+    def add_case_note(self, note: CaseNote, contact_id: str) -> None:
+        self.case_notes.append((note, contact_id))
+
+    def _note_with_username(self, note: CaseNote) -> CaseNote:
+        stored = self.profiles.get(note.author_profile_id)
+        username = stored.username if stored is not None else note.author_username
+        return CaseNote(
+            id=note.id,
+            case_id=note.case_id,
+            author_profile_id=note.author_profile_id,
+            author_username=username,
+            body=note.body,
+            created_at=note.created_at,
+        )
+
+    def list_case_notes(self, case_id: str) -> list[CaseNote]:
+        notes = [
+            (note, contact_id)
+            for note, contact_id in self.case_notes
+            if note.case_id == case_id
+        ]
+        notes.sort(key=lambda pair: (pair[0].created_at, pair[0].id))
+        return [self._note_with_username(note) for note, _ in notes]
+
+    def get_case_note(self, note_id: str) -> CaseNote | None:
+        for note, _ in self.case_notes:
+            if note.id == note_id:
+                return self._note_with_username(note)
+        return None
+
+    def delete_case_note(self, note_id: str) -> bool:
+        kept = [
+            (note, contact_id)
+            for note, contact_id in self.case_notes
+            if note.id != note_id
+        ]
+        changed = len(kept) != len(self.case_notes)
+        self.case_notes = kept
+        return changed
+
+    def count_case_notes(self, case_id: str) -> int:
+        return sum(1 for note, _ in self.case_notes if note.case_id == case_id)
+
+    def create_case_tag(self, tag: CaseTag, name_key: str, now: datetime) -> bool:
+        if any(
+            stored["name_key"] == name_key for stored in self.case_tags.values()
+        ):
+            return False
+        self.case_tags[tag.id] = {
+            "tag": tag,
+            "name_key": name_key,
+            "created_at": now,
+            "updated_at": now,
+        }
+        return True
+
+    def rename_case_tag(
+        self, tag_id: str, name: str, name_key: str, now: datetime
+    ) -> bool:
+        stored = self.case_tags.get(tag_id)
+        if stored is None:
+            return False
+        if any(
+            other_id != tag_id and row["name_key"] == name_key
+            for other_id, row in self.case_tags.items()
+        ):
+            return False
+        current = stored["tag"]
+        stored["tag"] = CaseTag(id=current.id, name=name, active=current.active)
+        stored["name_key"] = name_key
+        stored["updated_at"] = now
+        return True
+
+    def set_case_tag_active(
+        self, tag_id: str, active: bool, now: datetime
+    ) -> bool:
+        stored = self.case_tags.get(tag_id)
+        if stored is None:
+            return False
+        current = stored["tag"]
+        stored["tag"] = CaseTag(id=current.id, name=current.name, active=active)
+        stored["updated_at"] = now
+        return True
+
+    def get_case_tag(self, tag_id: str) -> CaseTag | None:
+        stored = self.case_tags.get(tag_id)
+        return stored["tag"] if stored is not None else None
+
+    def list_case_tags(self, only_active: bool = False) -> list[CaseTag]:
+        tags = [
+            stored["tag"]
+            for stored in self.case_tags.values()
+            if not only_active or stored["tag"].active
+        ]
+        tags.sort(key=lambda tag: (tag.name.casefold(), tag.id))
+        return tags
+
+    def add_case_tag(
+        self,
+        case_id: str,
+        tag_id: str,
+        contact_id: str,
+        assigned_by: str,
+        now: datetime,
+    ) -> None:
+        if any(
+            assignment[0] == case_id and assignment[1] == tag_id
+            for assignment in self.case_tag_assignments
+        ):
+            return
+        self.case_tag_assignments.append(
+            (case_id, tag_id, contact_id, assigned_by, now)
+        )
+
+    def remove_case_tag(self, case_id: str, tag_id: str) -> bool:
+        kept = [
+            assignment
+            for assignment in self.case_tag_assignments
+            if not (assignment[0] == case_id and assignment[1] == tag_id)
+        ]
+        changed = len(kept) != len(self.case_tag_assignments)
+        self.case_tag_assignments = kept
+        return changed
+
+    def count_case_tags(self, case_id: str) -> int:
+        return sum(
+            1 for assignment in self.case_tag_assignments if assignment[0] == case_id
+        )
+
+    def case_tag_map(
+        self, case_ids: Sequence[str]
+    ) -> dict[str, tuple[str, ...]]:
+        selected = set(case_ids)
+        grouped: dict[str, list[str]] = {case_id: [] for case_id in case_ids}
+        for case_id, tag_id, _contact_id, _assigned_by, _at in (
+            self.case_tag_assignments
+        ):
+            if case_id in selected:
+                grouped[case_id].append(tag_id)
+        return {case_id: tuple(tag_ids) for case_id, tag_ids in grouped.items()}
+
+    def add_saved_reply(self, reply: SavedReply) -> None:
+        self.saved_replies[reply.id] = reply
+
+    def update_saved_reply(
+        self, reply_id: str, title: str, body: str, now: datetime
+    ) -> bool:
+        current = self.saved_replies.get(reply_id)
+        if current is None:
+            return False
+        self.saved_replies[reply_id] = SavedReply(
+            id=current.id,
+            title=title,
+            body=body,
+            active=current.active,
+            updated_at=now,
+        )
+        return True
+
+    def set_saved_reply_active(
+        self, reply_id: str, active: bool, now: datetime
+    ) -> bool:
+        current = self.saved_replies.get(reply_id)
+        if current is None:
+            return False
+        self.saved_replies[reply_id] = SavedReply(
+            id=current.id,
+            title=current.title,
+            body=current.body,
+            active=active,
+            updated_at=now,
+        )
+        return True
+
+    def get_saved_reply(self, reply_id: str) -> SavedReply | None:
+        return self.saved_replies.get(reply_id)
+
+    def list_saved_replies(self, only_active: bool = False) -> list[SavedReply]:
+        replies = [
+            reply
+            for reply in self.saved_replies.values()
+            if not only_active or reply.active
+        ]
+        replies.sort(key=lambda reply: (reply.updated_at, reply.id), reverse=True)
+        return replies
+
+    def count_saved_replies(self) -> int:
+        return len(self.saved_replies)
 
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         merged = dict(self.identity_overrides)
@@ -2353,7 +2949,15 @@ _SCHEMA = (
     "expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ)",
     "CREATE TABLE IF NOT EXISTS admin_sessions ("
     "token_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), "
-    "csrf_token TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL)",
+    "csrf_token TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, "
+    "enroll_only BOOLEAN NOT NULL DEFAULT FALSE)",
+    "CREATE TABLE IF NOT EXISTS staff_two_factor ("
+    "profile_id TEXT PRIMARY KEY REFERENCES profiles(id), "
+    "secret_ciphertext TEXT NOT NULL, enabled_at TIMESTAMPTZ, "
+    "last_used_step BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS staff_recovery_codes ("
+    "code_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), "
+    "created_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ)",
     "CREATE TABLE IF NOT EXISTS admin_login_attempts ("
     "id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, ip TEXT NOT NULL, "
     "at TIMESTAMPTZ NOT NULL)",
@@ -2428,6 +3032,28 @@ _SCHEMA = (
     "status TEXT NOT NULL, method TEXT, attempts INTEGER NOT NULL, "
     "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, "
     "PRIMARY KEY (profile_id, valid_until))",
+    "CREATE TABLE IF NOT EXISTS advisor_roster_sync ("
+    "singleton_id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, "
+    "status TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS case_notes ("
+    "id TEXT PRIMARY KEY, case_id TEXT NOT NULL, contact_id TEXT NOT NULL, "
+    "author_profile_id TEXT NOT NULL, body TEXT NOT NULL, "
+    "created_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS case_tags ("
+    "id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, "
+    "active BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
+    "updated_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS case_tag_assignments ("
+    "case_id TEXT NOT NULL, tag_id TEXT NOT NULL, contact_id TEXT NOT NULL, "
+    "assigned_by TEXT NOT NULL, assigned_at TIMESTAMPTZ NOT NULL, "
+    "PRIMARY KEY (case_id, tag_id))",
+    "CREATE TABLE IF NOT EXISTS saved_replies ("
+    "id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, "
+    "active BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
+    "updated_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS panel_events ("
+    "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, "
+    "created_at TIMESTAMPTZ NOT NULL)",
 )
 
 _INDEXES = (
@@ -2462,6 +3088,16 @@ _INDEXES = (
     "ON whatsapp_templates (purpose, status)",
     "CREATE INDEX IF NOT EXISTS events_type_at ON events (type, at)",
     "CREATE INDEX IF NOT EXISTS case_links_created ON case_links (created_at)",
+    "CREATE INDEX IF NOT EXISTS case_notes_case ON case_notes (case_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS case_notes_contact ON case_notes (contact_id)",
+    "CREATE INDEX IF NOT EXISTS case_tag_assignments_tag "
+    "ON case_tag_assignments (tag_id)",
+    "CREATE INDEX IF NOT EXISTS case_tag_assignments_contact "
+    "ON case_tag_assignments (contact_id)",
+    "CREATE INDEX IF NOT EXISTS panel_events_created "
+    "ON panel_events (created_at)",
+    "CREATE INDEX IF NOT EXISTS staff_recovery_codes_profile "
+    "ON staff_recovery_codes (profile_id)",
 )
 
 # Migración aditiva e idempotente para instalaciones anteriores a #36. Se ejecuta
@@ -2505,6 +3141,9 @@ _MIGRATIONS = (
     "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS removed_counts JSONB",
     "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS result_note TEXT",
     "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS notification_result TEXT",
+    # segundo factor del panel (#54)
+    "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS enroll_only "
+    "BOOLEAN NOT NULL DEFAULT FALSE",
 )
 
 
@@ -2571,12 +3210,14 @@ class PostgresRepository:
         new_id: Callable[[], str] | None = None,
         run_migrations: bool | None = None,
         connect_health: Callable[[float], Any] | None = None,
+        panel_events_retention_hours: int = 24,
     ) -> None:
         self._database_url = database_url
         self._connect = connect or (lambda: _pg_connect(self._database_url))
         self._connect_health = connect_health or (
             lambda timeout: _pg_connect(self._database_url, timeout)
         )
+        self._panel_events_retention_hours = panel_events_retention_hours
         self._new_id = new_id or (lambda: uuid.uuid4().hex)
         # En producción (conexión real) se aplica el esquema y la migración; las
         # conexiones falsas de los tests pueden activarla para probar el DDL.
@@ -2757,10 +3398,87 @@ class PostgresRepository:
         )
 
     def add_message(self, contact_id: str, role: str, text: str, at: datetime) -> None:
-        self._run(
-            "INSERT INTO messages (contact_id, role, text, at) VALUES (%s, %s, %s, %s)",
-            (contact_id, role, text, at),
+        params = (contact_id, role, text, at)
+        if role not in PANEL_MESSAGE_ROLES:
+            self._run(
+                "INSERT INTO messages (contact_id, role, text, at) "
+                "VALUES (%s, %s, %s, %s)",
+                params,
+            )
+            return
+        message_sql = (
+            "INSERT INTO messages (contact_id, role, text, at) "
+            "VALUES (%s, %s, %s, %s)"
         )
+        event_sql = (
+            "INSERT INTO panel_events (case_id, kind, created_at) "
+            "SELECT case_id, %s, %s FROM case_links "
+            "WHERE contact_id = %s ORDER BY created_at DESC, case_id DESC LIMIT 1"
+        )
+        purge_sql = "DELETE FROM panel_events WHERE created_at < %s"
+        retention_at = at - timedelta(hours=self._panel_events_retention_hours)
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(message_sql, params)
+                cur.execute(event_sql, ("message", at, contact_id))
+                cur.execute(purge_sql, (retention_at,))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logger.error("panel_event_publish_failed kind=message")
+                try:
+                    # R18: el mensaje se conserva aunque falle la publicación.
+                    cur.execute(message_sql, params)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+
+    def publish_panel_event(self, case_id: str, kind: str, at: datetime) -> None:
+        self._run(
+            "INSERT INTO panel_events (case_id, kind, created_at) "
+            "VALUES (%s, %s, %s)",
+            (case_id, kind, at),
+        )
+        self.delete_panel_events_before(
+            at - timedelta(hours=self._panel_events_retention_hours)
+        )
+
+    def panel_events_cursor(self) -> int:
+        rows = self._run(
+            "SELECT COALESCE(MAX(id), 0) FROM panel_events", (), fetch=True
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def panel_events_since(
+        self, after_id: int, since: datetime, limit: int
+    ) -> list[PanelEvent]:
+        rows = self._run(
+            "SELECT id, case_id, kind FROM panel_events "
+            "WHERE id > %s OR created_at >= %s ORDER BY id ASC LIMIT %s",
+            (after_id, since, limit),
+            fetch=True,
+        )
+        return [PanelEvent(id=row[0], case_id=row[1], kind=row[2]) for row in rows]
+
+    def delete_panel_events_before(self, before: datetime) -> int:
+        rows = self._run(
+            "DELETE FROM panel_events WHERE created_at < %s RETURNING id",
+            (before,),
+            fetch=True,
+        )
+        return len(rows)
+
+    def latest_case_for_contact(self, contact_id: str) -> str | None:
+        rows = self._run(
+            "SELECT case_id FROM case_links WHERE contact_id = %s "
+            "ORDER BY created_at DESC, case_id DESC LIMIT 1",
+            (contact_id,),
+            fetch=True,
+        )
+        return rows[0][0] if rows else None
 
     def last_messages(self, contact_id: str, limit: int) -> list[LastMessage]:
         rows = self._run(
@@ -2784,11 +3502,44 @@ class PostgresRepository:
         at: datetime,
         profile_id: str | None = None,
     ) -> None:
-        self._run(
+        params = (case_id, contact_id, at, profile_id)
+        link_sql = (
             "INSERT INTO case_links (case_id, contact_id, created_at, profile_id) "
-            "VALUES (%s, %s, %s, %s) ON CONFLICT (case_id) DO NOTHING",
-            (case_id, contact_id, at, profile_id),
+            "VALUES (%s, %s, %s, %s) ON CONFLICT (case_id) DO NOTHING "
+            "RETURNING case_id"
         )
+        fallback_sql = (
+            "INSERT INTO case_links (case_id, contact_id, created_at, profile_id) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT (case_id) DO NOTHING"
+        )
+        retention_at = at - timedelta(hours=self._panel_events_retention_hours)
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(link_sql, params)
+                inserted = list(cur.fetchall())
+                if inserted:
+                    cur.execute(
+                        "INSERT INTO panel_events (case_id, kind, created_at) "
+                        "VALUES (%s, %s, %s)",
+                        (case_id, "case_created", at),
+                    )
+                    cur.execute(
+                        "DELETE FROM panel_events WHERE created_at < %s",
+                        (retention_at,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logger.error("panel_event_publish_failed kind=case_created")
+                try:
+                    # R18: el caso queda enlazado aunque no se pueda publicar.
+                    cur.execute(fallback_sql, params)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
 
     def get_case_profile(self, case_id: str) -> str | None:
         rows = self._run(
@@ -3298,37 +4049,208 @@ class PostgresRepository:
         )
         return bool(rows)
 
+    def get_advisor_roster_state(self) -> tuple[int, str]:
+        rows = self._run(
+            "SELECT generation, status FROM advisor_roster_sync WHERE singleton_id = 1",
+            (),
+            fetch=True,
+        )
+        if not rows:
+            return 0, "synced"
+        return int(rows[0][0]), str(rows[0][1])
+
+    def begin_advisor_roster_change(self) -> int:
+        rows = self._run(
+            "INSERT INTO advisor_roster_sync (singleton_id, generation, status) "
+            "VALUES (%s, %s, %s) ON CONFLICT (singleton_id) DO UPDATE "
+            "SET generation = advisor_roster_sync.generation + 1, status = %s "
+            "RETURNING generation",
+            (1, 1, "pending", "pending"),
+            fetch=True,
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def mark_advisor_roster_synced(self, generation: int) -> bool:
+        rows = self._run(
+            "UPDATE advisor_roster_sync SET status = %s "
+            "WHERE singleton_id = %s AND generation = %s AND status = %s "
+            "RETURNING generation",
+            ("synced", 1, generation, "pending"),
+            fetch=True,
+        )
+        return bool(rows)
+
     def create_session(
-        self, token_hash: str, profile_id: str, csrf_token: str, expires_at: datetime
+        self,
+        token_hash: str,
+        profile_id: str,
+        csrf_token: str,
+        expires_at: datetime,
+        enroll_only: bool = False,
     ) -> None:
         self._run(
-            "INSERT INTO admin_sessions (token_hash, profile_id, csrf_token, expires_at) "
-            "VALUES (%s, %s, %s, %s)",
-            (token_hash, profile_id, csrf_token, expires_at),
+            "INSERT INTO admin_sessions "
+            "(token_hash, profile_id, csrf_token, expires_at, enroll_only) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (token_hash, profile_id, csrf_token, expires_at, enroll_only),
         )
 
     def get_session(self, token_hash: str, now: datetime) -> AdminSession | None:
         return self.get_session_for_role(token_hash, now, "admin")
 
-    def get_session_for_role(
-        self, token_hash: str, now: datetime, role: str
-    ) -> AdminSession | None:
+    def get_session_any(self, token_hash: str, now: datetime) -> AdminSession | None:
         rows = self._run(
-            "SELECT s.token_hash, s.profile_id, s.csrf_token, s.expires_at "
-            "FROM admin_sessions s JOIN profiles p ON p.id = s.profile_id "
-            "WHERE s.token_hash = %s AND s.expires_at > %s AND p.role = %s",
-            (token_hash, now, role),
+            "SELECT token_hash, profile_id, csrf_token, expires_at, enroll_only "
+            "FROM admin_sessions WHERE token_hash = %s AND expires_at > %s",
+            (token_hash, now),
             fetch=True,
         )
         if not rows:
             return None
         row = rows[0]
         return AdminSession(
-            token_hash=row[0], profile_id=row[1], csrf_token=row[2], expires_at=row[3]
+            token_hash=row[0],
+            profile_id=row[1],
+            csrf_token=row[2],
+            expires_at=row[3],
+            enroll_only=bool(row[4]),
+        )
+
+    def get_session_for_role(
+        self, token_hash: str, now: datetime, role: str
+    ) -> AdminSession | None:
+        return self.get_session_for_roles(token_hash, now, [role])
+
+    def get_session_for_roles(
+        self, token_hash: str, now: datetime, roles: Sequence[str]
+    ) -> AdminSession | None:
+        rows = self._run(
+            "SELECT s.token_hash, s.profile_id, s.csrf_token, s.expires_at, "
+            "s.enroll_only FROM admin_sessions s "
+            "JOIN profiles p ON p.id = s.profile_id "
+            "WHERE s.token_hash = %s AND s.expires_at > %s AND p.role = ANY(%s) "
+            "AND s.enroll_only = FALSE",
+            (token_hash, now, list(roles)),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return AdminSession(
+            token_hash=row[0],
+            profile_id=row[1],
+            csrf_token=row[2],
+            expires_at=row[3],
+            enroll_only=bool(row[4]),
+        )
+
+    def promote_session(self, token_hash: str) -> None:
+        self._run(
+            "UPDATE admin_sessions SET enroll_only = FALSE WHERE token_hash = %s",
+            (token_hash,),
         )
 
     def delete_session(self, token_hash: str) -> None:
         self._run("DELETE FROM admin_sessions WHERE token_hash = %s", (token_hash,))
+
+    def delete_sessions_for_profile(
+        self, profile_id: str, keep_token_hash: str | None = None
+    ) -> None:
+        if keep_token_hash is None:
+            self._run(
+                "DELETE FROM admin_sessions WHERE profile_id = %s", (profile_id,)
+            )
+            return
+        self._run(
+            "DELETE FROM admin_sessions WHERE profile_id = %s AND token_hash <> %s",
+            (profile_id, keep_token_hash),
+        )
+
+    def get_two_factor(self, profile_id: str) -> TwoFactorRecord | None:
+        rows = self._run(
+            "SELECT profile_id, secret_ciphertext, enabled_at, last_used_step, "
+            "created_at FROM staff_two_factor WHERE profile_id = %s",
+            (profile_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return TwoFactorRecord(
+            profile_id=row[0],
+            secret_ciphertext=row[1],
+            enabled_at=row[2],
+            last_used_step=int(row[3]),
+            created_at=row[4],
+        )
+
+    def save_pending_two_factor(
+        self, profile_id: str, ciphertext: str, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "INSERT INTO staff_two_factor "
+            "(profile_id, secret_ciphertext, enabled_at, last_used_step, created_at) "
+            "SELECT %s, %s, NULL, 0, %s WHERE NOT EXISTS ("
+            "SELECT 1 FROM staff_two_factor "
+            "WHERE profile_id = %s AND enabled_at IS NOT NULL) "
+            "ON CONFLICT (profile_id) DO UPDATE "
+            "SET secret_ciphertext = EXCLUDED.secret_ciphertext, enabled_at = NULL, "
+            "last_used_step = 0, created_at = EXCLUDED.created_at "
+            "WHERE staff_two_factor.enabled_at IS NULL "
+            "RETURNING profile_id",
+            (profile_id, ciphertext, now, profile_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def activate_two_factor(
+        self, profile_id: str, step: int, code_hashes: Sequence[str], now: datetime
+    ) -> bool:
+        rows = self._run(
+            "WITH activated AS ("
+            "UPDATE staff_two_factor SET enabled_at = %s, last_used_step = %s "
+            "WHERE profile_id = %s AND enabled_at IS NULL RETURNING profile_id) "
+            "INSERT INTO staff_recovery_codes (code_hash, profile_id, created_at) "
+            "SELECT code, %s, %s FROM unnest(%s::text[]) AS code "
+            "WHERE EXISTS (SELECT 1 FROM activated) "
+            "RETURNING code_hash",
+            (now, step, profile_id, profile_id, now, list(code_hashes)),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def advance_two_factor_step(self, profile_id: str, step: int) -> bool:
+        rows = self._run(
+            "UPDATE staff_two_factor SET last_used_step = %s "
+            "WHERE profile_id = %s AND enabled_at IS NOT NULL AND last_used_step < %s "
+            "RETURNING profile_id",
+            (step, profile_id, step),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def consume_recovery_code(
+        self, profile_id: str, code_hash: str, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE staff_recovery_codes SET used_at = %s "
+            "WHERE code_hash = %s AND profile_id = %s AND used_at IS NULL "
+            "RETURNING code_hash",
+            (now, code_hash, profile_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def delete_two_factor(self, profile_id: str) -> bool:
+        rows = self._run(
+            "DELETE FROM staff_two_factor WHERE profile_id = %s RETURNING profile_id",
+            (profile_id,),
+            fetch=True,
+        )
+        self._run(
+            "DELETE FROM staff_recovery_codes WHERE profile_id = %s", (profile_id,)
+        )
+        return bool(rows)
 
     def recent_events(self, limit: int) -> list[StoredEvent]:
         rows = self._run(
@@ -3610,6 +4532,13 @@ class PostgresRepository:
                 contact_id = rows[0][0]
                 cur.execute("DELETE FROM messages WHERE contact_id = %s", (contact_id,))
                 cur.execute("DELETE FROM events WHERE contact_id = %s", (contact_id,))
+                cur.execute(
+                    "DELETE FROM case_notes WHERE contact_id = %s", (contact_id,)
+                )
+                cur.execute(
+                    "DELETE FROM case_tag_assignments WHERE contact_id = %s",
+                    (contact_id,),
+                )
                 cur.execute("DELETE FROM case_links WHERE contact_id = %s", (contact_id,))
                 cur.execute(
                     "DELETE FROM auto_handover_outcomes WHERE contact_id = %s",
@@ -4122,6 +5051,28 @@ class PostgresRepository:
                 )
                 sessions = list(cur.fetchall())
 
+                session_contact_ids = [row[0] for row in sessions]
+                if session_contact_ids:
+                    # R22: borra los avisos de los casos purgados.
+                    cur.execute(
+                        "DELETE FROM panel_events WHERE case_id IN ("
+                        "SELECT case_id FROM case_links WHERE contact_id = ANY(%s))",
+                        (session_contact_ids,),
+                    )
+                deleted_notes = 0
+                if session_contact_ids:
+                    cur.execute(
+                        "DELETE FROM case_notes WHERE contact_id = ANY(%s) "
+                        "RETURNING id",
+                        (session_contact_ids,),
+                    )
+                    deleted_notes = len(list(cur.fetchall()))
+                    cur.execute(
+                        "DELETE FROM case_tag_assignments "
+                        "WHERE contact_id = ANY(%s)",
+                        (session_contact_ids,),
+                    )
+
                 deleted_messages = 0
                 for contact_id, started_at, last_activity_at, ended_at in sessions:
                     since, until, idle_limit = session_window(
@@ -4152,6 +5103,7 @@ class PostgresRepository:
                     "messages": deleted_messages,
                     "conversation_summaries": deleted_summaries,
                     "client_memory": deleted_memory,
+                    "case_notes": deleted_notes,
                 }
                 cur.execute(
                     "UPDATE suppression_requests SET status = 'executed', "
@@ -4180,9 +5132,34 @@ class PostgresRepository:
                 )
                 inactive_ids = [row[0] for row in cur.fetchall()]
 
+                if inactive_ids:
+                    cur.execute(
+                        "DELETE FROM case_notes "
+                        "WHERE created_at < %s OR contact_id = ANY(%s) "
+                        "RETURNING id",
+                        (cutoff, inactive_ids),
+                    )
+                else:
+                    cur.execute(
+                        "DELETE FROM case_notes WHERE created_at < %s RETURNING id",
+                        (cutoff,),
+                    )
+                deleted_notes = len(cur.fetchall())
+                if inactive_ids:
+                    cur.execute(
+                        "DELETE FROM case_tag_assignments "
+                        "WHERE contact_id = ANY(%s)",
+                        (inactive_ids,),
+                    )
+
                 deleted_links = 0
                 deleted_contacts = 0
                 if inactive_ids:
+                    cur.execute(
+                        "DELETE FROM panel_events WHERE case_id IN ("
+                        "SELECT case_id FROM case_links WHERE contact_id = ANY(%s))",
+                        (inactive_ids,),
+                    )
                     cur.execute(
                         "DELETE FROM case_links WHERE contact_id = ANY(%s) "
                         "RETURNING case_id",
@@ -4262,6 +5239,7 @@ class PostgresRepository:
                     "auto_handover_streaks": deleted_streaks,
                     "tool_calls": deleted_tool_calls,
                     "conversation_summaries": deleted_summaries,
+                    "case_notes": deleted_notes,
                 }
                 cur.execute(
                     "INSERT INTO privacy_purge_runs (ran_at, cutoff, counts) "
@@ -4273,6 +5251,252 @@ class PostgresRepository:
             except Exception:
                 conn.rollback()
                 raise
+
+    def add_case_note(self, note: CaseNote, contact_id: str) -> None:
+        self._run(
+            "INSERT INTO case_notes "
+            "(id, case_id, contact_id, author_profile_id, body, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                note.id,
+                note.case_id,
+                contact_id,
+                note.author_profile_id,
+                note.body,
+                note.created_at,
+            ),
+        )
+
+    def _notes_from_rows(self, rows: list) -> list[CaseNote]:
+        return [
+            CaseNote(
+                id=row[0],
+                case_id=row[1],
+                author_profile_id=row[2],
+                author_username=row[3],
+                body=row[4],
+                created_at=row[5],
+            )
+            for row in rows
+        ]
+
+    def list_case_notes(self, case_id: str) -> list[CaseNote]:
+        rows = self._run(
+            "SELECT n.id, n.case_id, n.author_profile_id, p.username, n.body, "
+            "n.created_at FROM case_notes n "
+            "LEFT JOIN profiles p ON p.id = n.author_profile_id "
+            "WHERE n.case_id = %s ORDER BY n.created_at ASC, n.id ASC",
+            (case_id,),
+            fetch=True,
+        )
+        return self._notes_from_rows(rows)
+
+    def get_case_note(self, note_id: str) -> CaseNote | None:
+        rows = self._run(
+            "SELECT n.id, n.case_id, n.author_profile_id, p.username, n.body, "
+            "n.created_at FROM case_notes n "
+            "LEFT JOIN profiles p ON p.id = n.author_profile_id "
+            "WHERE n.id = %s",
+            (note_id,),
+            fetch=True,
+        )
+        return self._notes_from_rows(rows)[0] if rows else None
+
+    def delete_case_note(self, note_id: str) -> bool:
+        rows = self._run(
+            "DELETE FROM case_notes WHERE id = %s RETURNING id",
+            (note_id,),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def count_case_notes(self, case_id: str) -> int:
+        rows = self._run(
+            "SELECT COUNT(*) FROM case_notes WHERE case_id = %s",
+            (case_id,),
+            fetch=True,
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def create_case_tag(self, tag: CaseTag, name_key: str, now: datetime) -> bool:
+        rows = self._run(
+            "INSERT INTO case_tags "
+            "(id, name, name_key, active, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (name_key) DO NOTHING RETURNING id",
+            (tag.id, tag.name, name_key, tag.active, now, now),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def rename_case_tag(
+        self, tag_id: str, name: str, name_key: str, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE case_tags SET name = %s, name_key = %s, updated_at = %s "
+            "WHERE id = %s AND NOT EXISTS ("
+            "SELECT 1 FROM case_tags WHERE name_key = %s AND id <> %s"
+            ") RETURNING id",
+            (name, name_key, now, tag_id, name_key, tag_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def set_case_tag_active(
+        self, tag_id: str, active: bool, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE case_tags SET active = %s, updated_at = %s "
+            "WHERE id = %s RETURNING id",
+            (active, now, tag_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def get_case_tag(self, tag_id: str) -> CaseTag | None:
+        rows = self._run(
+            "SELECT id, name, active FROM case_tags WHERE id = %s",
+            (tag_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return CaseTag(id=row[0], name=row[1], active=bool(row[2]))
+
+    def list_case_tags(self, only_active: bool = False) -> list[CaseTag]:
+        sql = "SELECT id, name, active FROM case_tags"
+        if only_active:
+            sql += " WHERE active = TRUE"
+        sql += " ORDER BY name ASC, id ASC"
+        rows = self._run(sql, (), fetch=True)
+        return [
+            CaseTag(id=row[0], name=row[1], active=bool(row[2])) for row in rows
+        ]
+
+    def add_case_tag(
+        self,
+        case_id: str,
+        tag_id: str,
+        contact_id: str,
+        assigned_by: str,
+        now: datetime,
+    ) -> None:
+        self._run(
+            "INSERT INTO case_tag_assignments "
+            "(case_id, tag_id, contact_id, assigned_by, assigned_at) "
+            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            (case_id, tag_id, contact_id, assigned_by, now),
+        )
+
+    def remove_case_tag(self, case_id: str, tag_id: str) -> bool:
+        rows = self._run(
+            "DELETE FROM case_tag_assignments "
+            "WHERE case_id = %s AND tag_id = %s RETURNING case_id",
+            (case_id, tag_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def count_case_tags(self, case_id: str) -> int:
+        rows = self._run(
+            "SELECT COUNT(*) FROM case_tag_assignments WHERE case_id = %s",
+            (case_id,),
+            fetch=True,
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def case_tag_map(
+        self, case_ids: Sequence[str]
+    ) -> dict[str, tuple[str, ...]]:
+        if not case_ids:
+            return {}
+        rows = self._run(
+            "SELECT case_id, tag_id FROM case_tag_assignments "
+            "WHERE case_id = ANY(%s) ORDER BY assigned_at ASC, tag_id ASC",
+            (list(case_ids),),
+            fetch=True,
+        )
+        grouped: dict[str, list[str]] = {case_id: [] for case_id in case_ids}
+        for case_id, tag_id in rows:
+            grouped.setdefault(case_id, []).append(tag_id)
+        return {case_id: tuple(tag_ids) for case_id, tag_ids in grouped.items()}
+
+    def add_saved_reply(self, reply: SavedReply) -> None:
+        self._run(
+            "INSERT INTO saved_replies "
+            "(id, title, body, active, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                reply.id,
+                reply.title,
+                reply.body,
+                reply.active,
+                reply.updated_at,
+                reply.updated_at,
+            ),
+        )
+
+    def update_saved_reply(
+        self, reply_id: str, title: str, body: str, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE saved_replies SET title = %s, body = %s, updated_at = %s "
+            "WHERE id = %s RETURNING id",
+            (title, body, now, reply_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def set_saved_reply_active(
+        self, reply_id: str, active: bool, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE saved_replies SET active = %s, updated_at = %s "
+            "WHERE id = %s RETURNING id",
+            (active, now, reply_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def get_saved_reply(self, reply_id: str) -> SavedReply | None:
+        rows = self._run(
+            "SELECT id, title, body, active, updated_at "
+            "FROM saved_replies WHERE id = %s",
+            (reply_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return SavedReply(
+            id=row[0],
+            title=row[1],
+            body=row[2],
+            active=bool(row[3]),
+            updated_at=row[4],
+        )
+
+    def list_saved_replies(self, only_active: bool = False) -> list[SavedReply]:
+        sql = "SELECT id, title, body, active, updated_at FROM saved_replies"
+        if only_active:
+            sql += " WHERE active = TRUE"
+        sql += " ORDER BY updated_at DESC, id ASC"
+        rows = self._run(sql, (), fetch=True)
+        return [
+            SavedReply(
+                id=row[0],
+                title=row[1],
+                body=row[2],
+                active=bool(row[3]),
+                updated_at=row[4],
+            )
+            for row in rows
+        ]
+
+    def count_saved_replies(self) -> int:
+        rows = self._run("SELECT COUNT(*) FROM saved_replies", (), fetch=True)
+        return int(rows[0][0]) if rows else 0
 
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         patterns = [f"{prefix}%" for prefix in prefixes]

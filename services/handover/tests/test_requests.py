@@ -10,14 +10,13 @@ from lazaro_contracts import HandoverRequest, LastMessage
 
 from handover.domain import (
     HandoverRequestRecord,
-    build_advisor_notice,
     open_case,
 )
 from handover.main import create_app
 
 HEADERS = {"X-Service-Token": "svc-token"}
 START = datetime(2026, 1, 2, 3, 0, 0, tzinfo=timezone.utc)
-ADVISORS = [111, 222, 333]
+ADVISORS = ["111", "222", "333"]
 SECRET = "TEXTO-CLIENTE-SECRETO"
 
 
@@ -113,21 +112,19 @@ def test_record_stores_message_count(env, monkeypatch, count):
     assert env.repo.requests[0].messages_count == count
 
 
-def test_notified_request_completes_record_with_delivered_count(env):
-    """R3: resultado notified, caso efectivo y avisos entregados con éxito."""
-    env.gateway.fail_for = {222}
-
+def test_queued_request_completes_record_without_notices(env):
+    """R14: resultado queued, caso efectivo y ningún aviso entregado."""
     assert env.handover().status_code == 200
 
     [record] = env.repo.requests
-    assert record.result == "notified"
+    assert record.result == "queued"
     assert record.case_id == "case-1"
     assert record.advisors_configured == 3
-    assert record.notices_delivered == 2
+    assert record.notices_delivered == 0
 
 
 def test_no_advisors_request_is_recorded(env_no_advisors):
-    """R4: sin asesores configurados también se registra con 0 asesores y 0 avisos."""
+    """R15: sin asesores configurados también se registra con 0 asesores y 0 avisos."""
     response = env_no_advisors.handover()
     assert response.status_code == 200
     assert response.json() == {"status": "no_advisors", "case_id": "case-1"}
@@ -139,14 +136,14 @@ def test_no_advisors_request_is_recorded(env_no_advisors):
     assert record.notices_delivered == 0
 
 
-def test_all_notices_failed_request_is_recorded(env):
-    """R5: si todos los avisos fallan, resultado no_advisors y 0 entregados."""
+def test_gateway_failure_does_not_affect_queued_record(env):
+    """R14: el gateway no interviene en un caso nuevo."""
     env.gateway.fail_for = set(ADVISORS)
 
     assert env.handover().status_code == 200
 
     [record] = env.repo.requests
-    assert record.result == "no_advisors"
+    assert record.result == "queued"
     assert record.case_id == "case-1"
     assert record.advisors_configured == 3
     assert record.notices_delivered == 0
@@ -189,9 +186,18 @@ def test_internal_error_before_case_is_known_records_error(env, monkeypatch):
     assert record.notices_delivered == 0
 
 
-def test_internal_error_after_notice_records_error_with_case_and_count(env, monkeypatch):
-    """R8: error tras un aviso entregado -> caso conocido y 1 entregado."""
-    _raise(monkeypatch, env, "add_notification")
+def test_internal_error_after_case_is_known_records_error_with_case(env, monkeypatch):
+    """R8: error tras conocer el caso -> caso conocido y 0 avisos."""
+    original = env.repo.get_roster
+    calls = {"count": 0}
+
+    def flaky():
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise RuntimeError("fallo-simulado")
+        return original()
+
+    monkeypatch.setattr(env.repo, "get_roster", flaky)
 
     with pytest.raises(RuntimeError, match="fallo-simulado"):
         env.handover()
@@ -199,7 +205,7 @@ def test_internal_error_after_notice_records_error_with_case_and_count(env, monk
     [record] = env.repo.requests
     assert record.result == "error"
     assert record.case_id == "case-1"
-    assert record.notices_delivered == 1
+    assert record.notices_delivered == 0
 
 
 def test_internal_error_returns_500_internal_error(env, monkeypatch):
@@ -220,8 +226,8 @@ def test_record_creation_failure_does_not_change_response(env, monkeypatch):
     response = env.handover()
 
     assert response.status_code == 200
-    assert response.json() == {"status": "notified", "case_id": "case-1"}
-    assert [chat for chat, _ in env.gateway.sent] == ADVISORS
+    assert response.json() == {"status": "queued", "case_id": "case-1"}
+    assert env.gateway.sent == []
     assert env.repo.requests == []
 
 
@@ -232,7 +238,7 @@ def test_record_completion_failure_does_not_change_response(env, monkeypatch):
     response = env.handover()
 
     assert response.status_code == 200
-    assert response.json() == {"status": "notified", "case_id": "case-1"}
+    assert response.json() == {"status": "queued", "case_id": "case-1"}
     [record] = env.repo.requests
     assert record.result == "received"
     assert record.case_id is None
@@ -264,7 +270,7 @@ def test_rejected_handover_creates_no_record(env, case):
 
 
 def test_handover_response_and_notifications_unchanged_with_record(env):
-    """R14, R15: respuesta, avisos y notificaciones idénticos a la feature #7."""
+    """R14: la respuesta queued no envía avisos ni registra notificaciones nuevas."""
     messages = [_msg("no puedo facturar"), _msg("te paso con un asesor", role="bot")]
     response = env.handover(
         case_id="case-1", contact_id="contact-1", chat_id=900,
@@ -272,14 +278,9 @@ def test_handover_response_and_notifications_unchanged_with_record(env):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"status": "notified", "case_id": "case-1"}
-    notice = build_advisor_notice(
-        "case-1", "no_relevant_chunks", [LastMessage.model_validate(m) for m in messages]
-    )
-    assert env.gateway.sent == [(advisor, notice) for advisor in ADVISORS]
-    assert [
-        (n.case_id, n.advisor_id, n.reason, n.at, n.delivered) for n in env.repo.notifications
-    ] == [("case-1", str(advisor), "no_relevant_chunks", START, True) for advisor in ADVISORS]
+    assert response.json() == {"status": "queued", "case_id": "case-1"}
+    assert env.gateway.sent == []
+    assert env.repo.notifications == []
 
 
 @pytest.mark.parametrize(

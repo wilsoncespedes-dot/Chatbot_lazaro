@@ -23,6 +23,8 @@ ROUTES: dict[str, str] = {
     "POST /cases/{id}/assign": "handover",
     "POST /cases/{id}/authorize": "handover",
     "POST /cases/{id}/client-message": "handover",
+    "POST /cases/{id}/reassign": "handover",
+    "POST /advisors/sync": "handover",
     "PATCH /chunks/{id}": "rag",
 }
 
@@ -39,7 +41,19 @@ OWN_ERRORS: dict[str, list[tuple[str, str]]] = {
     ],
     "POST /cases/{id}/client-message": [
         ("404", "not_found"),
-        ("502", "upstream_error"),
+    ],
+    "POST /cases/{id}/reassign": [
+        ("403", "forbidden"),
+        ("404", "not_found"),
+        ("409", "case_closed"),
+        ("409", "case_not_assigned"),
+        ("409", "case_changed"),
+        ("422", "validation_error"),
+        ("503", "roster_out_of_sync"),
+        ("500", "internal_error"),
+    ],
+    "POST /advisors/sync": [
+        ("500", "internal_error"),
     ],
     "PATCH /chunks/{id}": [
         ("404", "not_found"),
@@ -59,6 +73,8 @@ SUCCESS_CODES: dict[str, str] = {
     "POST /cases/{id}/assign": "200",
     "POST /cases/{id}/authorize": "200",
     "POST /cases/{id}/client-message": "200",
+    "POST /cases/{id}/reassign": "200",
+    "POST /advisors/sync": "200",
     "PATCH /chunks/{id}": "200",
 }
 
@@ -108,7 +124,7 @@ def _first_column_cells(table_text: str) -> set[str]:
 
 
 def _error_rows(table_text: str) -> set[tuple[str, str]]:
-    return set(re.findall(r"^\| (\d{3}) \| `?([a-z_]+)`? \|", table_text, re.MULTILINE))
+    return set(re.findall(r"^\| (\d{3})\s+\| `?([a-z_]+)`? \|", table_text, re.MULTILINE))
 
 
 def _response_fields(model: type[BaseModel]) -> set[str]:
@@ -400,6 +416,7 @@ def test_common_rules_forbidden_row_cites_case_routes() -> None:
         "/cases/{id}/reply",
         "/cases/{id}/close",
         "/cases/{id}/assign",
+        "/cases/{id}/reassign",
     ):
         assert route in match.group(1), route
 
@@ -448,11 +465,11 @@ def test_existing_case_routes_keep_their_error_rows(route: str) -> None:
 
 
 def test_assumptions_s12_defines_who_is_advisor() -> None:
-    """contrato_autorizacion_asesores R19: S12 define quién es asesor y el 403."""
+    """R38: S12 define quién es asesor por el roster y el 403."""
     row = _assumption_row("S12")
     for fragment in (
         "`POST /cases/{id}/authorize`",
-        "`ADVISOR_CHAT_IDS`",
+        "roster sincronizado",
         "`403`",
         "`forbidden`",
     ):
@@ -484,11 +501,20 @@ def test_assumptions_s12_close_rules() -> None:
         assert fragment in row, fragment
 
 
-def test_assumptions_s12_no_reassignment_nor_supervisor() -> None:
-    """contrato_autorizacion_asesores R22: S12 niega reasignación y rol supervisor."""
+def test_assumptions_s12_documents_supervisor_reassignment() -> None:
+    """roles_supervisor_responsable_datos R28: S12 publica las reglas del supervisor."""
     row = _assumption_row("S12")
-    assert "Sin reasignación" in row
-    assert "supervisor" in row
+    assert "Sin reasignación" not in row
+    for fragment in (
+        "Reglas del supervisor",
+        "cambian la decisión de la #14",
+        "`POST /cases/{id}/reassign`",
+        "`scope=all`",
+        "`case_not_assigned`",
+        "`case_changed`",
+        "solo lo reasigna",
+    ):
+        assert fragment in row, fragment
 
 
 def test_assumptions_s12_fails_closed() -> None:
@@ -624,10 +650,10 @@ def test_assumptions_s12_documents_s11_change() -> None:
         assert fragment in row, fragment
 
 
-def test_authorize_route_caller_mentions_cerrar_command() -> None:
-    """contrato_autorizacion_asesores R53: la línea Llama cita /cerrar y close."""
+def test_authorize_route_caller_does_not_mention_telegram_commands() -> None:
+    """R38, R46: la línea Llama ya no cita /cerrar por Telegram."""
     llamada = _bullet(AUTHORIZE_ROUTE, "Llama")
-    assert "`/cerrar`" in llamada
+    assert "`/cerrar`" not in llamada
     assert "`POST /cases/{id}/close`" in llamada
 
 
@@ -635,11 +661,11 @@ def test_authorize_route_caller_mentions_cerrar_command() -> None:
 
 
 def test_assumptions_s12_defines_orphan_case() -> None:
-    """contrato_cierre_casos_huerfanos R1: S12 define el caso huérfano, incluido el nulo."""
+    """R38: S12 define el caso huérfano con el roster sincronizado, incluido el nulo."""
     row = _assumption_row("S12")
     fragment = (
         "Caso huérfano: un caso `assigned` cuyo `advisor_id` es nulo o ya no está en "
-        "`ADVISOR_CHAT_IDS`"
+        "el roster de asesores"
     )
     assert fragment in row, fragment
 
@@ -723,9 +749,9 @@ def test_assumptions_s12_precedence_orphan_close_allowed_after_first_steps() -> 
 
 
 def test_assumptions_s12_documents_advisor_retirement_procedure() -> None:
-    """contrato_cierre_casos_huerfanos R10: el asesor cierra sus casos antes de retirarse."""
+    """R38: el asesor cierra sus casos y el perfil se retira del roster."""
     row = _assumption_row("S12")
-    fragment = "antes de quitar su chat_id de `ADVISOR_CHAT_IDS`, el asesor cierra sus casos"
+    fragment = "antes de quitar un perfil del roster, el asesor cierra sus casos"
     assert fragment in row, fragment
 
 
@@ -761,45 +787,42 @@ def test_client_message_section_documents_path_id() -> None:
 
 
 def test_client_message_section_documents_statuses() -> None:
-    """contrato_conversacion_caso R11: la ruta describe assigned → forwarded y not_assigned."""
+    """R40: la ruta describe assigned → available_in_panel y not_assigned."""
     section = _route(CLIENT_MESSAGE_ROUTE).split("#### Request")[0]
     for fragment in (
         "`assigned`",
         "`200`",
-        "`forwarded`",
+        "`available_in_panel`",
         "`not_assigned`",
-        "asesor asignado",
-        "sin enviar nada",
+        "sin enviarlo por Telegram",
         "S13",
     ):
         assert fragment in section, fragment
 
 
-def test_client_message_upstream_error_row_mentions_advisor() -> None:
-    """contrato_conversacion_caso R12: la fila 502 upstream_error cita el envío al asesor."""
+def test_client_message_has_no_telegram_upstream_error_row() -> None:
+    """R40: sin envío por Telegram desaparece la fila 502 upstream_error."""
     table = _subsection(CLIENT_MESSAGE_ROUTE, "Errores")
-    match = re.search(r"^\| 502 \| upstream_error \|(.*)$", table, re.MULTILINE)
-    assert match, "falta la fila 502 upstream_error"
-    assert "envío al asesor" in match.group(1)
+    assert ("502", "upstream_error") not in _error_rows(table)
 
 
 def test_client_message_error_codes_are_declared_in_common_rules() -> None:
-    """contrato_conversacion_caso R13: los errores de la ruta ya están en Reglas comunes."""
+    """R40: los errores de la ruta ya están en Reglas comunes."""
     rows = _error_rows(_subsection(CLIENT_MESSAGE_ROUTE, "Errores"))
     rules = _section(_doc(), "Reglas comunes", 2)
     declared = set(re.findall(r"^\| (\d{3})\s+\| `([a-z_]+)`", rules, re.MULTILINE))
     assert rows <= declared
 
 
-def test_close_route_is_also_called_by_orchestrator() -> None:
-    """contrato_conversacion_caso R14: close cita orchestrator y conserva el llamador previo."""
+def test_close_route_is_called_by_orchestrator() -> None:
+    """R40: close cita orchestrator y el panel."""
     llamada = _bullet("POST /cases/{id}/close", "Llama")
     assert "orchestrator" in llamada
-    assert "asesor (herramienta interna con token; panel en el futuro)" in llamada
+    assert "panel de asesores" in llamada
 
 
 def test_assumptions_include_client_message_forwarding() -> None:
-    """contrato_conversacion_caso R15: S13 recoge cuándo se reenvía el mensaje al asesor."""
+    """R38: S13 recoge cuándo el mensaje queda en el panel."""
     row = _assumption_row("S13")
     for fragment in (
         "`POST /cases/{id}/client-message`",
@@ -812,69 +835,34 @@ def test_assumptions_include_client_message_forwarding() -> None:
         assert fragment in row, fragment
 
 
-def test_assumptions_s13_forward_failure_does_not_fall_back_to_rag() -> None:
-    """contrato_conversacion_caso R16: S13 recoge el 502 sin volver al RAG."""
+def test_assumptions_s13_no_telegram_forwarding() -> None:
+    """R38: S13 deja claro que el mensaje no se envía por Telegram."""
     row = _assumption_row("S13")
-    for fragment in ("`502`", "texto fijo", "no se vuelve al RAG"):
+    for fragment in ("disponible en la conversación del panel", "sin enviarlo por Telegram"):
         assert fragment in row, fragment
 
 
-def test_assumptions_s13_advisor_commands_use_messages_route() -> None:
-    """contrato_conversacion_caso R17: S13 recoge los comandos por POST /messages."""
+def test_assumptions_s13_advisor_commands_are_retired() -> None:
+    """R38, R46: S13 documenta que /responder y /cerrar ya no son comandos."""
     row = _assumption_row("S13")
     for fragment in (
         "`/responder <case_id> <texto>`",
         "`/cerrar <case_id>`",
-        "`POST /messages`",
-        "no cambia",
+        "ya no existen",
+        "texto ordinario",
+        "sin responder, asignar ni cerrar ningún caso",
     ):
         assert fragment in row, fragment
 
 
-def test_assumptions_s13_advisor_id_is_telegram_sender() -> None:
-    """contrato_conversacion_caso R18: S13 fija advisor_id = remitente del webhook."""
+def test_assumptions_s13_identity_is_profile_id() -> None:
+    """R38, R5: S13 fija la identidad por perfil y no exige Telegram."""
     row = _assumption_row("S13")
     for fragment in (
-        "`advisor_id`",
-        "`telegram_user_id`",
-        "`TELEGRAM_WEBHOOK_SECRET`",
-        "nunca un id escrito en el texto",
+        "`profile_id`",
+        "sin `telegram_user_id`",
+        "atender desde el panel",
     ):
-        assert fragment in row, fragment
-
-
-def test_assumptions_s13_non_command_advisor_message_follows_current_flow() -> None:
-    """contrato_conversacion_caso R36: un mensaje de asesor que no es comando sigue el flujo."""
-    row = _assumption_row("S13")
-    for fragment in (
-        "un mensaje de un asesor que no es `/responder` ni `/cerrar` sigue el flujo actual",
-        "como el de cualquier cliente",
-    ):
-        assert fragment in row, fragment
-
-
-def test_assumptions_s13_advisor_commands_follow_s12() -> None:
-    """contrato_conversacion_caso R38: S13 autoriza los comandos con las reglas de S12."""
-    row = _assumption_row("S13")
-    assert "se autorizan con las reglas de S12" in row
-    assert _assumption_row("S12") != ""
-
-
-def test_assumptions_s13_advisor_list_matches_sender_user_id() -> None:
-    """contrato_conversacion_caso R37: ADVISOR_CHAT_IDS se compara con telegram_user_id."""
-    row = _assumption_row("S13")
-    for fragment in (
-        "`ADVISOR_CHAT_IDS`",
-        "se comprueba con ese `telegram_user_id`",
-        "no con el `chat_id`",
-    ):
-        assert fragment in row, fragment
-
-
-def test_assumptions_s13_group_ids_cannot_use_commands() -> None:
-    """contrato_conversacion_caso R39: un id de grupo no puede usar los comandos."""
-    row = _assumption_row("S13")
-    for fragment in ("id de grupo (negativo)", "no puede usar los comandos"):
         assert fragment in row, fragment
 
 
@@ -949,5 +937,98 @@ def test_health_documents_that_no_sensitive_details_are_exposed() -> None:
     section = _section(_doc(), "Salud", 3)
     for fragment in ("URLs", "credenciales", "DSN", "pública"):
         assert fragment in section, fragment
+
+
+# ── retirar_asesores_telegram (feature #48) ─────────────────────────────────
+
+SYNC_ROUTE = "POST /advisors/sync"
+
+
+def test_sync_route_documents_exposer_caller_models_and_token() -> None:
+    """R39: la ruta documenta servicio, llamador, modelos y X-Service-Token."""
+    assert _bullet(SYNC_ROUTE, "Expone") == "handover"
+    assert "orchestrator" in _bullet(SYNC_ROUTE, "Llama")
+    names = re.findall(r"`([A-Za-z]+)`", _bullet(SYNC_ROUTE, "Modelos"))
+    assert names[:2] == ["AdvisorRosterSyncRequest", "AdvisorRosterSyncResponse"]
+    assert "`X-Service-Token`" in _route(SYNC_ROUTE)
+
+
+def test_sync_route_error_codes() -> None:
+    """R39: la ruta documenta 401, 422 y 500."""
+    rows = _error_rows(_subsection(SYNC_ROUTE, "Errores"))
+    assert {
+        ("401", "unauthorized"),
+        ("422", "validation_error"),
+        ("500", "internal_error"),
+    } <= rows
+
+
+def test_handover_response_status_is_queued_or_no_advisors() -> None:
+    """R38: /handover documenta queued y no_advisors."""
+    section = _route("POST /handover").split("#### Request")[0]
+    for fragment in ("`queued`", "`no_advisors`", "bandeja del panel", "S12"):
+        assert fragment in section, fragment
+
+
+def test_roster_generation_header_and_503_are_documented() -> None:
+    """R36, R38: la generación y su rechazo 503 están en el contrato."""
+    rules = _section(_doc(), "Reglas comunes", 2)
+    assert ("503", "roster_out_of_sync") in _error_rows(rules)
+    assert "`X-Advisor-Roster-Generation`" in _route("GET /cases")
+    assert "`X-Advisor-Roster-Generation`" in _route("POST /handover")
+
+
+def test_assumptions_s6_identity_is_profile_id() -> None:
+    """R38: S6 fija advisor_id = profile_id y no exige Telegram."""
+    row = _assumption_row("S6")
+    for fragment in ("`profile_id`", "roster sincronizado", "sin Telegram"):
+        assert fragment in row, fragment
+
+
+# ── roles_supervisor_responsable_datos (feature #49) ────────────────────────
+
+REASSIGN_ROUTE = "POST /cases/{id}/reassign"
+
+
+def test_reassign_route_documents_exposer_caller_and_models() -> None:
+    """R28: la ruta documenta servicio, llamador y modelos."""
+    assert _bullet(REASSIGN_ROUTE, "Expone") == "handover"
+    assert "orchestrator" in _bullet(REASSIGN_ROUTE, "Llama")
+    names = re.findall(r"`([A-Za-z]+)`", _bullet(REASSIGN_ROUTE, "Modelos"))
+    assert names[:2] == ["CaseReassignRequest", "CaseReassignResponse"]
+
+
+def test_reassign_route_documents_path_and_conditional_write() -> None:
+    """R28, R12, R13: {id}, escritura condicional y errores de carrera."""
+    section = _route(REASSIGN_ROUTE)
+    for fragment in (
+        "`{id}` es el `case_id` (identificador, 1–64 caracteres)",
+        "escritura condicional",
+        "`case_changed`",
+        "`case_not_assigned`",
+        "supervisor",
+    ):
+        assert fragment in section, fragment
+
+
+def test_assumptions_s12_supervisor_cannot_act_on_other_assigned_case() -> None:
+    """R29: S12 mantiene que el supervisor no responde ni cierra casos ajenos."""
+    row = _assumption_row("S12")
+    assert "El supervisor NO responde, cierra ni asigna un caso asignado a otro asesor" in row
+
+
+def test_assumptions_s14_documents_scope_all() -> None:
+    """R28, R9: S14 documenta la vista global del supervisor."""
+    row = _assumption_row("S14")
+    for fragment in ("scope=mine", "scope=all", "supervisor", "`reassign`", "`advisor_id`"):
+        assert fragment in row, fragment
+
+
+def test_assumptions_sync_role_admits_supervisor() -> None:
+    """R7, R28: el roster admite supervisor y conserva el rol."""
+    row = _assumption_row("S6")
+    assert "asesor" in row and "supervisor" in row
+    sync_table = _subsection("POST /advisors/sync", "Request")
+    assert "`asesor`" in sync_table and "`supervisor`" in sync_table
 
 

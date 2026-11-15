@@ -82,18 +82,29 @@ def test_r54_numeric_memory_variables_out_of_range_fail_at_start(field, value):
         Settings(**{field: value})
 
 
-@pytest.mark.parametrize("value", ["", " , ", "admin,cliente", "asesor,otro"])
-def test_r54_suppression_roles_must_be_admin_or_asesor(value):
-    """R54: roles vacíos o ajenos a admin/asesor impiden arrancar."""
+@pytest.mark.parametrize(
+    "value", ["", " , ", "admin,cliente", "asesor,otro", "supervisor"]
+)
+def test_r54_suppression_roles_must_be_allowed(value):
+    """R23c: roles vacíos o ajenos a los admitidos impiden arrancar."""
     with pytest.raises(ValidationError):
         Settings(suppression_executor_roles=value)
 
 
-def test_r54_suppression_roles_accept_admin_and_asesor():
-    """R54: `admin,asesor` es válido y se deduplica."""
-    settings = Settings(suppression_executor_roles="admin, asesor,admin")
+def test_r54_suppression_roles_accept_admin_asesor_and_responsable():
+    """R23: admin, asesor y responsable_datos son válidos y se deduplican."""
+    settings = Settings(
+        suppression_executor_roles="admin, asesor,responsable_datos,admin"
+    )
 
-    assert settings.suppression_executor_role_set == frozenset({"admin", "asesor"})
+    assert settings.suppression_executor_role_set == frozenset(
+        {"admin", "asesor", "responsable_datos"}
+    )
+
+
+def test_r23b_suppression_roles_default_is_admin():
+    """R23b: el valor por defecto sigue siendo admin."""
+    assert Settings().suppression_executor_roles == "admin"
 
 
 def test_r54_empty_sensitive_keywords_fail():

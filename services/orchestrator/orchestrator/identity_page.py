@@ -27,7 +27,8 @@ def _page(title: str, body: str) -> str:
         '<link rel="stylesheet" href="/admin/static/admin.css">\n'
         "</head>\n"
         "<body>\n"
-        f"<main>\n<h2>{_esc(title)}</h2>\n{body}\n</main>\n"
+        '<a class="skip-link" href="#contenido">Saltar al contenido</a>\n'
+        f'<main id="contenido">\n<h2>{_esc(title)}</h2>\n{body}\n</main>\n'
         "</body>\n"
         "</html>\n"
     )

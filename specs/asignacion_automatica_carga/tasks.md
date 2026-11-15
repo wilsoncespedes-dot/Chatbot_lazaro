@@ -1,0 +1,22 @@
+# #52 asignacion_automatica_carga — Tasks
+
+- [x] T1 — Añadir `CaseAutoAssignRequest` y `CaseAutoAssignResponse` en `contracts/lazaro_contracts/cases.py`, exportarlos y probar validación (1–200 ids, status). Cubre: R24.
+- [x] T2 — Añadir `auto_assign_least_loaded` al Protocol, Fake (con lock) y Postgres de handover, más la tabla `handover_auto_assignments`. Cubre: R7, R8, R9, R13, R14, R19.
+- [x] T3 — Implementar `auto_assign_case` en `services/handover/handover/domain.py` (assigned/queued/skipped, 404, 409). Cubre: R7, R11, R14, R15.
+- [x] T4 — Registrar `POST /cases/{case_id}/auto-assign` en `handover/main.py` con `X-Service-Token`. Cubre: R24, R25.
+- [x] T5 — Añadir `auto_assign` al cliente handover del orchestrator (Protocol, Http, Fake) con mapeo de errores. Cubre: R6, R12.
+- [x] T6 — Añadir `assignment.mode` (tipo enum) a `administration.py`, `OperationalSettings.assignment_mode`, prefijo `assignment.`, `ASSIGNMENT_MODE` en `config.py`, `.env.example` y `render.yaml`. Cubre: R1, R2, R3, R4.
+- [x] T7 — Mostrar y guardar el ajuste en `admin.py`/`admin_routes.py` con auditoría y `422` en valor inválido. Cubre: R1, R3, R4.
+- [x] T8 — Implementar `available_advisor_ids` y `_try_auto_assign` en `orchestrator/domain.py` y engancharlos en `_handover` con `allow_auto_assign` (supresión en `False`), horario y evento `auto_assigned`/`auto_assign_failed`. Cubre: R5, R6, R10, R12, R16, R17, R18, R20.
+- [x] T9 — Verificar que la bandeja y la reasignación existentes funcionan con el caso asignado automáticamente (sin código nuevo salvo necesidad). Cubre: R21, R22.
+- [x] T10 — Test handover `test_auto_assign_picks_least_loaded` y `test_auto_assign_tie_breaks_by_advisor_id`. Cubre: R7, R8.
+- [x] T11 — Test handover `test_auto_assign_ignores_non_roster_candidates`, `test_auto_assign_no_valid_candidates_queued`. Cubre: R9, R11.
+- [x] T12 — Test handover `test_auto_assign_concurrent_no_double_assignment` y `test_auto_assign_skips_changed_case`. Cubre: R13, R14.
+- [x] T13 — Test handover `test_auto_assign_unknown_404_closed_409`, `test_auto_assign_records_auto_reason`, `test_auto_assign_requires_token_401`. Cubre: R15, R19, R25.
+- [x] T14 — Test orchestrator `test_mode_manual_does_not_auto_assign`, `test_default_mode_is_manual`. Cubre: R2, R5.
+- [x] T15 — Test orchestrator `test_admin_sets_assignment_mode_applies_without_restart_and_audited`, `test_invalid_assignment_mode_422`. Cubre: R1, R3, R4.
+- [x] T16 — Test orchestrator `test_automatic_mode_requests_assignment_with_available_advisors`, `test_no_available_advisors_leaves_case_queued`, `test_auto_assign_failure_keeps_case_queued`. Cubre: R6, R10, R12.
+- [x] T17 — Test orchestrator `test_suppression_case_not_auto_assigned`, `test_out_of_hours_case_not_auto_assigned`, `test_reescalation_does_not_reassign`. Cubre: R16, R17, R18.
+- [x] T18 — Test orchestrator `test_auto_assigned_event_logged_without_text`, `test_auto_assigned_case_in_advisor_inbox`, `test_supervisor_can_reassign_auto_assigned_case`. Cubre: R20, R21, R22.
+- [x] T19 — Test orchestrator `test_advisor_becoming_available_does_not_assign_queued_case`. Cubre: R23.
+- [x] T20 — Ejecutar `./init.sh` y documentar la trazabilidad en `progress/impl_asignacion_automatica_carga.md`. Cubre: R26.

@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from lazaro_contracts import CaseAuthorizeResponse, ErrorResponse
 
-from handover.config import Settings
-from handover.domain import Denial, is_registered_advisor
+from handover.adapters.repository import FakeCaseRepository
+from handover.adapters.gateway import FakeGatewayClient
+from handover.domain import Adapters, Denial, is_registered_advisor
 from handover.main import create_app
 
 HEADERS = {"X-Service-Token": "svc-token"}
@@ -48,13 +49,13 @@ def _cases(env) -> dict:
 # --- Autorizar ---------------------------------------------------------------------------
 
 
-def test_registered_advisor_matches_decimal_id_exactly():
-    """autorizacion_asesores R1: igualdad exacta con str(int) de ADVISOR_CHAT_IDS."""
-    settings = Settings(advisor_chat_ids="111,-1003")
-    for value in ("111", "-1003"):
-        assert is_registered_advisor(value, settings) is True
+def test_registered_advisor_matches_profile_id_exactly(env):
+    """autorizacion_asesores R1, adaptado #48: igualdad exacta con los profile_id del roster."""
+    adapters = env.adapters
+    for value in ("111", "222", "333"):
+        assert is_registered_advisor(value, adapters) is True
     for value in ("999", "0111", "+111", " 111", "111 ", "1.11", "-111", None):
-        assert is_registered_advisor(value, settings) is False
+        assert is_registered_advisor(value, adapters) is False
 
 
 def test_authorize_unassigned_case_allows_any_registered_advisor(env):

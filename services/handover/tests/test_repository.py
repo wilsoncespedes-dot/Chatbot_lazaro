@@ -82,6 +82,7 @@ def test_postgres_repository_uses_parameters_only():
         (sql, params)
         for sql, params in conn.log
         if not sql.startswith(("CREATE", "ALTER"))
+        and "handover_roster_state" not in sql
     ]
     assert len(statements) == 10
     for sql, params in statements:
@@ -158,8 +159,8 @@ def test_postgres_update_last_messages_writes_only_last_messages():
     assert not re.search(r"'[^']*'", sql)
 
 
-def test_postgres_schema_adds_claim_column_if_not_exists():
-    """R28: el ALTER de la reclamación se ejecuta una vez, tras los CREATE TABLE."""
+def test_postgres_schema_adds_claim_and_role_columns_if_not_exists():
+    """R28 (#49): los ALTER aditivos se ejecutan una vez, tras los CREATE TABLE."""
     conn = _FakeConn()
     repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
     repo.get_case("a")
@@ -167,14 +168,18 @@ def test_postgres_schema_adds_claim_column_if_not_exists():
 
     creates = [index for index, (sql, _) in enumerate(conn.log) if sql.startswith("CREATE TABLE")]
     alters = [index for index, (sql, _) in enumerate(conn.log) if sql.startswith("ALTER TABLE")]
-    assert len(creates) == 5
-    assert len(alters) == 1
-    sql = conn.log[alters[0]][0]
-    assert sql == (
+    assert len(creates) == 8
+    assert len(alters) == 2
+    statements = [conn.log[index][0] for index in alters]
+    assert (
         "ALTER TABLE handover_cases ADD COLUMN IF NOT EXISTS "
         "timeout_claimed_at TIMESTAMPTZ NULL"
-    )
-    assert alters[0] > max(creates)
+    ) in statements
+    assert (
+        "ALTER TABLE handover_advisors ADD COLUMN IF NOT EXISTS "
+        "role TEXT NOT NULL DEFAULT 'asesor'"
+    ) in statements
+    assert min(alters) > max(creates)
 
 
 def test_postgres_repository_connects_lazily_and_once():
@@ -186,7 +191,7 @@ def test_postgres_repository_connects_lazily_and_once():
     repo.get_case("a")
     repo.get_case("b")
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 5
+    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 8
 
 
 def test_postgres_repository_reads_cases_from_rows():
@@ -263,6 +268,7 @@ def _statements(conn: _FakeConn) -> list[tuple[str, tuple]]:
         (sql, params)
         for sql, params in conn.log
         if not sql.startswith(("CREATE", "ALTER"))
+        and "handover_roster_state" not in sql
     ]
 
 
@@ -408,7 +414,7 @@ def test_postgres_repository_connects_once_with_concurrent_first_use():
     for thread in threads:
         thread.join(timeout=5)
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 5
+    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 8
 
 
 def test_fake_close_if_still_allowed_checks_state_and_assignee():
@@ -490,7 +496,7 @@ def test_postgres_creates_requests_table_if_not_exists():
     repo.get_case("case-1")
 
     statements = [sql for sql, _ in conn.log if sql.startswith("CREATE TABLE")]
-    assert len(statements) == 5
+    assert len(statements) == 8
     table = next(sql for sql in statements if "handover_requests" in sql)
     assert table.startswith("CREATE TABLE IF NOT EXISTS handover_requests")
     for column in (
@@ -569,6 +575,48 @@ def test_postgres_list_cases_for_advisor_is_parameterized_and_ordered():
     assert sql.count("%s") == len(params) == 7
     assert params == ("open", "timed_out", "assigned", evil, "assigned", ["111", "222"], 7)
     assert not re.search(r"'[^']*'", sql)
+
+
+def test_postgres_reassign_and_list_all_are_parameterized():
+    """R12, R13, R9: la escritura condicional y la vista global usan parámetros."""
+    evil = "'; DROP TABLE x; --"
+    conn = _FakeConn(rows=[("case-1",)])
+    repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
+
+    assert repo.reassign_if_assigned_to(evil, "111", "222", NOW) is True
+    sql, params = _statements(conn)[-1]
+    assert sql.startswith("UPDATE handover_cases SET advisor_id = %s, assigned_at = %s")
+    assert "WHERE case_id = %s AND status = %s AND advisor_id = %s" in sql
+    assert "RETURNING case_id" in sql
+    assert evil not in sql
+    assert sql.count("%s") == len(params)
+    assert params == ("222", NOW, evil, "assigned", "111")
+
+    assert repo.reassign_if_assigned_to(evil, None, "222", NOW) is True
+    sql, params = _statements(conn)[-1]
+    assert "advisor_id IS NULL" in sql
+    assert params == ("222", NOW, evil, "assigned")
+
+    conn.rows = []
+    assert repo.reassign_if_assigned_to(evil, "111", "222", NOW) is False
+
+    conn.rows = []
+    assert repo.list_all_cases(7) == []
+    sql, params = _statements(conn)[-1]
+    assert sql.startswith("SELECT case_id, contact_id, chat_id")
+    assert "ORDER BY created_at ASC, case_id ASC LIMIT %s" in sql
+    assert params == (7,)
+    assert evil not in sql
+
+
+def test_postgres_roster_roles_returns_profile_and_role():
+    """R7: el repositorio real devuelve el rol guardado del roster."""
+    conn = _FakeConn(rows=[("p1", "asesor"), ("p2", "supervisor")])
+    repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
+    assert repo.get_roster_roles() == {"p1": "asesor", "p2": "supervisor"}
+    sql, params = _statements(conn)[-1]
+    assert sql == "SELECT profile_id, role FROM handover_advisors"
+    assert params == ()
 
 
 def test_fake_repository_request_ids_are_incremental_and_copies():

@@ -24,6 +24,7 @@ ROUTES = [
     ("/cases/case-x/close", {"advisor_id": "111"}),
     ("/cases/case-x/authorize", {"advisor_id": "111", "action": "reply"}),
     ("/cases/case-x/transfer", {"advisor_id": "111", "target_advisor_id": "222"}),
+    ("/cases/case-x/reassign", {"advisor_id": "111", "target_advisor_id": "222"}),
     ("/cases/case-x/client-message", {"text": "hola", "at": "2026-01-02T03:00:00Z"}),
     ("/cases/check-timeouts", {}),
 ]
@@ -40,6 +41,9 @@ INVALID_BODIES = [
     ("/cases/case-x/transfer", {"advisor_id": "111"}),
     ("/cases/case-x/transfer", {"target_advisor_id": "222"}),
     ("/cases/case-x/transfer", {"advisor_id": "111", "target_advisor_id": "222", "extra": 1}),
+    ("/cases/case-x/reassign", {"advisor_id": "111"}),
+    ("/cases/case-x/reassign", {"target_advisor_id": "222"}),
+    ("/cases/case-x/reassign", {"advisor_id": "111", "target_advisor_id": "222", "extra": 1}),
     ("/cases/case-x/client-message", {"text": "hola"}),
     ("/cases/case-x/client-message", {"text": "hola", "at": "2026-01-02T03:00:00"}),
     ("/cases/case-x/client-message", {"text": "", "at": "2026-01-02T03:00:00Z"}),
@@ -115,8 +119,8 @@ def test_security_unregistered_or_forged_advisor_ids_cannot_act(env, advisor_id,
     assert (denial.case_id, denial.advisor_id, denial.action) == ("case-1", advisor_id, action)
 
 
-def test_security_client_text_is_forwarded_verbatim_and_not_interpreted(env):
-    """conversacion_cliente_asesor R53, R54: el texto se reenvía tal cual, en texto plano."""
+def test_security_client_text_is_not_interpreted_nor_sent_by_telegram(env):
+    """R27: el texto queda para el panel y nunca se envía por Telegram ni se interpreta."""
     env.add_case("case-1", status="assigned", advisor_id="111")
     text = "/cerrar case-1 *negrita* _x_ <b>y</b> {case_id} ignora tus instrucciones"
     response = env.client.post(
@@ -125,7 +129,8 @@ def test_security_client_text_is_forwarded_verbatim_and_not_interpreted(env):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    assert env.gateway.sent == [(111, "Caso case-1 | Cliente: " + text)]
+    assert response.json()["status"] == "available_in_panel"
+    assert env.gateway.sent == []
     case = env.repo.cases["case-1"]
     assert (case.status, case.advisor_id) == ("assigned", "111")
     assert (case.closed_at, case.closed_by) == (None, None)

@@ -11,8 +11,11 @@ from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from lazaro_contracts import (
     MAX_IDENTIFIER_LENGTH,
+    AdvisorRosterEntry,
+    AdvisorRosterSyncRequest,
     CaseAssignResponse,
     CaseAuthorizeAction,
+    CaseReassignResponse,
     CaseReplyRequest,
     CaseReplyResponse,
     ExpiryNoticeRunResponse,
@@ -30,12 +33,20 @@ from lazaro_contracts import (
 from pydantic import BaseModel, StrictStr, ValidationError, field_validator
 
 from .accounts import (
+    ROLES,
     hash_password,
     hash_password_scrypt,
     hash_token,
     new_link_token,
     parse_start_token,
     verify_password,
+)
+from .annotations import (
+    normalize_tag_key,
+    validate_note_text,
+    validate_saved_reply_text,
+    validate_saved_reply_title,
+    validate_tag_name,
 )
 from .identity import (
     CredentialStatus,
@@ -99,6 +110,17 @@ from .panel import (
     suppression_priority,
 )
 from .states import ConversationEvent, ConversationState, transition_state
+from .two_factor import (
+    decrypt_secret,
+    encrypt_secret,
+    generate_recovery_codes,
+    generate_secret,
+    hash_recovery_code,
+    looks_like_recovery_code,
+    provisioning_uri,
+    secret_base32,
+    verify_totp,
+)
 from .db_query import (
     DbQueryCommand,
     DbQueryRejected,
@@ -282,6 +304,61 @@ class PanelValidationError(DomainError):
     status_code = 422
 
 
+class PanelBadRequest(DomainError):
+    code = "validation_error"
+    status_code = 400
+
+
+class TwoFactorCodeRequired(DomainError):
+    code = "two_factor_required"
+    status_code = 401
+
+
+class TwoFactorCodeInvalid(DomainError):
+    code = "two_factor_invalid"
+    status_code = 401
+
+
+class TwoFactorUnavailable(DomainError):
+    code = "two_factor_unavailable"
+    status_code = 503
+
+
+class TwoFactorAlreadyEnabled(DomainError):
+    code = "two_factor_already_enabled"
+    status_code = 409
+
+
+class TwoFactorNotEnabled(DomainError):
+    code = "two_factor_not_enabled"
+    status_code = 409
+
+
+class TagNameTaken(DomainError):
+    code = "tag_name_taken"
+    status_code = 409
+
+
+class TagNotFound(DomainError):
+    code = "tag_not_found"
+    status_code = 404
+
+
+class NoteNotFound(DomainError):
+    code = "note_not_found"
+    status_code = 404
+
+
+class SavedReplyNotFound(DomainError):
+    code = "saved_reply_not_found"
+    status_code = 404
+
+
+class SavedReplyVariablesNotAllowed(DomainError):
+    code = "saved_reply_variables_not_allowed"
+    status_code = 422
+
+
 class NoticeVersionRequired(DomainError):
     code = "notice_version_required"
     status_code = 422
@@ -313,6 +390,16 @@ class TemplateTransitionInvalid(DomainError):
 
 class AdvisorUnavailable(DomainError):
     code = "advisor_unavailable"
+    status_code = 409
+
+
+class CaseChanged(DomainError):
+    code = "case_changed"
+    status_code = 409
+
+
+class CaseNotAssigned(DomainError):
+    code = "case_not_assigned"
     status_code = 409
 
 
@@ -363,9 +450,73 @@ class ForwardRejected(Exception):
         self.code = code
 
 
-ADVISOR_COMMAND_PREFIXES = ("/responder", "/cerrar")
+class RosterOutOfSync(DomainError):
+    code = "roster_out_of_sync"
+    status_code = 503
 
-STAFF_ROLES = frozenset({"asesor", "admin"})
+
+ROSTER_ROLE_BY_PROFILE = {
+    "asesor": "asesor",
+    "supervisor": "supervisor",
+    "responsable_datos": "responsable_datos",
+}
+
+
+def _build_roster_request(adapters: Adapters) -> AdvisorRosterSyncRequest:
+    generation, _ = adapters.repository.get_advisor_roster_state()
+    profiles = [
+        AdvisorRosterEntry(
+            profile_id=profile.id,
+            role=ROSTER_ROLE_BY_PROFILE.get(profile.role, "otro"),
+            telegram_user_id=profile.telegram_user_id,
+        )
+        for profile in adapters.repository.list_profiles()
+    ]
+    return AdvisorRosterSyncRequest(generation=generation, profiles=profiles)
+
+
+def publish_advisor_roster(adapters: Adapters) -> bool:
+    """Publica la generación vigente y marca `synced` solo si no cambió entretanto."""
+    generation, status = adapters.repository.get_advisor_roster_state()
+    if status == "synced":
+        return True
+    request = _build_roster_request(adapters)
+    try:
+        response = adapters.handover.sync_roster(request)
+    except ServiceUnavailable:
+        logger.error("advisor_roster_sync_failed generation=%d", generation)
+        return False
+    if response.generation != generation:
+        return False
+    return adapters.repository.mark_advisor_roster_synced(generation)
+
+
+def ensure_roster_ready(adapters: Adapters) -> None:
+    """R35: mientras el roster compartido esté `pending`, falla cerrado sin llamar a handover."""
+    _, status = adapters.repository.get_advisor_roster_state()
+    if status == "synced":
+        return
+    publish_advisor_roster(adapters)
+    _, status = adapters.repository.get_advisor_roster_state()
+    if status != "synced":
+        raise RosterOutOfSync("El roster de asesores no está sincronizado.")
+
+
+def _mark_roster_changed(adapters: Adapters) -> None:
+    adapters.repository.begin_advisor_roster_change()
+    publish_advisor_roster(adapters)
+
+
+def publish_case_event(case_id: str, kind: str, adapters: Adapters) -> None:
+    """R17, R18: publica el aviso sin hacer fallar la acción que lo origina."""
+    try:
+        adapters.repository.publish_panel_event(case_id, kind, adapters.clock())
+    except Exception:
+        logger.error("panel_event_publish_failed kind=%s", kind)
+
+
+STAFF_ROLES = frozenset({"asesor", "supervisor", "responsable_datos", "admin"})
+ATTENDING_ADVISOR_ROLES = frozenset({"asesor", "supervisor"})
 
 
 def conversation_texts(_settings: Settings, adapters: "Adapters") -> ConversationTexts:
@@ -411,32 +562,11 @@ def consent_configured(settings: Settings, adapters: "Adapters") -> bool:
 
 @dataclass(frozen=True)
 class AdvisorCommand:
+    """Compatibilidad interna: ya no se parsea ningún comando de asesor por Telegram."""
+
     action: CaseAuthorizeAction
     case_id: str
     text: str | None
-
-
-@dataclass(frozen=True)
-class MalformedCommand:
-    """Intento de comando que no cumple la forma `/responder <id> <texto>` ni `/cerrar <id>`."""
-
-
-def parse_advisor_command(text: str) -> AdvisorCommand | MalformedCommand | None:
-    """Pura: sin IO, sin reloj, sin configuración (R5)."""
-    stripped = text.strip()
-    parts = stripped.split(maxsplit=2)
-    if not parts:
-        return None
-    first = parts[0]
-    if not first.casefold().startswith(ADVISOR_COMMAND_PREFIXES):
-        return None
-    if first == "/responder" and len(parts) == 3:
-        if 1 <= len(parts[1]) <= MAX_IDENTIFIER_LENGTH:
-            return AdvisorCommand("reply", parts[1], parts[2])
-    if first == "/cerrar" and len(stripped.split()) == 2:
-        if 1 <= len(parts[1]) <= MAX_IDENTIFIER_LENGTH:
-            return AdvisorCommand("close", parts[1], None)
-    return MalformedCommand()
 
 
 class Citation(BaseModel):
@@ -519,6 +649,12 @@ class IssuedLinkToken:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class TwoFactorEnrollment:
+    secret_base32: str
+    provisioning_uri: str
+
+
 @dataclass
 class ClientCredential:
     profile_id: str
@@ -557,6 +693,32 @@ class ClientMemoryView:
 
 
 @dataclass(frozen=True)
+class CaseNote:
+    id: str
+    case_id: str
+    author_profile_id: str
+    author_username: str | None
+    body: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CaseTag:
+    id: str
+    name: str
+    active: bool
+
+
+@dataclass(frozen=True)
+class SavedReply:
+    id: str
+    title: str
+    body: str
+    active: bool
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class InboxRow:
     case_id: str
     status: str
@@ -568,6 +730,8 @@ class InboxRow:
     wait: timedelta | None
     window: str | None
     client_name: str | None
+    assigned_advisor: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -601,6 +765,12 @@ class CaseView:
     window: str
     templates: tuple[str, ...]
     transfer_targets: tuple[tuple[str, str, str], ...]
+    notes: tuple[CaseNote, ...] = ()
+    tags: tuple[CaseTag, ...] = ()
+    assignable_tags: tuple[CaseTag, ...] = ()
+    saved_replies: tuple[SavedReply, ...] = ()
+    selected_reply: SavedReply | None = None
+    reply_notice: bool = False
 
 
 @dataclass(frozen=True)
@@ -1334,10 +1504,14 @@ def _summarize_session(
 def create_profile(
     username: str, role: str, password: str, settings: Settings, adapters: Adapters
 ) -> Profile:
+    if role not in ROLES:
+        raise PanelValidationError("El rol no es válido.")
     password_hash = hash_password(password, settings.password_hash_iterations)
-    return adapters.repository.create_profile(
+    profile = adapters.repository.create_profile(
         username.lower(), role, password_hash, adapters.clock()
     )
+    _mark_roster_changed(adapters)
+    return profile
 
 
 def issue_link_token(
@@ -1372,119 +1546,6 @@ def _handle_start_token(
     _notify_sender(request.chat_id, reply, adapters)
 
 
-def _log_command(action: str, contact_id: str, result: str) -> None:
-    logger.info(
-        "advisor_command action=%s contact_id=%s result=%s", action, contact_id, result
-    )
-
-
-def _deny_command(
-    request: MessageRequest,
-    contact: Contact,
-    name: str,
-    case_id: str,
-    code: str,
-    settings: Settings,
-    adapters: Adapters,
-) -> None:
-    """R24, D6: registra el evento en el contacto remitente y avisa con el texto fijo."""
-    adapters.repository.add_event(
-        contact.id,
-        "advisor_forbidden",
-        f"command:{name} case:{case_id} advisor:{request.telegram_user_id} code:{code}",
-        adapters.clock(),
-    )
-    _notify_sender(request.chat_id, settings.advisor_command_forbidden_reply, adapters)
-
-
-def _command_reply(
-    request: MessageRequest,
-    contact: Contact,
-    command: AdvisorCommand,
-    settings: Settings,
-    adapters: Adapters,
-) -> None:
-    try:
-        reply_to_case(
-            command.case_id,
-            CaseReplyRequest(advisor_id=str(request.telegram_user_id), text=command.text),
-            settings,
-            adapters,
-        )
-    except AdvisorForbidden:
-        _deny_command(
-            request, contact, "responder", command.case_id, "forbidden", settings, adapters
-        )
-        _log_command("reply", contact.id, "forbidden")
-        return
-    except CaseClosed:
-        _notify_sender(
-            request.chat_id, settings.advisor_command_case_closed_reply, adapters
-        )
-        _log_command("reply", contact.id, "failed")
-        return
-    except (CaseNotFound, UpstreamError, ChannelWindowClosed):
-        _notify_sender(request.chat_id, settings.advisor_command_failed_reply, adapters)
-        _log_command("reply", contact.id, "failed")
-        return
-    _notify_sender(request.chat_id, settings.advisor_reply_confirmation, adapters)
-    _log_command("reply", contact.id, "sent")
-
-
-def _command_close(
-    request: MessageRequest,
-    contact: Contact,
-    command: AdvisorCommand,
-    settings: Settings,
-    adapters: Adapters,
-) -> None:
-    advisor_id = str(request.telegram_user_id)
-    try:
-        close_case(command.case_id, advisor_id, settings, adapters)
-    except AdvisorForbidden:
-        _deny_command(
-            request, contact, "cerrar", command.case_id, "forbidden", settings, adapters
-        )
-        _log_command("close", contact.id, "forbidden")
-        return
-    except CaseClosed:
-        _notify_sender(
-            request.chat_id, settings.advisor_command_case_closed_reply, adapters
-        )
-        _log_command("close", contact.id, "failed")
-        return
-    except (CaseNotFound, UpstreamError):
-        _notify_sender(request.chat_id, settings.advisor_command_failed_reply, adapters)
-        _log_command("close", contact.id, "failed")
-        return
-    _notify_sender(request.chat_id, settings.advisor_close_confirmation, adapters)
-    _log_command("close", contact.id, "closed")
-
-
-def _handle_advisor_command(
-    request: MessageRequest,
-    contact: Contact,
-    command: AdvisorCommand | MalformedCommand,
-    settings: Settings,
-    adapters: Adapters,
-) -> None:
-    if isinstance(command, MalformedCommand):
-        _log_command("malformed", contact.id, "help")
-        _notify_sender(request.chat_id, settings.advisor_command_help, adapters)
-        return
-    name = "responder" if command.action == "reply" else "cerrar"
-    if request.telegram_user_id <= 0:
-        _deny_command(
-            request, contact, name, command.case_id, "sender_not_user", settings, adapters
-        )
-        _log_command(command.action, contact.id, "forbidden")
-        return
-    if command.action == "reply":
-        _command_reply(request, contact, command, settings, adapters)
-    else:
-        _command_close(request, contact, command, settings, adapters)
-
-
 def _forward_failed(
     contact: Contact, case_id: str, code: str, settings: Settings, adapters: Adapters
 ) -> bool:
@@ -1515,13 +1576,58 @@ def _forward_to_advisor(
         return _forward_failed(contact, case_id, "upstream_error", settings, adapters)
     except ServiceUnavailable:
         return _forward_failed(contact, case_id, "handover_unavailable", settings, adapters)
-    if response.status != "forwarded":
+    if response.status != "available_in_panel":
         return False
     logger.info("forwarded_to_advisor contact_id=%s case_id=%s", contact.id, case_id)
     adapters.repository.add_event(
         contact.id, "forwarded_to_advisor", f"case:{case_id}", adapters.clock()
     )
     return True
+
+
+def available_advisor_ids(settings: Settings, adapters: Adapters) -> list[str]:
+    """R6: perfiles atendedores con presencia efectiva `available`, sin ids ajenos."""
+    repo = adapters.repository
+    now = adapters.clock()
+    available: list[str] = []
+    for profile in repo.list_profiles():
+        if profile.role not in ATTENDING_ADVISOR_ROLES:
+            continue
+        presence = repo.get_advisor_presence([profile.id]).get(profile.id)
+        status = effective_presence(
+            presence[0] if presence is not None else None,
+            presence[1] if presence is not None else None,
+            now,
+            settings.advisor_presence_ttl_minutes,
+        )
+        if status == "available":
+            available.append(profile.id)
+    return sorted(available)
+
+
+def _try_auto_assign(
+    contact: Contact, case_id: str, settings: Settings, adapters: Adapters
+) -> None:
+    """R6, R10, R12, R20: reparte por carga sin romper el flujo si handover falla."""
+    candidate_ids = available_advisor_ids(settings, adapters)
+    if not candidate_ids:
+        return
+    try:
+        response = adapters.handover.auto_assign(case_id, candidate_ids)
+    except Exception:
+        logger.error("auto_assign_failed contact_id=%s case_id=%s", contact.id, case_id)
+        adapters.repository.add_event(
+            contact.id, "auto_assign_failed", f"case:{case_id}", adapters.clock()
+        )
+        return
+    if response.status == "assigned" and response.advisor_id is not None:
+        logger.info("auto_assigned contact_id=%s case_id=%s", contact.id, case_id)
+        adapters.repository.add_event(
+            contact.id,
+            "auto_assigned",
+            f"case:{case_id} advisor:{response.advisor_id} reason:auto",
+            adapters.clock(),
+        )
 
 
 def _handover(
@@ -1531,9 +1637,11 @@ def _handover(
     adapters: Adapters,
     auto: bool = False,
     ack: bool = True,
+    allow_auto_assign: bool = True,
 ) -> bool:
-    """True si handover respondió (`notified` o `no_advisors`); False si no estaba disponible."""
+    """True si handover respondió (`queued` o `no_advisors`); False si no estaba disponible."""
     repo = adapters.repository
+    ensure_roster_ready(adapters)
     repo.add_event(contact.id, "handover", reason, adapters.clock())
     request = HandoverRequest(
         case_id=adapters.new_id(),
@@ -1559,10 +1667,20 @@ def _handover(
         _send(contact, settings.no_advisors_reply, adapters)
         return True
     apply_conversation_event(contact.id, ConversationEvent.ESCALATED, adapters)
+    operational = operational_settings(settings, adapters)
+    now = adapters.clock()
+    if (
+        allow_auto_assign
+        and operational.assignment_mode == "automatica"
+        and not (
+            operational.hours.enabled
+            and not within_business_hours(now, operational.hours)
+        )
+    ):
+        _try_auto_assign(contact, response.case_id, settings, adapters)
     if ack and (reason == "user_request" or auto):
         texts = conversation_texts(settings, adapters)
-        hours = operational_settings(settings, adapters).hours
-        now = adapters.clock()
+        hours = operational.hours
         if hours.enabled and not within_business_hours(now, hours):
             repo.add_event(contact.id, "out_of_hours", "queued", now)
             _send(
@@ -1793,7 +1911,13 @@ def _tool_escalate(
             raise
         repo.finish_auto_handover(contact.id, completed)
     else:
-        completed = _handover(contact, "user_request", settings, adapters)
+        completed = _handover(
+            contact,
+            "user_request",
+            settings,
+            adapters,
+            allow_auto_assign=motive != "suppression",
+        )
     if completed:
         session = repo.get_active_session_by_contact(contact.id)
         if session is not None:
@@ -1833,7 +1957,12 @@ def _tool_suppression(
             contact.id, ConversationEvent.SUPPRESSION_REQUESTED, adapters
         )
     completed = _handover(
-        contact, "user_request", settings, adapters, ack=False
+        contact,
+        "user_request",
+        settings,
+        adapters,
+        ack=False,
+        allow_auto_assign=False,
     )
     if completed:
         case_id = repo.get_contact_last_case(contact.id)
@@ -2849,15 +2978,12 @@ def process_message(request: MessageRequest, settings: Settings, adapters: Adapt
 
     start_token = parse_start_token(request.text)
     db_query = None
-    command = None
     if start_token is None:
         db_query = parse_db_query_command(
             request.text, settings.db_query_max_question_length
         )
-        if db_query is None:
-            command = parse_advisor_command(request.text)
 
-    if start_token is not None or db_query is not None or command is not None:
+    if start_token is not None or db_query is not None:
         exempt = _is_linked_staff(request, adapters)
         if not exempt and start_token is not None:
             role = repo.get_link_token_role(hash_token(start_token), adapters.clock())
@@ -2869,10 +2995,8 @@ def process_message(request: MessageRequest, settings: Settings, adapters: Adapt
         )
         if start_token is not None:
             _handle_start_token(request, contact, start_token, settings, adapters)
-        elif db_query is not None:
-            handle_db_query(request, db_query, settings, adapters)
         else:
-            _handle_advisor_command(request, contact, command, settings, adapters)
+            handle_db_query(request, db_query, settings, adapters)
         return
 
     if not _legacy_consent_gate(request, settings, adapters):
@@ -2983,6 +3107,7 @@ def advisor_send_template(
     adapters: Adapters,
 ) -> None:
     """R17-R20, R23, R34, R72: plantilla efectiva aprobada para WhatsApp."""
+    ensure_roster_ready(adapters)
     if template not in effective_templates_for("advisor_reply", settings, adapters):
         raise PanelValidationError("La plantilla no está permitida.")
     try:
@@ -3033,6 +3158,7 @@ def reply_to_case(
     case_id: str, req: CaseReplyRequest, settings: Settings, adapters: Adapters
 ) -> CaseReplyResponse:
     """Autoriza con handover antes de enviar y pide marcar el caso assigned."""
+    ensure_roster_ready(adapters)
     try:
         adapters.handover.authorize(case_id, req.advisor_id, "reply")
     except AuthorizationDenied as exc:
@@ -3070,6 +3196,7 @@ def reply_to_case(
     except ServiceUnavailable:
         logger.error("assign_failed case_id=%s", case_id)
         repo.add_event(contact.id, "assign_failed", case_id, adapters.clock())
+    publish_case_event(case_id, "case_updated", adapters)
     return CaseReplyResponse(sent=True)
 
 
@@ -3090,14 +3217,16 @@ def assign_case(
     case_id: str, advisor_id: str, adapters: Adapters
 ) -> CaseAssignResponse:
     """Asigna con la regla de handover; un 403 deja el evento de denegación (R11, R15)."""
+    ensure_roster_ready(adapters)
     try:
-        return adapters.handover.try_assign(case_id, advisor_id)
+        result = adapters.handover.try_assign(case_id, advisor_id)
     except AuthorizationDenied as exc:
         _raise_authorization_error(exc, case_id, advisor_id, adapters)
     except ServiceUnavailable:
         logger.error("assign_failed case_id=%s", case_id)
         raise UpstreamError("No se pudo asignar el caso.") from None
-    raise UpstreamError("No se pudo asignar el caso.")
+    publish_case_event(case_id, "case_updated", adapters)
+    return result
 
 
 def _close_with_notice(
@@ -3109,6 +3238,7 @@ def _close_with_notice(
     adapters: Adapters,
 ) -> None:
     """R36-R39, R73: autoriza, cierra y avisa según la ventana del canal."""
+    ensure_roster_ready(adapters)
     try:
         adapters.handover.authorize(case_id, advisor_id, "close")
     except AuthorizationDenied as exc:
@@ -3124,6 +3254,7 @@ def _close_with_notice(
     except ServiceUnavailable:
         logger.error("close_failed case_id=%s", case_id)
         raise UpstreamError("No se pudo cerrar el caso.") from None
+    publish_case_event(case_id, "case_updated", adapters)
 
     case_contact = adapters.repository.get_case_contact(case_id)
     if case_contact is None:
@@ -3191,13 +3322,12 @@ def transfer_case(
     adapters: Adapters,
 ) -> None:
     """R32-R35, R54: valida el destino y transfiere solo si está disponible."""
+    ensure_roster_ready(adapters)
     target = adapters.repository.get_profile(target_profile_id)
     if (
         target is None
-        or target.role != "asesor"
-        or target.telegram_user_id is None
+        or target.role not in ATTENDING_ADVISOR_ROLES
         or target.id == actor.id
-        or actor.telegram_user_id is None
     ):
         raise PanelValidationError("El asesor destino no es válido.")
     presence = adapters.repository.get_advisor_presence([target.id])
@@ -3210,8 +3340,8 @@ def transfer_case(
     )
     if status == "away":
         raise AdvisorUnavailable("El asesor destino no está disponible.")
-    advisor_id = str(actor.telegram_user_id)
-    target_advisor_id = str(target.telegram_user_id)
+    advisor_id = str(actor.id)
+    target_advisor_id = str(target.id)
     try:
         adapters.handover.transfer(case_id, advisor_id, target_advisor_id)
     except AuthorizationDenied as exc:
@@ -3223,6 +3353,7 @@ def transfer_case(
     except ServiceUnavailable:
         logger.error("transfer_failed case_id=%s", case_id)
         raise UpstreamError("No se pudo transferir el caso.") from None
+    publish_case_event(case_id, "case_updated", adapters)
     contact = adapters.repository.get_case_contact(case_id)
     if contact is not None:
         adapters.repository.add_event(
@@ -3231,6 +3362,49 @@ def transfer_case(
             f"case:{case_id} from:{advisor_id} to:{target_advisor_id}",
             adapters.clock(),
         )
+
+
+def reassign_case(
+    case_id: str,
+    actor: Profile,
+    target_profile_id: str,
+    settings: Settings,
+    adapters: Adapters,
+) -> CaseReassignResponse:
+    """R11, R14, R16: el supervisor reasigna; handover decide con escritura condicional."""
+    if actor.role != "supervisor":
+        raise AdvisorForbidden("No tienes permiso para reasignar casos.")
+    ensure_roster_ready(adapters)
+    target = adapters.repository.get_profile(target_profile_id)
+    if target is None or target.role not in ATTENDING_ADVISOR_ROLES:
+        raise PanelValidationError("El asesor destino no es válido.")
+    presence = adapters.repository.get_advisor_presence([target.id])
+    stored = presence.get(target.id)
+    status = effective_presence(
+        stored[0] if stored is not None else None,
+        stored[1] if stored is not None else None,
+        adapters.clock(),
+        settings.advisor_presence_ttl_minutes,
+    )
+    if status == "away":
+        raise AdvisorUnavailable("El asesor destino no está disponible.")
+    advisor_id = str(actor.id)
+    target_advisor_id = str(target.id)
+    try:
+        result = adapters.handover.reassign(case_id, advisor_id, target_advisor_id)
+    except AuthorizationDenied as exc:
+        if exc.code == "validation_error":
+            raise PanelValidationError("El asesor destino no es válido.") from None
+        if exc.code == "case_changed":
+            raise CaseChanged("El caso cambió mientras se reasignaba.") from None
+        if exc.code == "case_not_assigned":
+            raise CaseNotAssigned("El caso no está asignado.") from None
+        _raise_authorization_error(exc, case_id, advisor_id, adapters)
+    except ServiceUnavailable:
+        logger.error("reassign_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo reasignar el caso.") from None
+    publish_case_event(case_id, "case_updated", adapters)
+    return result
 
 
 INBOX_CHANNELS = ("telegram", "whatsapp")
@@ -3243,27 +3417,65 @@ def advisor_inbox(
     assignment: str | None,
     settings: Settings,
     adapters: Adapters,
+    scope: str = "mine",
+    tag: str | None = None,
 ) -> list[InboxRow]:
-    """R1-R10: bandeja de los casos gestionables por el asesor."""
+    """R1-R10, R8, R26, R27: bandeja propia o vista global del supervisor."""
+    ensure_roster_ready(adapters)
     if channel is not None and channel not in INBOX_CHANNELS:
         raise PanelValidationError("El filtro de canal no es válido.")
     if assignment is not None and assignment not in INBOX_ASSIGNMENTS:
         raise PanelValidationError("El filtro de asignación no es válido.")
+    if tag is not None:
+        if not tag or len(tag) > MAX_IDENTIFIER_LENGTH:
+            raise PanelValidationError("El filtro de etiqueta no es válido.")
+        selected_tag = adapters.repository.get_case_tag(tag)
+        if selected_tag is None or not selected_tag.active:
+            raise PanelValidationError("El filtro de etiqueta no es válido.")
     try:
-        listed = adapters.handover.list_cases(advisor_id)
+        listed = adapters.handover.list_cases(advisor_id, scope)
     except ServiceUnavailable:
         logger.error("inbox_handover_unavailable")
         raise UpstreamError("El servicio de casos no está disponible.") from None
 
     repo = adapters.repository
     now = adapters.clock()
+    case_ids = [item.case_id for item in listed.root]
+    tag_map = repo.case_tag_map(case_ids)
+    all_tags = repo.list_case_tags()
+    active_names = {
+        tag_item.id: tag_item.name for tag_item in all_tags if tag_item.active
+    }
     rows: list[InboxRow] = []
     for item in listed.root:
-        is_mine = item.status == "assigned"
+        assigned_tag_ids = tag_map.get(item.case_id, ())
+        if tag is not None and tag not in assigned_tag_ids:
+            continue
+        row_tags = tuple(
+            sorted(
+                active_names[tag_id]
+                for tag_id in assigned_tag_ids
+                if tag_id in active_names
+            )
+        )
+        if scope == "all":
+            is_mine = item.advisor_id == advisor_id
+            is_unassigned = item.advisor_id is None
+        else:
+            is_mine = item.status == "assigned"
+            is_unassigned = not is_mine
         if assignment == "mias" and not is_mine:
             continue
-        if assignment == "sin_asignar" and is_mine:
+        if assignment == "sin_asignar" and not is_unassigned:
             continue
+        assigned_advisor = None
+        if item.advisor_id is not None:
+            assigned_profile = repo.get_profile(item.advisor_id)
+            assigned_advisor = (
+                assigned_profile.username
+                if assigned_profile is not None
+                else item.advisor_id
+            )
         link = repo.get_case_link(item.case_id)
         if link is None:
             row_channel = "desconocido"
@@ -3281,6 +3493,8 @@ def advisor_inbox(
                     wait=None,
                     window=None,
                     client_name=None,
+                    assigned_advisor=assigned_advisor,
+                    tags=row_tags,
                 )
             )
             continue
@@ -3311,19 +3525,35 @@ def advisor_inbox(
                     settings.whatsapp_window_hours,
                 ),
                 client_name=client_name,
+                assigned_advisor=assigned_advisor,
+                tags=row_tags,
             )
         )
     rows.sort(key=lambda row: (row.created_at, row.case_id))
     return rows
 
 
+def advisor_all_cases(
+    actor: Profile,
+    channel: str | None,
+    assignment: str | None,
+    settings: Settings,
+    adapters: Adapters,
+    tag: str | None = None,
+) -> list[InboxRow]:
+    """R8, R25, R26: vista global solo para un supervisor; el rol se comprueba aquí."""
+    if actor.role != "supervisor":
+        raise AdvisorForbidden("No tienes permiso para ver todos los casos.")
+    return advisor_inbox(
+        str(actor.id), channel, assignment, settings, adapters, scope="all", tag=tag
+    )
+
+
 def _status_actions(
     case_id: str, actor: Profile, adapters: Adapters
 ) -> tuple[str, ...]:
-    if actor.telegram_user_id is None:
-        return ("reply", "close", "return")
     try:
-        listed = adapters.handover.list_cases(str(actor.telegram_user_id))
+        listed = adapters.handover.list_cases(str(actor.id))
     except ServiceUnavailable:
         return ("reply", "close", "return")
     item = next((row for row in listed.root if row.case_id == case_id), None)
@@ -3337,18 +3567,11 @@ def _status_actions(
     return tuple(dict.fromkeys(actions))
 
 
-def advisor_case_view(
-    case_id: str, actor: Profile, settings: Settings, adapters: Adapters
-) -> CaseView:
-    """R40-R49: vista autorizada del caso, historial, memoria y datos permitidos."""
-    memory = advisor_client_memory(
-        case_id, str(actor.telegram_user_id or ""), settings, adapters
-    )
+def _case_history(
+    contact: Contact, link, settings: Settings, adapters: Adapters
+) -> tuple[HistoryItem, ...]:
+    """R42-R44: historial visible del caso desde el lookback configurado."""
     repo = adapters.repository
-    contact = repo.get_case_contact(case_id)
-    if contact is None:
-        raise CaseNotFound("El caso no existe.")
-    link = repo.get_case_link(case_id)
     now = adapters.clock()
     since = (
         link.created_at - timedelta(minutes=settings.advisor_history_lookback_minutes)
@@ -3360,13 +3583,35 @@ def advisor_case_view(
     foreign = repo.foreign_session_windows(
         contact.id, profile_id, policy.session_idle_minutes, now
     )
-    history = tuple(
+    return tuple(
         HistoryItem(role=role, text=text, at=at)
         for role, text, at in repo.case_messages(
             contact.id, since, settings.advisor_history_max_messages
         )
         if history_visible(at, foreign)
     )
+
+
+def advisor_case_view(
+    case_id: str,
+    actor: Profile,
+    settings: Settings,
+    adapters: Adapters,
+    reply_id: str | None = None,
+) -> CaseView:
+    """R40-R49: vista autorizada del caso, historial, memoria y datos permitidos."""
+    ensure_roster_ready(adapters)
+    memory = advisor_client_memory(
+        case_id, str(actor.id), settings, adapters
+    )
+    repo = adapters.repository
+    contact = repo.get_case_contact(case_id)
+    if contact is None:
+        raise CaseNotFound("El caso no existe.")
+    link = repo.get_case_link(case_id)
+    now = adapters.clock()
+    profile_id = link.profile_id if link is not None else None
+    history = _case_history(contact, link, settings, adapters)
     decision = repo.last_privacy_decision(
         contact.channel, contact.external_user_id
     )
@@ -3405,13 +3650,46 @@ def advisor_case_view(
     window = channel_window(
         contact.channel, last_user, now, settings.whatsapp_window_hours
     )
+    saved_replies: tuple[SavedReply, ...] = ()
+    selected_reply = None
+    reply_notice = False
+    if window != "closed":
+        saved_replies = tuple(list_saved_replies(adapters, only_active=True))
+        if reply_id is not None:
+            candidate = adapters.repository.get_saved_reply(reply_id)
+            if candidate is not None and candidate.active:
+                selected_reply = candidate
+            else:
+                reply_notice = True
+    targets = _attending_targets(actor, settings, adapters)
+    notes, tags, assignable_tags = _case_annotations(case_id, adapters)
+    return CaseView(
+        case_id=case_id,
+        status_actions=_status_actions(case_id, actor, adapters),
+        history=history,
+        client=client,
+        memory=memory,
+        window=window,
+        templates=effective_templates_for("advisor_reply", settings, adapters),
+        transfer_targets=tuple(targets),
+        notes=notes,
+        tags=tags,
+        assignable_tags=assignable_tags,
+        saved_replies=saved_replies,
+        selected_reply=selected_reply,
+        reply_notice=reply_notice,
+    )
+
+
+def _attending_targets(
+    actor: Profile, settings: Settings, adapters: Adapters
+) -> tuple[tuple[str, str, str], ...]:
+    """Perfiles atendedores distintos del actor, con su presencia efectiva."""
+    repo = adapters.repository
+    now = adapters.clock()
     targets: list[tuple[str, str, str]] = []
     for profile in repo.list_profiles():
-        if (
-            profile.role != "asesor"
-            or profile.telegram_user_id is None
-            or profile.id == actor.id
-        ):
+        if profile.role not in ATTENDING_ADVISOR_ROLES or profile.id == actor.id:
             continue
         presence = repo.get_advisor_presence([profile.id]).get(profile.id)
         targets.append(
@@ -3426,16 +3704,17 @@ def advisor_case_view(
                 ),
             )
         )
-    return CaseView(
-        case_id=case_id,
-        status_actions=_status_actions(case_id, actor, adapters),
-        history=history,
-        client=client,
-        memory=memory,
-        window=window,
-        templates=effective_templates_for("advisor_reply", settings, adapters),
-        transfer_targets=tuple(targets),
-    )
+    return tuple(targets)
+
+
+def advisor_reassign_targets(
+    actor: Profile, settings: Settings, adapters: Adapters
+) -> tuple[tuple[str, str, str], ...]:
+    """R14: destinos válidos para que el supervisor reasigne un caso."""
+    if actor.role != "supervisor":
+        raise AdvisorForbidden("No tienes permiso para reasignar casos.")
+    ensure_roster_ready(adapters)
+    return _attending_targets(actor, settings, adapters)
 
 
 def record_panel_audit(
@@ -3576,6 +3855,7 @@ def advisor_client_memory(
     case_id: str, advisor_id: str, settings: Settings, adapters: Adapters
 ) -> ClientMemoryView:
     """R27–R34, R55, R56: autoriza el caso antes de leer memoria y resúmenes."""
+    ensure_roster_ready(adapters)
     try:
         adapters.handover.authorize(case_id, advisor_id, "reply")
     except AuthorizationDenied as exc:
@@ -3621,6 +3901,233 @@ def advisor_client_memory(
         memory_updated_at=updated_at,
         summaries=summaries,
     )
+
+
+def advisor_case_history(
+    case_id: str, actor: Profile, settings: Settings, adapters: Adapters
+) -> tuple[HistoryItem, ...]:
+    """R24, R25: historial para el fragmento en vivo, sin auditoría adicional."""
+    ensure_roster_ready(adapters)
+    advisor_id = str(actor.id)
+    try:
+        adapters.handover.authorize(case_id, advisor_id, "reply")
+    except AuthorizationDenied as exc:
+        _raise_authorization_error(exc, case_id, advisor_id, adapters)
+    except ServiceUnavailable:
+        logger.error("authorize_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo autorizar la consulta del caso.") from None
+    repo = adapters.repository
+    contact = repo.get_case_contact(case_id)
+    if contact is None:
+        raise CaseNotFound("El caso no existe.")
+    return _case_history(contact, repo.get_case_link(case_id), settings, adapters)
+
+
+def visible_case_ids(
+    actor: Profile, scope: str, adapters: Adapters
+) -> frozenset[str]:
+    """R11: exactamente los casos que la bandeja del perfil mostraría."""
+    listed = adapters.handover.list_cases(str(actor.id), scope)
+    return frozenset(item.case_id for item in listed.root)
+
+
+def _authorize_case_annotation(
+    case_id: str, actor: Profile, adapters: Adapters
+) -> Contact:
+    """R3, R4, R24: misma barrera de autorización que la vista del caso."""
+    ensure_roster_ready(adapters)
+    advisor_id = str(actor.id)
+    try:
+        adapters.handover.authorize(case_id, advisor_id, "reply")
+    except AuthorizationDenied as exc:
+        _raise_authorization_error(exc, case_id, advisor_id, adapters)
+    except ServiceUnavailable:
+        logger.error("authorize_failed case_id=%s", case_id)
+        raise UpstreamError("No se pudo autorizar la operación sobre el caso.") from None
+    contact = adapters.repository.get_case_contact(case_id)
+    if contact is None:
+        raise CaseNotFound("El caso no existe.")
+    return contact
+
+
+def add_case_note(
+    case_id: str, actor: Profile, text: str, settings: Settings, adapters: Adapters
+) -> CaseNote:
+    """R1, R5, R6, R11, R13: guarda la nota sin tocar canal, historial ni eventos."""
+    contact = _authorize_case_annotation(case_id, actor, adapters)
+    body = validate_note_text(text, settings.case_note_max_chars)
+    repo = adapters.repository
+    if repo.count_case_notes(case_id) >= settings.case_notes_max_per_case:
+        raise PanelValidationError("El caso alcanzó el máximo de notas internas.")
+    note = CaseNote(
+        id=adapters.new_id(),
+        case_id=case_id,
+        author_profile_id=str(actor.id),
+        author_username=actor.username,
+        body=body,
+        created_at=adapters.clock(),
+    )
+    repo.add_case_note(note, contact.id)
+    return note
+
+
+def delete_case_note(
+    case_id: str,
+    note_id: str,
+    actor: Profile,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """R7, R8, R9: solo el autor borra una nota del caso indicado."""
+    _authorize_case_annotation(case_id, actor, adapters)
+    repo = adapters.repository
+    note = repo.get_case_note(note_id)
+    if note is None or note.case_id != case_id:
+        raise NoteNotFound("La nota no existe.")
+    if note.author_profile_id != str(actor.id):
+        raise AdvisorForbidden("Solo el autor puede borrar la nota.")
+    repo.delete_case_note(note_id)
+
+
+def create_case_tag(name: str, settings: Settings, adapters: Adapters) -> CaseTag:
+    """R14, R17, R18: crea una etiqueta activa con nombre único sin distinguir mayúsculas."""
+    clean = validate_tag_name(name, settings.case_tag_name_max_chars)
+    tag = CaseTag(id=adapters.new_id(), name=clean, active=True)
+    if not adapters.repository.create_case_tag(
+        tag, normalize_tag_key(clean), adapters.clock()
+    ):
+        raise TagNameTaken("Ya existe una etiqueta con ese nombre.")
+    return tag
+
+
+def rename_case_tag(
+    tag_id: str, name: str, settings: Settings, adapters: Adapters
+) -> None:
+    """R15, R17, R18: renombra conservando id y asignaciones."""
+    clean = validate_tag_name(name, settings.case_tag_name_max_chars)
+    repo = adapters.repository
+    if repo.get_case_tag(tag_id) is None:
+        raise TagNotFound("La etiqueta no existe.")
+    if not repo.rename_case_tag(
+        tag_id, clean, normalize_tag_key(clean), adapters.clock()
+    ):
+        raise TagNameTaken("Ya existe una etiqueta con ese nombre.")
+
+
+def set_case_tag_active(tag_id: str, active: bool, adapters: Adapters) -> None:
+    """R16: activa o desactiva sin borrar las asignaciones."""
+    if not adapters.repository.set_case_tag_active(tag_id, active, adapters.clock()):
+        raise TagNotFound("La etiqueta no existe.")
+
+
+def list_case_tags(
+    adapters: Adapters, *, only_active: bool = False
+) -> list[CaseTag]:
+    return adapters.repository.list_case_tags(only_active=only_active)
+
+
+def create_saved_reply(
+    title: str, body: str, settings: Settings, adapters: Adapters
+) -> SavedReply:
+    """R1, R4, R8, R9, R10: crea una respuesta guardada activa con validación."""
+    clean_title = validate_saved_reply_title(
+        title, settings.saved_reply_title_max_chars
+    )
+    clean_body = validate_saved_reply_text(body, settings.saved_reply_text_max_chars)
+    repo = adapters.repository
+    if repo.count_saved_replies() >= settings.saved_replies_max:
+        raise PanelValidationError(
+            "Se alcanzó el máximo de respuestas guardadas."
+        )
+    reply = SavedReply(
+        id=adapters.new_id(),
+        title=clean_title,
+        body=clean_body,
+        active=True,
+        updated_at=adapters.clock(),
+    )
+    repo.add_saved_reply(reply)
+    return reply
+
+
+def update_saved_reply(
+    reply_id: str,
+    title: str,
+    body: str,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """R2, R4, R8, R9, R11: actualiza título y texto de una respuesta existente."""
+    repo = adapters.repository
+    if repo.get_saved_reply(reply_id) is None:
+        raise SavedReplyNotFound("La respuesta guardada no existe.")
+    clean_title = validate_saved_reply_title(
+        title, settings.saved_reply_title_max_chars
+    )
+    clean_body = validate_saved_reply_text(body, settings.saved_reply_text_max_chars)
+    repo.update_saved_reply(reply_id, clean_title, clean_body, adapters.clock())
+
+
+def set_saved_reply_active(
+    reply_id: str, active: bool, adapters: Adapters
+) -> None:
+    """R3, R4, R11: activa o desactiva sin borrar la respuesta."""
+    if not adapters.repository.set_saved_reply_active(
+        reply_id, active, adapters.clock()
+    ):
+        raise SavedReplyNotFound("La respuesta guardada no existe.")
+
+
+def list_saved_replies(
+    adapters: Adapters, *, only_active: bool = False
+) -> list[SavedReply]:
+    return adapters.repository.list_saved_replies(only_active=only_active)
+
+
+def assign_case_tag(
+    case_id: str,
+    tag_id: str,
+    actor: Profile,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """R20, R22, R23, R24: asigna una etiqueta activa de forma idempotente."""
+    contact = _authorize_case_annotation(case_id, actor, adapters)
+    repo = adapters.repository
+    tag = repo.get_case_tag(tag_id)
+    if tag is None or not tag.active:
+        raise PanelValidationError("La etiqueta no existe o está desactivada.")
+    assigned = repo.case_tag_map([case_id]).get(case_id, ())
+    if tag_id in assigned:
+        return
+    if repo.count_case_tags(case_id) >= settings.case_tags_max_per_case:
+        raise PanelValidationError("El caso alcanzó el máximo de etiquetas.")
+    repo.add_case_tag(
+        case_id, tag_id, contact.id, str(actor.id), adapters.clock()
+    )
+
+
+def remove_case_tag(
+    case_id: str, tag_id: str, actor: Profile, settings: Settings, adapters: Adapters
+) -> None:
+    """R21, R24: quita la etiqueta aunque esté desactivada."""
+    _authorize_case_annotation(case_id, actor, adapters)
+    adapters.repository.remove_case_tag(case_id, tag_id)
+
+
+def _case_annotations(
+    case_id: str, adapters: Adapters
+) -> tuple[tuple[CaseNote, ...], tuple[CaseTag, ...], tuple[CaseTag, ...]]:
+    """R2, R25: notas y etiquetas del caso con las asignables activas."""
+    repo = adapters.repository
+    notes = tuple(repo.list_case_notes(case_id))
+    all_tags = repo.list_case_tags()
+    assigned_ids = set(repo.case_tag_map([case_id]).get(case_id, ()))
+    tags = tuple(tag for tag in all_tags if tag.id in assigned_ids)
+    assignable = tuple(
+        tag for tag in all_tags if tag.active and tag.id not in assigned_ids
+    )
+    return notes, tags, assignable
 
 
 def execute_suppression(
@@ -3697,15 +4204,47 @@ def _fake_scrypt_hash(settings: Settings) -> str:
     return cached
 
 
+def _verify_second_factor(
+    profile: Profile,
+    code: str,
+    settings: Settings,
+    adapters: Adapters,
+    now: datetime,
+) -> None:
+    """R10–R20: valida el código activo o lanza el error de dominio correspondiente."""
+    record = adapters.repository.get_two_factor(profile.id)
+    if record is None or record.enabled_at is None:
+        return
+    secret = decrypt_secret(record.secret_ciphertext, settings.panel_2fa_encryption_key)
+    candidate = code.strip()
+    if not candidate:
+        raise TwoFactorCodeRequired("Introduce tu código de verificación.")
+    if looks_like_recovery_code(candidate):
+        consumed = adapters.repository.consume_recovery_code(
+            profile.id, hash_recovery_code(candidate), now
+        )
+        if not consumed:
+            raise TwoFactorCodeInvalid("Código de verificación incorrecto.")
+        record_panel_audit(profile, "two_factor_recovery_used", "ok", adapters)
+        return
+    step = verify_totp(secret, candidate, now, settings.panel_2fa_window_steps)
+    if step is None or not adapters.repository.advance_two_factor_step(
+        profile.id, step
+    ):
+        raise TwoFactorCodeInvalid("Código de verificación incorrecto.")
+
+
 def authenticate_profile(
     username: str,
     password: str,
     client_ip: str,
-    role: str,
+    role: str | tuple[str, ...],
     settings: Settings,
     adapters: Adapters,
+    code: str = "",
 ) -> str | None:
     """Devuelve el token de sesión o None. LoginThrottled si R11 aplica."""
+    allowed_roles = {role} if isinstance(role, str) else set(role)
     repo = adapters.repository
     normalized = username.strip().lower()
     now = adapters.clock()
@@ -3725,17 +4264,28 @@ def authenticate_profile(
 
     profile, stored_hash = credentials
     password_ok = verify_password(password, stored_hash)
-    if not password_ok or profile.role != role:
+    if not password_ok or profile.role not in allowed_roles:
         repo.record_login_failure(normalized, client_ip, now, since)
         return None
 
+    try:
+        _verify_second_factor(profile, code, settings, adapters, now)
+    except TwoFactorCodeInvalid:
+        repo.record_login_failure(normalized, client_ip, now, since)
+        raise
+
     repo.clear_login_failures(normalized)
+    record = repo.get_two_factor(profile.id)
+    enroll_only = settings.panel_2fa_required_effective and (
+        record is None or record.enabled_at is None
+    )
     token = new_session_token()
     repo.create_session(
         hash_token(token),
         profile.id,
         new_session_token(),
         now + timedelta(minutes=settings.admin_session_ttl_minutes),
+        enroll_only=enroll_only,
     )
     return token
 
@@ -3746,20 +4296,95 @@ def authenticate_admin(
     client_ip: str,
     settings: Settings,
     adapters: Adapters,
+    code: str = "",
 ) -> str | None:
     """Login del panel admin: rol `admin` y el mismo comportamiento de #21."""
     return authenticate_profile(
-        username, password, client_ip, "admin", settings, adapters
+        username, password, client_ip, "admin", settings, adapters, code
+    )
+
+
+def begin_two_factor_enrollment(
+    profile: Profile, settings: Settings, adapters: Adapters
+) -> TwoFactorEnrollment:
+    """R5, R8: genera un secreto pendiente y devuelve base32 y URI una sola vez."""
+    repo = adapters.repository
+    existing = repo.get_two_factor(profile.id)
+    if existing is not None and existing.enabled_at is not None:
+        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
+    secret = generate_secret()
+    ciphertext = encrypt_secret(secret, settings.panel_2fa_encryption_key)
+    if not repo.save_pending_two_factor(profile.id, ciphertext, adapters.clock()):
+        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
+    return TwoFactorEnrollment(
+        secret_base32=secret_base32(secret),
+        provisioning_uri=provisioning_uri(
+            secret, profile.username, settings.panel_2fa_issuer
+        ),
+    )
+
+
+def confirm_two_factor_enrollment(
+    profile: Profile,
+    code: str,
+    settings: Settings,
+    adapters: Adapters,
+    session_token_hash: str,
+) -> list[str]:
+    """R6, R7, R20, R25, R31: activa, guarda los códigos y cierra otras sesiones."""
+    repo = adapters.repository
+    record = repo.get_two_factor(profile.id)
+    if record is None:
+        raise TwoFactorNotEnabled("El segundo factor no está pendiente.")
+    if record.enabled_at is not None:
+        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
+    secret = decrypt_secret(record.secret_ciphertext, settings.panel_2fa_encryption_key)
+    step = verify_totp(
+        secret, code.strip(), adapters.clock(), settings.panel_2fa_window_steps
+    )
+    if step is None:
+        raise TwoFactorCodeInvalid("Código de verificación incorrecto.")
+    codes = generate_recovery_codes(settings.panel_2fa_recovery_codes)
+    hashes = [hash_recovery_code(code) for code in codes]
+    if not repo.activate_two_factor(profile.id, step, hashes, adapters.clock()):
+        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
+    repo.promote_session(session_token_hash)
+    repo.delete_sessions_for_profile(profile.id, keep_token_hash=session_token_hash)
+    record_panel_audit(profile, "two_factor_enrolled", "ok", adapters)
+    return codes
+
+
+def reset_two_factor(
+    actor: Profile, target_id: str, adapters: Adapters
+) -> None:
+    """R35–R38: un administrador restablece el segundo factor de otro perfil."""
+    repo = adapters.repository
+    if actor.id == target_id:
+        raise PanelBadRequest("No puedes restablecer tu propio segundo factor.")
+    target = repo.get_profile(target_id)
+    if target is None:
+        raise ProfileNotFound("El perfil no existe.")
+    record = repo.get_two_factor(target_id)
+    if record is None or record.enabled_at is None:
+        raise TwoFactorNotEnabled("El segundo factor no está activo.")
+    repo.delete_two_factor(target_id)
+    repo.delete_sessions_for_profile(target_id)
+    record_panel_audit(
+        actor, "two_factor_reset", "ok", adapters, target=target_id
     )
 
 
 def change_role(profile_id: str, role: str, adapters: Adapters) -> Profile:
     repo = adapters.repository
+    if role not in ROLES:
+        raise PanelValidationError("El rol no es válido.")
     current = repo.get_profile(profile_id)
     if current is None:
         raise ProfileNotFound("El perfil no existe.")
     if not repo.set_role(profile_id, role):
         raise LastAdmin("No se puede dejar el panel sin ningún administrador.")
+    repo.delete_sessions_for_profile(profile_id)
+    _mark_roster_changed(adapters)
     updated = repo.get_profile(profile_id)
     if updated is None:
         raise ProfileNotFound("El perfil no existe.")

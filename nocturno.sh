@@ -8,7 +8,6 @@
 #   --max-horas H      parar tras H horas (por defecto 10)
 #   --timeout-min M    máximo de minutos por sesión (por defecto 120)
 #   --modelo M         modelo de Claude leader, p. ej. sonnet u opus
-#   OPENCODE_WRITER_MODEL  modelo DeepSeek writer (por defecto deepseek/deepseek-flash)
 #   --sin-commits      no hacer un commit de git después de cada sesión
 #
 # Cada sesión lanza `claude -p` con las instrucciones de .claude/nocturno.md
@@ -32,6 +31,8 @@ if [ -z "${NOCTURNO_DESPIERTO:-}" ]; then
     exec caffeinate -ims "$0" "$@"
   elif command -v systemd-inhibit >/dev/null 2>&1 && systemd-inhibit --what=idle true >/dev/null 2>&1; then
     exec systemd-inhibit --what=idle:sleep --why="nocturno.sh trabajando" "$0" "$@"
+  else
+    echo "[nocturno] [WARN] No se detectó inhibidor de suspensión; mantén el equipo despierto durante la ejecución."
   fi
 fi
 
@@ -74,12 +75,19 @@ if ! command -v opencode >/dev/null 2>&1; then
   exit 1
 fi
 
+source .claude/hooks/opencode_writer.sh
+
 MODEL_FLAG=""
 [ -n "$MODELO" ] && MODEL_FLAG="--model $MODELO"
 
 TIMEOUT_CMD=""
-if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout $((TIMEOUT_MIN * 60))";
-elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout $((TIMEOUT_MIN * 60))"; fi
+if command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_CMD="gtimeout $((TIMEOUT_MIN * 60))"
+elif command -v timeout >/dev/null 2>&1 && timeout --version 2>&1 | grep -q "GNU coreutils"; then
+  TIMEOUT_CMD="timeout $((TIMEOUT_MIN * 60))"
+else
+  echo "[nocturno] [WARN] No se encontró GNU timeout; las sesiones no tendrán límite automático de duración."
+fi
 
 USE_GIT=0
 if [ "$COMMIT" = "1" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -114,8 +122,8 @@ PY
 
 snapshot() { $PY -c 'import json;print(json.dumps([(f["id"],f["status"]) for f in json.load(open("feature_list.json",encoding="utf-8"))["features"]]))'; }
 
-if [ -n "$(next_feature)" ] && ! opencode auth list 2>&1 | grep -qi 'deepseek'; then
-  echo "[nocturno] Hay trabajo pendiente, pero DeepSeek no está conectado. Ejecuta /connect y configura el proveedor 'deepseek'." >&2
+if [ -n "$(next_feature)" ] && ! opencode_writer_authenticated; then
+  echo "[nocturno] Hay trabajo pendiente, pero OpenCode Go no está conectado. Ejecuta /connect, selecciona Other y configura el proveedor 'opencode-go'." >&2
   exit 1
 fi
 

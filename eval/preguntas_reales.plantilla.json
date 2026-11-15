@@ -1,0 +1,4 @@
+{
+  "_instrucciones": "Plantilla del conjunto real de preguntas. No añadir preguntas inventadas: copiar aquí preguntas reales de clientes, con datos personales anonimizados, y pasar el archivo con --preguntas. Cada pregunta necesita id, pregunta y tipo (responde o no_responde); las de tipo responde necesitan fragmento_esperado y, si se conoce, chunk_id_esperado.",
+  "preguntas": []
+}

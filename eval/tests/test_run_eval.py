@@ -91,7 +91,9 @@ class FakeSink:
 def test_r17_r25_r26_orquestador(tmp_path):
     client, calls = make_client(lambda r: httpx.Response(202, json={"status": "accepted"}))
     sink = FakeSink(["De 9 a 18", REFUSAL])
-    code = run(tmp_path, client, ["--modo", "orquestador", "--espera", "2"], sink=sink)
+    code = run(
+        tmp_path, client, ["--modo", "orquestador", "--sin-ataques", "--espera", "2"], sink=sink
+    )
     assert code == 0
     assert str(calls[0].url) == "http://svc/messages"
     assert calls[0].headers["X-Service-Token"] == TOKEN
@@ -105,7 +107,7 @@ def test_r17_r25_r26_orquestador(tmp_path):
 def test_r18_r28_sin_respuesta_continua(tmp_path):
     client, calls = make_client(lambda r: httpx.Response(202, json={}))
     sink = FakeSink([None, REFUSAL])
-    code = run(tmp_path, client, ["--modo", "orquestador"], sink=sink)
+    code = run(tmp_path, client, ["--modo", "orquestador", "--sin-ataques"], sink=sink)
     assert code == 0  # sin_respuesta no es error de red
     assert len(calls) == 2
     informe = (tmp_path / "resultados_2026-03-04.md").read_text(encoding="utf-8")

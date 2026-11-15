@@ -25,7 +25,10 @@ verificación y comunica el resultado al leader. El reviewer sigue siendo Claude
    Verifica repositorio, archivo, commit y licencia; adapta lo mínimo. Solo MIT
    o Apache 2.0, con aviso en `THIRD_PARTY_NOTICES.md`; nunca GPL/AGPL ni código
    sin licencia. Si no encaja, sigue con implementación propia.
-4. Invoca el escritor con `bash scripts/run_opencode_writer.sh <name>`. Para una
+4. Invoca el escritor con `bash scripts/run_opencode_writer.sh <name>`. Si la
+   ejecución puede superar el límite de Bash, lánzala en segundo plano y espera
+   su finalización consultando esa misma tarea; nunca inicies un segundo writer
+   mientras el primero siga activo. Para una
    revisión de código, añade `--context progress/review_<name>.md`. Para una
    corrección de pruebas, añade `--context progress/impl_<name>.md` después de
    registrar allí el error concreto de `init.sh`.

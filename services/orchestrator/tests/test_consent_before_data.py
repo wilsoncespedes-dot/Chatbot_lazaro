@@ -262,7 +262,7 @@ def _first_write(calls: list[str]) -> int | None:
     return None
 
 
-@pytest.mark.parametrize("route", ("consultar", "responder", "start"))
+@pytest.mark.parametrize("route", ("consultar", "start"))
 def test_staff_reads_happen_before_any_write(env_factory, route):
     """R1, R3: el perfil (y el rol del token) se leen antes de toda escritura."""
     env = env_factory()
@@ -329,9 +329,6 @@ def test_non_positive_sender_is_never_staff(env_factory):
 
 STAFF_COMMANDS = (
     ("db_query", "/consultar cuántos pedidos hay"),
-    ("reply", "/responder case-1 hola"),
-    ("close", "/cerrar case-1"),
-    ("malformed", "/responder"),
 )
 
 
@@ -366,10 +363,8 @@ def test_linked_staff_commands_skip_privacy_gate(
     )
     if name == "db_query":
         assert len(env.repo.db_query_audits) == 1
-    elif name in ("reply", "close"):
-        assert len(env.handover.authorized) == 1
     else:
-        assert env.gateway.sent[-1] == (111, env.settings.advisor_command_help)
+        assert env.repo.db_query_audits == []
 
 
 @pytest.mark.parametrize("role", ("asesor", "admin"))
@@ -466,7 +461,6 @@ def test_consented_non_staff_keeps_existing_authorization(env):
     assert audit.status == "forbidden"
     assert env.gateway.sent[-1] == (CHAT_ID, env.settings.db_query_forbidden_reply)
 
-    env.handover.authorized_advisors = set()
     env.post(
         text="/responder case-1 hola",
         update_id=2,
@@ -474,11 +468,10 @@ def test_consented_non_staff_keeps_existing_authorization(env):
         chat=CHAT_ID,
         consent=False,
     )
-    assert env.gateway.sent[-1] == (
-        CHAT_ID,
-        env.settings.advisor_command_forbidden_reply,
-    )
-    assert any(event.type == "advisor_forbidden" for event in env.repo.events)
+    assert env.handover.authorized == []
+    assert env.handover.closed == []
+    assert not any(event.type == "advisor_forbidden" for event in env.repo.events)
+    assert env.gateway.sent[-1] == (CHAT_ID, "Respuesta final")
 
     env.post(
         text="/responder",
@@ -487,7 +480,8 @@ def test_consented_non_staff_keeps_existing_authorization(env):
         chat=CHAT_ID,
         consent=False,
     )
-    assert env.gateway.sent[-1] == (CHAT_ID, env.settings.advisor_command_help)
+    assert env.handover.authorized == []
+    assert env.gateway.sent[-1] == (CHAT_ID, "Respuesta final")
 
 
 def test_consented_client_free_text_unchanged(env):
