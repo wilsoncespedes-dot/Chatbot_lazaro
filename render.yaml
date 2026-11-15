@@ -128,17 +128,17 @@ services:
       - key: PANEL_2FA_RECOVERY_CODES
         value: "8"
       - key: PRIVACY_NOTICE_TEXT
-        sync: false
+        value: "Lázaro Software es responsable de tus datos personales. Los usamos para atender tu consulta y, si lo necesitas, pasarte con un asesor. Conservamos tus mensajes 30 días y, hasta que pidas su supresión, la memoria de temas pendientes y acuerdos. Puedes pedir esa supresión o ejercer tus derechos por este mismo chat. Para continuar, responde ACEPTO."
       - key: PRIVACY_NOTICE_VERSION
-        sync: false
+        value: "1.0"
       - key: PRIVACY_ACCEPT_PHRASE
-        sync: false
+        value: "ACEPTO"
       - key: PRIVACY_REJECT_PHRASE
-        sync: false
+        value: "NO ACEPTO"
       - key: PRIVACY_TEXT_CONSENT_INSTRUCTION
         value: "Para aceptar, escribe exactamente: {accept}. Si no aceptas, escribe exactamente: {reject}."
       - key: PRIVACY_ACCEPTED_REPLY
-        sync: false
+        value: "Gracias, registramos tu aceptación. ¿En qué te ayudo?"
       - key: PRIVACY_RETENTION_DAYS
         fromService:
           type: pserv
@@ -154,9 +154,9 @@ services:
         value: "false"
       - key: CLIENT_DATA_ENABLED
         value: "false"
-      # memoria por cliente (#40): apagada hasta la validación legal
+      # memoria por cliente (#40, #57): activada por decisión del dueño (2026-11-14)
       - key: MEMORY_ENABLED
-        value: "false"
+        value: "true"
       # panel de asesores multicanal (#41)
       - key: WHATSAPP_WINDOW_HOURS
         value: "24"
@@ -260,9 +260,9 @@ services:
           name: telegram-gateway
           property: hostport
       - key: PRIVACY_RETENTION_DAYS
-        sync: false
+        value: "30"
       - key: PRIVACY_ACTIVE_CASE_MAX_DAYS
-        sync: false
+        value: "15"
 
   - type: worker
     name: timeouts-worker

@@ -23,7 +23,14 @@ MECHANISM_KEYS = (
     "PRIVACY_PURGE_INTERVAL_SECONDS",
     "PRIVACY_PURGE_HTTP_TIMEOUT_SECONDS",
 )
-OWNER_KEYS = NOTICE_KEYS + ("PRIVACY_RETENTION_DAYS", "PRIVACY_ACTIVE_CASE_MAX_DAYS")
+APPROVED = {
+    "PRIVACY_NOTICE_VERSION": "1.0",
+    "PRIVACY_ACCEPT_PHRASE": "ACEPTO",
+    "PRIVACY_REJECT_PHRASE": "NO ACEPTO",
+    "PRIVACY_RETENTION_DAYS": "30",
+    "PRIVACY_ACTIVE_CASE_MAX_DAYS": "15",
+    "MEMORY_ENABLED": "true",
+}
 
 
 def _blueprint() -> dict:
@@ -160,22 +167,28 @@ def test_r9_retention_worker_has_minimum_privileges():
             assert var["key"] in allowed, var
 
 
-def test_r10_orchestrator_requests_notice_values_from_panel():
-    """R10: el orchestrator pide las cuatro variables del aviso con sync: false."""
+def test_r10_orchestrator_uses_the_approved_notice_values():
+    """R10: el orchestrator lleva versionados los valores aprobados del aviso."""
     orchestrator = _service("orchestrator")
     for key in NOTICE_KEYS:
         var = _env_var(orchestrator, key)
-        assert var.get("sync") is False, var
-        assert "value" not in var, var
+        assert "value" in var, var
+        assert "sync" not in var, var
+    assert _env_var(orchestrator, "PRIVACY_NOTICE_VERSION")["value"] == "1.0"
+    assert _env_var(orchestrator, "PRIVACY_ACCEPT_PHRASE")["value"] == "ACEPTO"
+    assert _env_var(orchestrator, "PRIVACY_REJECT_PHRASE")["value"] == "NO ACEPTO"
 
 
-def test_r11_handover_requests_retention_values_from_panel():
-    """R11: handover pide retención y antigüedad de casos activos con sync: false."""
+def test_r11_handover_uses_the_approved_retention_values():
+    """R11: handover lleva versionados los plazos aprobados por el dueño."""
     handover = _service("handover")
-    for key in ("PRIVACY_RETENTION_DAYS", "PRIVACY_ACTIVE_CASE_MAX_DAYS"):
+    for key, value in (
+        ("PRIVACY_RETENTION_DAYS", "30"),
+        ("PRIVACY_ACTIVE_CASE_MAX_DAYS", "15"),
+    ):
         var = _env_var(handover, key)
-        assert var.get("sync") is False, var
-        assert "value" not in var, var
+        assert var["value"] == value
+        assert "sync" not in var
 
 
 def test_r12_orchestrator_references_handover_retention_days():
@@ -194,24 +207,25 @@ def test_r12_orchestrator_references_handover_retention_days():
 
 
 def test_r13_retention_days_has_a_single_source():
-    """R13: solo handover declara PRIVACY_RETENTION_DAYS; el resto lo referencia."""
+    """R13, #57 R4: solo handover declara el valor; el resto lo referencia."""
     entries = [
         (owner, var)
         for owner, var in _all_env_vars()
         if var.get("key") == "PRIVACY_RETENTION_DAYS"
     ]
-    sources = [owner for owner, var in entries if var.get("sync") is False]
+    sources = [owner for owner, var in entries if "value" in var]
     assert sources == ["handover"]
     references = [owner for owner, var in entries if "fromService" in var]
     assert references == ["orchestrator"]
     assert len(entries) == 2
 
 
-def test_r14_owner_values_are_never_written_in_the_blueprint():
-    """R14: las seis variables legales no llevan value ni generateValue."""
+def test_r14_owner_values_are_written_with_the_approved_policy():
+    """R14, #57 R1-R5: las variables legales llevan el valor aprobado."""
     for owner, var in _all_env_vars():
-        if var.get("key") in OWNER_KEYS:
-            assert "value" not in var, (owner, var)
+        key = var.get("key")
+        if key in APPROVED and "fromService" not in var:
+            assert var.get("value") == APPROVED[key], (owner, var)
             assert "generateValue" not in var, (owner, var)
 
 
@@ -291,17 +305,71 @@ def test_r21_docs_states_owner_defined_values_and_startup_block():
     assert "no arrancan en producción" in text
 
 
-def test_r22_docs_contain_no_retention_numeric_example():
-    """R22: ningún plazo de retención aparece con valor numérico de ejemplo."""
+def test_docs_state_owner_policy_and_evidence_retention():
+    """#57 R8, R24: política del dueño y evidencia cubierta por retención/supresión."""
     text = _docs_text()
-    assert re.search(r"PRIVACY_(RETENTION|ACTIVE_CASE_MAX)_DAYS\s*[=:]\s*\d", text) is None
-
-
-def test_r23_docs_list_uncovered_personal_data():
-    """R23: la purga no cubre logs, copias, consentimientos ni supresiones."""
-    text = _docs_text()
+    assert "2026-11-14" in text
+    assert "propietario" in text
+    assert "30" in text
+    assert "15" in text
+    assert "MEMORY_ENABLED=true" in text
+    assert "privacy_consents" in text
+    assert "sigue el mismo plazo de 30 días" in text
+    assert "se elimina antes si se ejecuta una supresión" in text
+    assert "la tabla `privacy_consents`" not in text
     assert "logs" in text
     assert "copias de seguridad" in text
-    assert "privacy_consents" in text
-    assert "supresión" in text
-    assert "revocación" in text
+
+
+def test_docs_do_not_claim_legal_validation():
+    """#57 R25: la política se presenta como decisión pendiente de revisión legal."""
+    text = _docs_text()
+    assert "revisión legal externa" in text
+    assert "No existe" in text
+    assert "validación legal independiente" not in text
+    assert "aprobada por el área legal" not in text
+    assert "revisión legal aprobada" not in text
+
+
+def test_blueprint_values_match_approved_policy():
+    """#57 R1-R5: el Blueprint refleja los valores aprobados por el dueño."""
+    orchestrator = _service("orchestrator")
+    handover = _service("handover")
+    assert _env_var(orchestrator, "PRIVACY_NOTICE_VERSION")["value"] == "1.0"
+    assert _env_var(orchestrator, "PRIVACY_ACCEPT_PHRASE")["value"] == "ACEPTO"
+    assert _env_var(orchestrator, "PRIVACY_REJECT_PHRASE")["value"] == "NO ACEPTO"
+    assert _env_var(orchestrator, "MEMORY_ENABLED")["value"] == "true"
+    assert _env_var(handover, "PRIVACY_RETENTION_DAYS")["value"] == "30"
+    assert _env_var(handover, "PRIVACY_ACTIVE_CASE_MAX_DAYS")["value"] == "15"
+    reply = _env_var(orchestrator, "PRIVACY_ACCEPTED_REPLY")["value"]
+    assert 0 < len(reply) <= 200
+
+
+def test_notice_text_names_responsible_without_email():
+    """#57 R2: nombra a Lázaro Software, el chat y ACEPTO, sin correo."""
+    text = _env_var(_service("orchestrator"), "PRIVACY_NOTICE_TEXT")["value"]
+    assert "Lázaro Software" in text
+    assert "mismo chat" in text
+    assert "ACEPTO" in text
+    assert re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text) is None
+    assert "S.A.S" not in text
+    assert "Ltda" not in text
+
+
+def test_env_example_matches_blueprint_values():
+    """#57 R6: .env.example copia los valores del Blueprint y no apaga memoria."""
+    env = _env_example()
+    for key in (
+        "PRIVACY_NOTICE_TEXT",
+        "PRIVACY_NOTICE_VERSION",
+        "PRIVACY_ACCEPT_PHRASE",
+        "PRIVACY_REJECT_PHRASE",
+        "PRIVACY_ACCEPTED_REPLY",
+    ):
+        assert env[key] == _env_var(_service("orchestrator"), key)["value"]
+    for key in ("PRIVACY_RETENTION_DAYS", "PRIVACY_ACTIVE_CASE_MAX_DAYS"):
+        assert env[key] == _env_var(_service("handover"), key)["value"]
+    assert env["MEMORY_ENABLED"] == _env_var(
+        _service("orchestrator"), "MEMORY_ENABLED"
+    )["value"]
+    assert "MEMORY_ENABLED=false" not in ENV_EXAMPLE.read_text(encoding="utf-8")

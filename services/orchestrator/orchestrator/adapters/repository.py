@@ -875,6 +875,7 @@ class FakeRepository:
         self.privacy_consents: list[PrivacyConsent] = []
         self.privacy_purge_runs: list[dict[str, Any]] = []
         self.fail_privacy_consent = False
+        self.fail_privacy_consent_delete = False
         self.conversation_states: dict[str, tuple[ConversationState, datetime]] = {}
         self.conversation_texts = ConversationTexts()
         self.client_credentials: dict[str, ClientCredential] = {}
@@ -2024,6 +2025,15 @@ class FakeRepository:
             if assignment[2] not in inactive_ids
         ]
 
+        kept_consents = [
+            consent
+            for consent in self.privacy_consents
+            if (consent.occurred_at or consent.accepted_at) is None
+            or (consent.occurred_at or consent.accepted_at) >= cutoff
+        ]
+        deleted_consents = len(self.privacy_consents) - len(kept_consents)
+        self.privacy_consents = kept_consents
+
         counts = {
             "messages": deleted_messages,
             "events": deleted_events,
@@ -2034,6 +2044,7 @@ class FakeRepository:
             "tool_calls": deleted_tool_calls,
             "conversation_summaries": len(expired_summaries),
             "case_notes": len(expired_notes),
+            "privacy_consents": deleted_consents,
         }
         self.privacy_purge_runs.append(
             {"ran_at": ran_at, "cutoff": cutoff, "counts": dict(counts)}
@@ -2362,6 +2373,22 @@ class FakeRepository:
                 for session in sessions
             ]
             session_contact_ids = {session.contact_id for session in sessions}
+            identities = {
+                (
+                    contact.channel,
+                    contact.external_user_id or str(contact.telegram_user_id),
+                )
+                for contact in self.contacts.values()
+                if contact.id in session_contact_ids
+            }
+            kept_consents = [
+                consent
+                for consent in self.privacy_consents
+                if (consent.channel, consent.external_user_id) not in identities
+            ]
+            deleted_consents = len(self.privacy_consents) - len(kept_consents)
+            if self.fail_privacy_consent_delete:
+                raise RuntimeError("evidencia de consentimiento no disponible")
             purged_case_ids = {
                 case_id
                 for case_id, contact_id in self.case_links.items()
@@ -2421,11 +2448,14 @@ class FakeRepository:
 
             deleted_memory = 1 if self.client_memory.pop(request.profile_id, None) else 0
 
+            self.privacy_consents = kept_consents
+
             counts = {
                 "messages": deleted_messages,
                 "conversation_summaries": deleted_summaries,
                 "client_memory": deleted_memory,
                 "case_notes": deleted_notes,
+                "privacy_consents": deleted_consents,
             }
             request.status = "executed"
             request.executed_at = now
@@ -5099,11 +5129,25 @@ class PostgresRepository:
                 )
                 deleted_memory = len(list(cur.fetchall()))
 
+                deleted_consents = 0
+                if session_contact_ids:
+                    cur.execute(
+                        "DELETE FROM privacy_consents p USING contacts c "
+                        "WHERE c.id = ANY(%s) "
+                        "AND p.channel = c.channel "
+                        "AND p.external_user_id = COALESCE("
+                        "c.external_user_id, CAST(c.telegram_user_id AS TEXT)) "
+                        "RETURNING p.id",
+                        (session_contact_ids,),
+                    )
+                    deleted_consents = len(list(cur.fetchall()))
+
                 counts = {
                     "messages": deleted_messages,
                     "conversation_summaries": deleted_summaries,
                     "client_memory": deleted_memory,
                     "case_notes": deleted_notes,
+                    "privacy_consents": deleted_consents,
                 }
                 cur.execute(
                     "UPDATE suppression_requests SET status = 'executed', "
@@ -5230,6 +5274,13 @@ class PostgresRepository:
                 )
                 deleted_summaries = len(cur.fetchall())
 
+                cur.execute(
+                    "DELETE FROM privacy_consents "
+                    "WHERE COALESCE(occurred_at, accepted_at) < %s RETURNING id",
+                    (cutoff,),
+                )
+                deleted_consents = len(cur.fetchall())
+
                 counts = {
                     "messages": deleted_messages,
                     "events": deleted_events,
@@ -5240,6 +5291,7 @@ class PostgresRepository:
                     "tool_calls": deleted_tool_calls,
                     "conversation_summaries": deleted_summaries,
                     "case_notes": deleted_notes,
+                    "privacy_consents": deleted_consents,
                 }
                 cur.execute(
                     "INSERT INTO privacy_purge_runs (ran_at, cutoff, counts) "

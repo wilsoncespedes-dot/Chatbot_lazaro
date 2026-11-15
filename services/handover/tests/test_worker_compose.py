@@ -114,22 +114,20 @@ def test_handover_dockerfile_copies_the_purge_script():
     assert "COPY scripts/purgar_datos.py ./purgar_datos.py" in text
 
 
-def test_env_example_declares_privacy_variables_empty():
-    """R50: las seis variables aprobadas se declaran vacías y el worker tiene sus valores."""
+def test_env_example_declares_approved_privacy_values():
+    """R50, #57 R6: las seis variables llevan el valor aprobado por el dueño."""
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
     lines = {
         line.split("=", 1)[0].strip(): line.split("=", 1)[1].strip()
         for line in text.splitlines()
         if "=" in line and not line.lstrip().startswith("#")
     }
-    for name in (
-        "PRIVACY_NOTICE_TEXT",
-        "PRIVACY_NOTICE_VERSION",
-        "PRIVACY_ACCEPT_PHRASE",
-        "PRIVACY_ACCEPTED_REPLY",
-        "PRIVACY_RETENTION_DAYS",
-        "PRIVACY_ACTIVE_CASE_MAX_DAYS",
-    ):
-        assert lines[name] == ""
+    assert lines["PRIVACY_NOTICE_TEXT"]
+    assert lines["PRIVACY_NOTICE_VERSION"] == "1.0"
+    assert lines["PRIVACY_ACCEPT_PHRASE"] == "ACEPTO"
+    assert lines["PRIVACY_REJECT_PHRASE"] == "NO ACEPTO"
+    assert lines["PRIVACY_ACCEPTED_REPLY"]
+    assert lines["PRIVACY_RETENTION_DAYS"] == "30"
+    assert lines["PRIVACY_ACTIVE_CASE_MAX_DAYS"] == "15"
     assert lines["PRIVACY_PURGE_INTERVAL_SECONDS"] == "86400"
     assert lines["PRIVACY_PURGE_HTTP_TIMEOUT_SECONDS"] == "120"

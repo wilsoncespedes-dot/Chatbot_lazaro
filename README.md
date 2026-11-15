@@ -73,6 +73,11 @@ El comando usa `DATABASE_URL`, pide la contraseña dos veces sin mostrarla y se
 niega si ya existe un administrador. No hay endpoint HTTP ni credenciales por
 defecto.
 
+En Render, ejecuta el mismo comando desde la Shell del servicio `orchestrator`
+después del primer despliegue. En producción configura primero los valores
+legales de privacidad y `PANEL_2FA_ENCRYPTION_KEY`; el administrador registra
+TOTP en su primer acceso.
+
 ## Trabajo diario (modo supervisado)
 
 1. En Claude Code: **`/siguiente`**. El leader prepara y revisa el spec y,

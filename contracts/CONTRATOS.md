@@ -877,8 +877,10 @@ El cuerpo es el objeto vacío `{}`.
 Borra los datos personales más antiguos que el plazo aprobado
 (`PRIVACY_RETENTION_DAYS`). Handover cierra y borra además los casos activos
 (`open`, `assigned` o `timed_out`) que superan `PRIVACY_ACTIVE_CASE_MAX_DAYS`
-(R35). Los registros operativos necesarios y `privacy_consents` se conservan
-(R26, R39).
+(R35). Los registros operativos necesarios se conservan. La evidencia mínima de
+consentimiento (`privacy_consents`: canal e id externo, versión/hash del aviso y
+fecha) sigue el mismo plazo de 30 días, se elimina antes si se ejecuta una
+supresión y se informa en `deleted` con la clave `privacy_consents`.
 
 #### Request
 

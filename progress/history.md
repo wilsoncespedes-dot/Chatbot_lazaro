@@ -618,3 +618,9 @@
 - Se reparó la validación del puente writer para aceptar la `ñ` del nombre de feature; se añadió una prueba de regresión.
 - Trazabilidad R1–R27 en `progress/impl_rediseño_visual_paneles.md`. `bash ./init.sh`: 3558 passed, 1 skipped, 2 warnings de deprecación, exit 0.
 - Se preservaron los demás cambios locales preexistentes; no se hicieron commits.
+
+## 2026-11-14 — Feature #57 retencion_evidencia_y_privacidad_inicial (done)
+- El dueño aprobó el 2026-11-14 aviso breve, versión 1.0, frases ACEPTO/NO ACEPTO, retención de 30 días, límite de casos activos de 15 días, memoria hasta supresión y borrado de la evidencia de consentimiento en supresión o por antigüedad.
+- Claude `spec_author`/`reviewer` aprobaron el spec (`progress/specreview_retencion_evidencia_y_privacidad_inicial.md`); DeepSeek V4.1 Flash implementó T1–T23; Claude aprobó el código (`progress/review_retencion_evidencia_y_privacidad_inicial.md`).
+- Render y `.env.example` reflejan los valores aprobados; Fake/Postgres borran `privacy_consents` en supresión y purga por `occurred_at`, con conteos y transacción. La documentación aclara que es decisión del dueño, no una revisión legal externa.
+- `bash ./init.sh`: 3579 passed, 1 skipped, 2 warnings de deprecación, exit 0.

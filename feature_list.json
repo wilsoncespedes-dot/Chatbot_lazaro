@@ -1122,6 +1122,30 @@
       ],
       "sdd": true,
       "status": "done"
+    },
+    {
+      "id": 57,
+      "name": "retencion_evidencia_y_privacidad_inicial",
+      "title": "Aplicar la retención aprobada a la evidencia de consentimiento",
+      "description": "Decisión del dueño (2026-11-14): aviso breve v1.0, ACEPTO/NO ACEPTO, retención de 30 días, casos activos máximo 15 días, memoria habilitada hasta supresión y evidencia de consentimiento borrada con supresión o al vencer los 30 días.",
+      "depends_on": [
+        27,
+        35,
+        37,
+        40
+      ],
+      "acceptance": [
+        "El Blueprint y .env.example reflejan los valores aprobados: aviso de privacidad breve del responsable Lázaro Software, versión 1.0, aceptación ACEPTO, rechazo NO ACEPTO, respuesta fija breve, retención 30 días y máximo 15 días para casos activos.",
+        "Render configura MEMORY_ENABLED=true; la memoria contiene temas pendientes/acuerdos y se elimina al ejecutar una solicitud de supresión, sin purga automática por retención.",
+        "CUANDO se ejecuta una supresión de datos de un cliente, el orchestrator DEBE borrar en la misma transacción las evidencias privacy_consents de los canales/identidades asociados a sus sesiones y reportar el total en removed_counts.",
+        "CUANDO la purga automática corre con el corte de PRIVACY_RETENTION_DAYS, el orchestrator DEBE borrar las filas privacy_consents cuyo occurred_at sea anterior al corte e incluirlas en el conteo de purga.",
+        "El repositorio falso y Postgres mantienen el mismo comportamiento; tests cubren supresión por identidad multicanal, retención por occurred_at, conteos y transacción parametrizada.",
+        "La política documenta que la evidencia mínima (canal/ID externo, versión/hash y fecha) sigue el mismo plazo de 30 días y se elimina antes si se ejecuta supresión.",
+        "No se publica ni se afirma una validación legal independiente; el registro deja la política como decisión del dueño pendiente de esa validación cuando corresponda.",
+        "`./init.sh` pasa y Claude aprueba trazabilidad y revisión de código."
+      ],
+      "sdd": true,
+      "status": "done"
     }
   ]
 }

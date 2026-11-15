@@ -88,3 +88,30 @@ def test_error_message_does_not_include_values():
     text = _failure(service_token=secret)
     assert "SERVICE_TOKEN" in text
     assert secret not in text
+
+
+def _env_example() -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def test_approved_values_pass_production_validation():
+    """#57 R7: los valores aprobados de .env.example validan en producción."""
+    env = _env_example()
+    settings = Settings(
+        app_env="production",
+        service_token=TOKEN,
+        database_url="postgresql://app:clave@db:5432/lazaro",
+        telegram_gateway_url="telegram-gateway:8000",
+        privacy_retention_days=env["PRIVACY_RETENTION_DAYS"],
+        privacy_active_case_max_days=env["PRIVACY_ACTIVE_CASE_MAX_DAYS"],
+    )
+    assert settings.retention_days == 30
+    assert settings.active_case_max_days == 15
+    assert settings.retention_configured is True

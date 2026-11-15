@@ -32,12 +32,6 @@ nunca en el repositorio:
 | `TELEGRAM_WEBHOOK_SECRET` | telegram-gateway | 32-256 caracteres `A-Z a-z 0-9 _ -`. |
 | `LLM_API_KEY`, `LLM_MODEL`, `TELEGRAM_BOT_USERNAME` | orchestrator | Proveedor de IA y bot público. |
 | `EMBEDDINGS_API_KEY`, `EMBEDDINGS_MODEL` | rag | Proveedor de embeddings. |
-| `PRIVACY_NOTICE_TEXT` | orchestrator | Texto del aviso de privacidad que ve el cliente. |
-| `PRIVACY_NOTICE_VERSION` | orchestrator | Versión del aviso aceptado. |
-| `PRIVACY_ACCEPT_PHRASE` | orchestrator | Frase con la que el cliente acepta el aviso; el gateway la hereda por referencia como `MESSAGE_GROUPING_ACCEPT_PHRASE`. |
-| `PRIVACY_ACCEPTED_REPLY` | orchestrator | Respuesta fija tras aceptar el aviso. |
-| `PRIVACY_RETENTION_DAYS` | handover | Plazo de retención de datos personales; única fuente. |
-| `PRIVACY_ACTIVE_CASE_MAX_DAYS` | handover | Antigüedad máxima de un caso activo antes de cerrarlo y borrarlo. |
 | `IDENTITY_PUBLIC_BASE_URL` | orchestrator | URL pública del orchestrator; debe empezar por `https://`. Se usa para el enlace `/acceso`. |
 | `IDENTITY_LINK_SIGNING_KEY` | orchestrator | Secreto de firma de los enlaces de login, distinto de `SERVICE_TOKEN`; mínimo 32 caracteres. |
 | `PANEL_2FA_ENCRYPTION_KEY` | orchestrator | Clave Fernet de 32 bytes en base64 urlsafe para cifrar el secreto TOTP. Obligatoria en producción; no se versiona. |
@@ -45,6 +39,9 @@ nunca en el repositorio:
 | `PANEL_2FA_ISSUER` | orchestrator | Nombre del emisor en la URI `otpauth://`; entre 1 y 64 caracteres. |
 | `PANEL_2FA_WINDOW_STEPS` | orchestrator | Ventana de pasos TOTP aceptada (0-2); por defecto 1. |
 | `PANEL_2FA_RECOVERY_CODES` | orchestrator | Códigos de recuperación generados al activar el factor (4-20); por defecto 8. |
+
+Las variables de privacidad y memoria ya llevan el valor aprobado en el
+Blueprint y en `.env.example`; se detallan en §2.1.
 
 `SERVICE_TOKEN` lo genera Render en el env group `lazaro-compartido`; no lo
 copies al repositorio. `DATABASE_URL` y `REDIS_URL` salen de las referencias a
@@ -55,7 +52,23 @@ obligatoria, si conserva un placeholder conocido o si `SERVICE_TOKEN` tiene
 menos de 32 caracteres. El mensaje de arranque solo nombra las variables, nunca
 sus valores.
 
-### 2.1 Retención y privacidad (#27, #28)
+### 2.1 Retención y privacidad (#27, #28, #57)
+
+Los valores de esta sección son una **política aprobada por el propietario** el
+2026-11-14: aviso versión `1.0`, frases `ACEPTO` y `NO ACEPTO`, retención de 30
+días y casos activos de 15 días como máximo, con `MEMORY_ENABLED=true`. No
+existe una revisión legal externa de esta política; el propietario debe
+confirmarla con revisión legal **antes de desplegar**. Sin el resto de secretos
+obligatorios, los servicios no arrancan en producción.
+
+| Variable | Servicio | Valor aprobado |
+|---|---|---|
+| `PRIVACY_NOTICE_TEXT` | orchestrator | Aviso corto con responsable Lázaro Software, solicitudes por el mismo chat y la frase `ACEPTO`. |
+| `PRIVACY_NOTICE_VERSION` | orchestrator | `1.0` |
+| `PRIVACY_ACCEPT_PHRASE` | orchestrator | `ACEPTO` |
+| `PRIVACY_ACCEPTED_REPLY` | orchestrator | Confirmación fija tras aceptar. |
+| `PRIVACY_RETENTION_DAYS` | handover | `30` días; única fuente. |
+| `PRIVACY_ACTIVE_CASE_MAX_DAYS` | handover | `15` días. |
 
 `PRIVACY_RETENTION_DAYS` se rellena **solo en `handover`**. El `orchestrator`
 lo hereda por referencia (`fromService` con `envVarKey`), de modo que existe un
@@ -66,16 +79,17 @@ para que los dos usen el mismo plazo.
 `PRIVACY_RETENTION_DAYS`. Cuando un caso activo supera ese límite, la purga lo
 cierra y lo borra sin avisar al cliente ni al asesor.
 
-El texto del aviso, la frase de aceptación, la respuesta de confirmación, la
-versión y los plazos los define el propietario con revisión legal **antes de
-desplegar**; esta configuración no fija ningún valor. Mientras falten, el
-`orchestrator` y `handover` no arrancan en producción y el worker registra
-`privacy_purge_failed`. Los nombres, la semántica y las validaciones están en
-`specs/privacidad_y_retencion_datos/design.md`.
+La memoria del cliente permanece hasta que se ejecute una supresión; no se
+purga por retención. `MEMORY_ENABLED=true` activa esa memoria y la supresión
+borra sus filas.
+
+La evidencia mínima de consentimiento (`privacy_consents`: canal e id externo,
+versión/hash del aviso y fecha) sigue el mismo plazo de 30 días y se elimina
+antes si se ejecuta una supresión. La purga también la incluye en sus recuentos.
 
 La purga no cubre los logs de la plataforma Render, las copias de seguridad de
-Postgres, la tabla `privacy_consents` ni las solicitudes individuales de
-supresión o revocación, que se atienden por un procedimiento aparte.
+Postgres ni las solicitudes individuales de supresión o revocación, que se
+atienden por un procedimiento aparte.
 
 ### 2.2 Agrupación de mensajes (#30)
 
@@ -87,6 +101,21 @@ referencia de `PRIVACY_ACCEPT_PHRASE` del `orchestrator`: la frase de
 aceptación debe ser idéntica en ambos servicios para que no se agrupe con otros
 mensajes. Si el `orchestrator` cambia esa frase, hay que redesplegar el
 `telegram-gateway` para que herede el valor nuevo.
+
+### 2.3 Crear el primer administrador
+
+Después del primer despliegue, abre la Shell del servicio `orchestrator` en
+Render y ejecuta:
+
+```bash
+python -m orchestrator.bootstrap_admin --username <usuario>
+```
+
+El comando se conecta a la base configurada por `DATABASE_URL`, pide la
+contraseña dos veces sin mostrarla y se niega si ya existe un administrador.
+No pases la contraseña como argumento ni la envíes por chat. Tras crearlo,
+inicia sesión en `/admin` y registra el segundo factor TOTP; en producción la
+sesión solo permitirá acceder al registro hasta que se complete.
 
 ## 3. Verificar `vector` en PostgreSQL
 

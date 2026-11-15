@@ -237,6 +237,12 @@ Validación legal pendiente:
 - Confirmar el orden y texto del consentimiento, los plazos de supresión, la
   conservación del rechazo y la justificación/plazo de memoria permanente.
 
+Decisión del dueño (2026-11-14): aviso corto de Lázaro Software con solicitudes
+por el mismo chat, versión `1.0`, frases `ACEPTO`/`NO ACEPTO`, retención de 30
+días, casos activos de 15 días como máximo, memoria hasta la supresión y
+evidencia de consentimiento de 30 días o hasta la supresión. Esta política es
+una decisión del dueño y sigue pendiente de revisión legal externa.
+
 > **Regla para los agentes:** una duda abierta NO se resuelve inventando. Si
 > una feature depende de una de ellas, el spec la recoge como **supuesto
 > configurable** (valor por defecto + variable de entorno) en la sección

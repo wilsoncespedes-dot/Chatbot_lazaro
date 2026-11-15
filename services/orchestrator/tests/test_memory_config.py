@@ -42,7 +42,7 @@ def test_r52_memory_defaults_are_safe_and_off():
 
 
 def test_r52_env_example_and_render_declare_the_new_variables():
-    """R52: todas las variables nuevas están en .env.example y Render apaga memoria."""
+    """R52, R5 de #57: variables declaradas y memoria activada por el dueño."""
     env_text = (ROOT / ".env.example").read_text(encoding="utf-8")
     declared = {
         line.split("=", 1)[0].strip()
@@ -54,7 +54,7 @@ def test_r52_env_example_and_render_declare_the_new_variables():
 
     render_text = (ROOT / "render.yaml").read_text(encoding="utf-8")
     assert "key: MEMORY_ENABLED" in render_text
-    assert 'value: "false"' in render_text
+    assert 'value: "true"' in render_text
 
 
 @pytest.mark.parametrize(

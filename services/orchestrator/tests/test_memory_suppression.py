@@ -189,6 +189,7 @@ def test_r40_r41_r42_r43_r44_r45_only_the_requested_client_is_deleted(env_factor
         "conversation_summaries": 1,
         "client_memory": 1,
         "case_notes": 0,
+        "privacy_consents": 0,
     }
     assert [m.text for m in env.repo.messages] == [
         "antes del login",
@@ -402,6 +403,7 @@ def test_r44_postgres_suppression_is_parameterized_and_atomic():
         "conversation_summaries": 1,
         "client_memory": 1,
         "case_notes": 0,
+        "privacy_consents": 0,
     }
     assert conn.rollbacks == 0 and conn.commits >= 2
     statements = [(sql, params) for sql, params in conn.log]
@@ -411,3 +413,32 @@ def test_r44_postgres_suppression_is_parameterized_and_atomic():
     assert any(
         sql.startswith("UPDATE suppression_requests") for sql, _ in statements
     )
+
+
+def test_purge_does_not_delete_client_memory(env_factory):
+    """R9: la purga por retención nunca borra `client_memory`."""
+    env = env_factory(memory_enabled=True)
+    env.repo.set_client_memory(
+        "p1", ("Memoria permanente",), "s0", CUTOFF - timedelta(days=1)
+    )
+
+    response = purge_personal_data(env.settings, env.adapters)
+
+    assert env.repo.client_memory["p1"].items == ("Memoria permanente",)
+    assert "client_memory" not in response.deleted
+
+
+def test_suppression_still_deletes_client_memory(env_factory):
+    """R10: la supresión sigue borrando e informando `client_memory`."""
+    env = env_factory(memory_enabled=True)
+    client_id = _profile(env, "cliente1", "cliente")
+    admin_id = _profile(env, "admin1", "admin")
+    contact = _contact(env, 10, 100)
+    _session(env, client_id, contact.id)
+    env.repo.set_client_memory(client_id, ("Memoria",), "s1", NOW)
+    _request(env, client_id, contact.id)
+
+    execution = execute_suppression("req-1", admin_id, env.settings, env.adapters)
+
+    assert execution.deleted["client_memory"] == 1
+    assert client_id not in env.repo.client_memory

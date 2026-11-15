@@ -165,6 +165,10 @@ Transiciones en texto (el diagrama no se conserva al exportar):
 
 La autorización se pide con un texto fijo y versionado, y se guarda prueba de cada aceptación. La supresión de datos la pide el cliente al bot, pero la ejecuta una persona desde el panel.
 
+Decisión del dueño (2026-11-14): aviso corto de Lázaro Software con solicitudes por el mismo chat, versión `1.0`, frases `ACEPTO`/`NO ACEPTO`, retención de 30 días, casos activos de 15 días como máximo, memoria hasta la supresión y evidencia de consentimiento de 30 días o hasta la supresión. No existe revisión legal externa de esta política; queda pendiente de esa validación.
+
+La evidencia mínima de la autorización (canal e id externo, versión y hash del texto, resultado y fecha) sigue el mismo plazo de retención y se elimina antes si se ejecuta una supresión.
+
 ### Prueba de la autorización
 
 El Decreto 1377 de 2013 exige pedir la autorización a más tardar al recoger los datos y conservar prueba de ella. Por cada respuesta se guarda:

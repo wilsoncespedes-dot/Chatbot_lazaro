@@ -92,7 +92,7 @@ def test_active_contacts_are_preserved(env):
 
 
 def test_operational_tables_and_consents_are_preserved(env):
-    """R26: profiles, tokens, sesiones, auditoría y privacy_consents no se tocan."""
+    """R26, #57 R19: tablas operativas y evidencia reciente no se tocan."""
     env.repo.create_profile("admin", "admin", "hash", NOW)
     env.repo.add_link_token("token", "p1", NOW)
     env.repo.create_session("session", "p1", "csrf", NOW)
@@ -147,6 +147,7 @@ def test_response_and_purge_run_are_saved(env):
         "tool_calls": 0,
         "conversation_summaries": 0,
         "case_notes": 0,
+        "privacy_consents": 0,
     }
 
 
@@ -208,6 +209,7 @@ def test_postgres_purge_uses_the_documented_order_and_parameters():
         "tool_calls": 0,
         "conversation_summaries": 0,
         "case_notes": 0,
+        "privacy_consents": 0,
     }
     assert conn.commits == 2 and conn.rollbacks == 0
     statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]
