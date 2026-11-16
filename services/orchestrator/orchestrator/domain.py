@@ -110,17 +110,6 @@ from .panel import (
     suppression_priority,
 )
 from .states import ConversationEvent, ConversationState, transition_state
-from .two_factor import (
-    decrypt_secret,
-    encrypt_secret,
-    generate_recovery_codes,
-    generate_secret,
-    hash_recovery_code,
-    looks_like_recovery_code,
-    provisioning_uri,
-    secret_base32,
-    verify_totp,
-)
 from .db_query import (
     DbQueryCommand,
     DbQueryRejected,
@@ -302,36 +291,6 @@ class ChannelWindowClosed(DomainError):
 class PanelValidationError(DomainError):
     code = "validation_error"
     status_code = 422
-
-
-class PanelBadRequest(DomainError):
-    code = "validation_error"
-    status_code = 400
-
-
-class TwoFactorCodeRequired(DomainError):
-    code = "two_factor_required"
-    status_code = 401
-
-
-class TwoFactorCodeInvalid(DomainError):
-    code = "two_factor_invalid"
-    status_code = 401
-
-
-class TwoFactorUnavailable(DomainError):
-    code = "two_factor_unavailable"
-    status_code = 503
-
-
-class TwoFactorAlreadyEnabled(DomainError):
-    code = "two_factor_already_enabled"
-    status_code = 409
-
-
-class TwoFactorNotEnabled(DomainError):
-    code = "two_factor_not_enabled"
-    status_code = 409
 
 
 class TagNameTaken(DomainError):
@@ -647,12 +606,6 @@ class Profile:
 class IssuedLinkToken:
     token: str
     expires_at: datetime
-
-
-@dataclass(frozen=True)
-class TwoFactorEnrollment:
-    secret_base32: str
-    provisioning_uri: str
 
 
 @dataclass
@@ -4204,36 +4157,6 @@ def _fake_scrypt_hash(settings: Settings) -> str:
     return cached
 
 
-def _verify_second_factor(
-    profile: Profile,
-    code: str,
-    settings: Settings,
-    adapters: Adapters,
-    now: datetime,
-) -> None:
-    """R10–R20: valida el código activo o lanza el error de dominio correspondiente."""
-    record = adapters.repository.get_two_factor(profile.id)
-    if record is None or record.enabled_at is None:
-        return
-    secret = decrypt_secret(record.secret_ciphertext, settings.panel_2fa_encryption_key)
-    candidate = code.strip()
-    if not candidate:
-        raise TwoFactorCodeRequired("Introduce tu código de verificación.")
-    if looks_like_recovery_code(candidate):
-        consumed = adapters.repository.consume_recovery_code(
-            profile.id, hash_recovery_code(candidate), now
-        )
-        if not consumed:
-            raise TwoFactorCodeInvalid("Código de verificación incorrecto.")
-        record_panel_audit(profile, "two_factor_recovery_used", "ok", adapters)
-        return
-    step = verify_totp(secret, candidate, now, settings.panel_2fa_window_steps)
-    if step is None or not adapters.repository.advance_two_factor_step(
-        profile.id, step
-    ):
-        raise TwoFactorCodeInvalid("Código de verificación incorrecto.")
-
-
 def authenticate_profile(
     username: str,
     password: str,
@@ -4241,7 +4164,6 @@ def authenticate_profile(
     role: str | tuple[str, ...],
     settings: Settings,
     adapters: Adapters,
-    code: str = "",
 ) -> str | None:
     """Devuelve el token de sesión o None. LoginThrottled si R11 aplica."""
     allowed_roles = {role} if isinstance(role, str) else set(role)
@@ -4268,24 +4190,13 @@ def authenticate_profile(
         repo.record_login_failure(normalized, client_ip, now, since)
         return None
 
-    try:
-        _verify_second_factor(profile, code, settings, adapters, now)
-    except TwoFactorCodeInvalid:
-        repo.record_login_failure(normalized, client_ip, now, since)
-        raise
-
     repo.clear_login_failures(normalized)
-    record = repo.get_two_factor(profile.id)
-    enroll_only = settings.panel_2fa_required_effective and (
-        record is None or record.enabled_at is None
-    )
     token = new_session_token()
     repo.create_session(
         hash_token(token),
         profile.id,
         new_session_token(),
         now + timedelta(minutes=settings.admin_session_ttl_minutes),
-        enroll_only=enroll_only,
     )
     return token
 
@@ -4296,82 +4207,9 @@ def authenticate_admin(
     client_ip: str,
     settings: Settings,
     adapters: Adapters,
-    code: str = "",
 ) -> str | None:
     """Login del panel admin: rol `admin` y el mismo comportamiento de #21."""
-    return authenticate_profile(
-        username, password, client_ip, "admin", settings, adapters, code
-    )
-
-
-def begin_two_factor_enrollment(
-    profile: Profile, settings: Settings, adapters: Adapters
-) -> TwoFactorEnrollment:
-    """R5, R8: genera un secreto pendiente y devuelve base32 y URI una sola vez."""
-    repo = adapters.repository
-    existing = repo.get_two_factor(profile.id)
-    if existing is not None and existing.enabled_at is not None:
-        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
-    secret = generate_secret()
-    ciphertext = encrypt_secret(secret, settings.panel_2fa_encryption_key)
-    if not repo.save_pending_two_factor(profile.id, ciphertext, adapters.clock()):
-        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
-    return TwoFactorEnrollment(
-        secret_base32=secret_base32(secret),
-        provisioning_uri=provisioning_uri(
-            secret, profile.username, settings.panel_2fa_issuer
-        ),
-    )
-
-
-def confirm_two_factor_enrollment(
-    profile: Profile,
-    code: str,
-    settings: Settings,
-    adapters: Adapters,
-    session_token_hash: str,
-) -> list[str]:
-    """R6, R7, R20, R25, R31: activa, guarda los códigos y cierra otras sesiones."""
-    repo = adapters.repository
-    record = repo.get_two_factor(profile.id)
-    if record is None:
-        raise TwoFactorNotEnabled("El segundo factor no está pendiente.")
-    if record.enabled_at is not None:
-        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
-    secret = decrypt_secret(record.secret_ciphertext, settings.panel_2fa_encryption_key)
-    step = verify_totp(
-        secret, code.strip(), adapters.clock(), settings.panel_2fa_window_steps
-    )
-    if step is None:
-        raise TwoFactorCodeInvalid("Código de verificación incorrecto.")
-    codes = generate_recovery_codes(settings.panel_2fa_recovery_codes)
-    hashes = [hash_recovery_code(code) for code in codes]
-    if not repo.activate_two_factor(profile.id, step, hashes, adapters.clock()):
-        raise TwoFactorAlreadyEnabled("El segundo factor ya está activo.")
-    repo.promote_session(session_token_hash)
-    repo.delete_sessions_for_profile(profile.id, keep_token_hash=session_token_hash)
-    record_panel_audit(profile, "two_factor_enrolled", "ok", adapters)
-    return codes
-
-
-def reset_two_factor(
-    actor: Profile, target_id: str, adapters: Adapters
-) -> None:
-    """R35–R38: un administrador restablece el segundo factor de otro perfil."""
-    repo = adapters.repository
-    if actor.id == target_id:
-        raise PanelBadRequest("No puedes restablecer tu propio segundo factor.")
-    target = repo.get_profile(target_id)
-    if target is None:
-        raise ProfileNotFound("El perfil no existe.")
-    record = repo.get_two_factor(target_id)
-    if record is None or record.enabled_at is None:
-        raise TwoFactorNotEnabled("El segundo factor no está activo.")
-    repo.delete_two_factor(target_id)
-    repo.delete_sessions_for_profile(target_id)
-    record_panel_audit(
-        actor, "two_factor_reset", "ok", adapters, target=target_id
-    )
+    return authenticate_profile(username, password, client_ip, "admin", settings, adapters)
 
 
 def change_role(profile_id: str, role: str, adapters: Adapters) -> Profile:

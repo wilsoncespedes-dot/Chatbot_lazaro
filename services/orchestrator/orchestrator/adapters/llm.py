@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Protocol
 
 import httpx
@@ -18,11 +19,28 @@ class LLMClient(Protocol):
 class HttpLLMClient:
     """Endpoint compatible con chat completions de `base_url`, sin SDK."""
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 10) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float = 10,
+        session_header: str = "",
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        # Algunos proveedores (p. ej. OpenCode Go) exigen un id de sesión
+        # estable por cliente; vacío = no se envía.
+        self._session_header = session_header.strip()
+        self._session_id = uuid.uuid4().hex
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        if self._session_header:
+            headers[self._session_header] = self._session_id
+        return headers
 
     def complete(self, system: str, user: str) -> str:
         payload = {
@@ -36,7 +54,7 @@ class HttpLLMClient:
             response = httpx.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
-                headers={"Authorization": f"Bearer {self._api_key}"},
+                headers=self._headers(),
                 timeout=self._timeout,
             )
             response.raise_for_status()

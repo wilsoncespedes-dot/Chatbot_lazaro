@@ -67,7 +67,6 @@ def _admin_pages(env_factory, panel) -> dict[str, str]:
         "manuales": env.client.get("/admin/manuals"),
         "ajustes": env.client.get("/admin/ajustes"),
         "metricas": env.client.get("/admin/metricas"),
-        "2fa": env.client.get("/admin/2fa"),
     }
     assert all(response.status_code == 200 for response in responses.values())
     return {name: response.text for name, response in responses.items()}
@@ -301,8 +300,9 @@ def test_forms_actions_fields_and_csrf_are_preserved(env_factory, panel):
 
     login = admin_pages["login"]
     assert 'method="post" action="/admin/login"' in login
-    for name in ("username", "password", "code"):
+    for name in ("username", "password"):
         assert f'name="{name}"' in login
+    assert 'name="code"' not in login
 
     profiles = admin_pages["perfiles"]
     assert 'method="post" action="/admin/profiles"' in profiles
@@ -394,3 +394,18 @@ def test_css_and_panels_keep_security_headers(env_factory, panel):
     assert "script-src 'self'" in advisor_page.headers["content-security-policy"]
     assert advisor_page.headers["x-content-type-options"] == "nosniff"
     assert advisor_page.headers["cache-control"] == "no-store"
+
+
+def test_every_script_tag_is_closed(env_factory, panel):
+    """R30: toda etiqueta `<script>` de los paneles se cierra de inmediato."""
+    pages = _admin_pages(env_factory, panel) | _advisor_pages(env_factory, panel)
+    pages["bandeja-live"] = advisor_panel.render_advisor_cases(
+        [], "csrf", live_enabled=True
+    )
+    for name, html in pages.items():
+        assert html.count("<script") == html.count("</script>"), name
+        assert html.count("<script") == len(
+            re.findall(r"<script\b[^>]*></script>", html)
+        ), name
+    assert "<script" in pages["bandeja"]
+    assert "<script" in pages["caso"]

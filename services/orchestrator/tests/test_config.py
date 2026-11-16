@@ -99,10 +99,6 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/profiles",
         "/admin/profiles/{profile_id}/role",
         "/admin/profiles/{profile_id}/link-token",
-        "/admin/profiles/{profile_id}/2fa/reset",
-        "/admin/2fa",
-        "/admin/2fa/start",
-        "/admin/2fa/confirm",
         "/admin/events",
         "/admin/manuals",
         "/admin/manuals/{manual_id}",
@@ -133,9 +129,6 @@ def test_only_health_and_messages_routes_exposed():
         "/asesor",
         "/asesor/login",
         "/asesor/logout",
-        "/asesor/2fa",
-        "/asesor/2fa/start",
-        "/asesor/2fa/confirm",
         "/asesor/cases",
         "/asesor/cases/{case_id}",
         "/asesor/cases/{case_id}/memoria",
@@ -425,4 +418,3 @@ def test_notice_and_phrase_are_compared_normalized():
         privacy_accept_phrase="Acepto el tratamiento de mis datos.",
     )
     assert settings.privacy_configured is False
-

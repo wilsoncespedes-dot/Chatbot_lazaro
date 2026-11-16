@@ -1,8 +1,6 @@
 """Configuración del servicio orchestrator leída de variables de entorno."""
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import re
 
@@ -42,21 +40,6 @@ _RLS_SETTING = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 
 AUTO_HANDOVER_FAILURE_ALLOWED_REASONS = ("no_relevant_chunks", "invalid_answer")
 ASSIGNMENT_MODES = ("manual", "automatica")
-
-
-def _is_valid_fernet_key(value: str) -> bool:
-    """R41: clave Fernet válida = 32 bytes en base64 urlsafe, sin importar cryptography."""
-    text = value.strip()
-    if not text or not re.fullmatch(r"[A-Za-z0-9_-]+=*", text):
-        return False
-    try:
-        decoded = base64.urlsafe_b64decode(text.encode("ascii"))
-    except (ValueError, UnicodeEncodeError, binascii.Error):
-        return False
-    return (
-        len(decoded) == 32
-        and base64.urlsafe_b64encode(decoded).decode("ascii") == text
-    )
 
 
 def _parse_db_query_allowlist(
@@ -101,11 +84,17 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
+    # Nombre de un encabezado de sesión que exige el proveedor (OpenCode Go:
+    # x-opencode-session). Vacío = no se envía.
+    llm_session_header: str = ""
+    # Los modelos que razonan tardan más que el resto de servicios internos.
+    llm_timeout_seconds: float = Field(default=60, gt=0, le=300)
     healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
     rag_top_k: int = Field(default=5, ge=1, le=20)
     no_answer_reply: str = (
-        "No encontré información sobre eso en los manuales. Te paso con un asesor."
+        "No encontré información sobre eso en los manuales. Si quieres hablar "
+        "con una persona, escribe «quiero un asesor»."
     )
     handover_ack_reply: str = "Avisé a un asesor; te responderá por aquí en cuanto pueda."
     error_reply: str = "Tuve un problema para responderte. Inténtalo de nuevo en unos minutos."
@@ -137,12 +126,6 @@ class Settings(BaseSettings):
     admin_login_max_attempts: int = Field(default=5, ge=1, le=100)
     admin_login_window_minutes: int = Field(default=15, ge=1, le=1440)
     admin_trust_proxy_headers: bool = False
-    # segundo factor del panel (#54)
-    panel_2fa_required: bool | None = None
-    panel_2fa_encryption_key: str = ""
-    panel_2fa_issuer: str = Field(default="Lazaro Software", min_length=1, max_length=64)
-    panel_2fa_window_steps: int = Field(default=1, ge=0, le=2)
-    panel_2fa_recovery_codes: int = Field(default=8, ge=4, le=20)
     admin_manual_max_bytes: int = Field(default=20971520, ge=1, le=104857600)
     classifier_default_threshold: float = Field(default=0.6, ge=0, le=1)
     db_query_enabled: bool = False
@@ -336,25 +319,6 @@ class Settings(BaseSettings):
     saved_reply_title_max_chars: int = Field(default=80, ge=1, le=200)
     saved_reply_text_max_chars: int = Field(default=1000, ge=1, le=4096)
     saved_replies_max: int = Field(default=100, ge=1, le=500)
-
-    @field_validator("panel_2fa_required", mode="before")
-    @classmethod
-    def _empty_two_factor_required_is_unset(cls, value):
-        """R21: una variable vacía equivale a no definirla."""
-        if value is None:
-            return None
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
-    @field_validator("panel_2fa_issuer")
-    @classmethod
-    def _validate_two_factor_issuer(cls, value: str) -> str:
-        """R43: el emisor no puede estar vacío ni superar 64 caracteres."""
-        text = value.strip()
-        if not text or len(text) > 64:
-            raise ValueError("PANEL_2FA_ISSUER debe tener entre 1 y 64 caracteres")
-        return text
 
     @field_validator("business_hours_start", "business_hours_end")
     @classmethod
@@ -551,8 +515,6 @@ class Settings(BaseSettings):
             problems.append("IDENTITY_LINK_SIGNING_KEY")
         if not self.identity_login_required:
             problems.append("IDENTITY_LOGIN_REQUIRED")
-        if not _is_valid_fernet_key(self.panel_2fa_encryption_key):
-            problems.append("PANEL_2FA_ENCRYPTION_KEY")
         if problems:
             raise ProductionConfigError(problems)
         return self
@@ -567,13 +529,6 @@ class Settings(BaseSettings):
         if not _DB_QUERY_IDENTIFIER.fullmatch(self.db_query_views_schema):
             raise ValueError("DB_QUERY_VIEWS_SCHEMA debe ser un identificador válido")
         _parse_db_query_allowlist(self.db_query_allowlist, self.db_query_views_schema)
-
-    @property
-    def panel_2fa_required_effective(self) -> bool:
-        """R21, R22: obligatorio por defecto solo en producción."""
-        if self.panel_2fa_required is not None:
-            return self.panel_2fa_required
-        return self.app_env == "production"
 
     @property
     def handover_keyword_list(self) -> list[str]:

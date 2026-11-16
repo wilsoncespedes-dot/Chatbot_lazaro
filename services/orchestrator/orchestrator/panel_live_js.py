@@ -19,12 +19,38 @@ PANEL_LIVE_JS = r"""
   var reconnectTimer = null;
   var pollTimer = null;
   var refreshing = false;
+  var isChat = region.classList.contains("chat-log");
+
+  function countMessages() {
+    return region.querySelectorAll(".chat-msg").length;
+  }
+
+  function scrollToEnd() {
+    if (isChat) { region.scrollTop = region.scrollHeight; }
+  }
+
+  function pad(value) {
+    return value < 10 ? "0" + value : "" + value;
+  }
+
+  function localizeTimes() {
+    var times = region.querySelectorAll("time[datetime]");
+    for (var i = 0; i < times.length; i++) {
+      var parsed = new Date(times[i].getAttribute("datetime"));
+      if (isNaN(parsed.getTime())) { continue; }
+      times[i].textContent = pad(parsed.getDate()) + "/" + pad(parsed.getMonth() + 1) +
+        " " + pad(parsed.getHours()) + ":" + pad(parsed.getMinutes());
+    }
+  }
 
   function replaceRegion(html) {
     var parsed = new DOMParser().parseFromString(html, "text/html");
     if (!parsed || !parsed.body) { return; }
+    var before = countMessages();
     var nodes = Array.prototype.slice.call(parsed.body.childNodes);
     region.replaceChildren.apply(region, nodes);
+    localizeTimes();
+    if (countMessages() > before) { scrollToEnd(); }
   }
 
   function refresh() {
@@ -96,6 +122,8 @@ PANEL_LIVE_JS = r"""
     socket.onclose = function () { startPolling(); scheduleReconnect(); };
   }
 
+  localizeTimes();
+  scrollToEnd();
   connect();
   startPolling();
 })();

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime, timezone
 from urllib.parse import quote, urlencode
 
 from . import admin
@@ -44,10 +45,27 @@ WINDOW_LABELS = {
     "not_applicable": "No aplica",
 }
 ROLE_LABELS = {"user": "Cliente", "bot": "Bot", "advisor": "Asesor"}
+ROLE_CLASSES = {
+    "user": "chat-msg-client",
+    "advisor": "chat-msg-advisor",
+    "bot": "chat-msg-bot",
+}
 
 
 def _esc(value: object) -> str:
     return html.escape(str(value), quote=True)
+
+
+def _chat_datetime(at: datetime) -> datetime:
+    """R3: un `at` sin zona se interpreta como UTC también en `datetime`."""
+    if at.tzinfo is None:
+        return at.replace(tzinfo=timezone.utc)
+    return at
+
+
+def _chat_time(at: datetime) -> str:
+    """R3: fecha y hora en UTC con el formato `dd/mm HH:MM UTC`."""
+    return _chat_datetime(at).astimezone(timezone.utc).strftime("%d/%m %H:%M") + " UTC"
 
 
 def _page(
@@ -133,8 +151,6 @@ def render_advisor_login(message: str | None = None, code: str | None = None) ->
         '<label>Usuario <input name="username" autocomplete="username" required></label>'
         '<label>Contraseña <input type="password" name="password" '
         'autocomplete="current-password" required></label>'
-        '<label>Código de verificación <input name="code" inputmode="numeric" '
-        'autocomplete="one-time-code"></label>'
         '<button type="submit">Entrar</button>'
         "</form>"
     )
@@ -378,7 +394,7 @@ def render_advisor_cases(
         f"{table}</div>"
     )
     script = (
-        '<script src="/asesor/static/panel_live.js" defer>\n'
+        '<script src="/asesor/static/panel_live.js" defer></script>\n'
         if live_enabled
         else ""
     )
@@ -394,26 +410,94 @@ def render_advisor_cases(
 
 
 def render_history_fragment(history) -> str:
-    """R24, R30: solo el historial, para reemplazar sin anexar mensajes."""
+    """R1-R6: historial como burbujas de chat, para reemplazar sin anexar."""
     if not history:
-        return "<p>Sin mensajes en el periodo visible.</p>"
-    return admin._table_wrap(
-        "<table><thead><tr><th>Rol</th><th>Mensaje</th><th>Fecha</th>"
-        "</tr></thead><tbody>"
-        + "".join(
-            "<tr>"
-            f"<td>{_esc(ROLE_LABELS.get(item.role, item.role))}</td>"
-            f"<td>{_esc(item.text)}</td>"
-            f"<td>{_esc(item.at.isoformat())}</td>"
-            "</tr>"
-            for item in history
-        )
-        + "</tbody></table>"
+        return '<p class="chat-empty">Sin mensajes en el periodo visible.</p>'
+    bubbles = "".join(
+        f'<li class="chat-msg {ROLE_CLASSES.get(item.role, "chat-msg-other")}">'
+        f'<span class="chat-author">{_esc(ROLE_LABELS.get(item.role, item.role))}</span>'
+        f'<p class="chat-text">{_esc(item.text)}</p>'
+        f'<time class="chat-time" '
+        f'datetime="{_esc(_chat_datetime(item.at).isoformat())}">'
+        f"{_esc(_chat_time(item.at))}</time>"
+        "</li>"
+        for item in history
     )
+    return f'<ol class="chat-messages">{bubbles}</ol>'
 
 
-def _history_section(view) -> str:
-    return f"<h3>Historial</h3>{render_history_fragment(view.history)}"
+def _chat_block(view, csrf: str, poll_seconds: int) -> str:
+    """R8-R18: cabecera, región en vivo y compositor en un único bloque."""
+    case_path = _esc(quote(view.case_id, safe=""))
+    name = view.client.username or "Cliente sin autenticar"
+    title = f"{name} · {view.client.channel}"
+    live_region = (
+        '<div id="live-region" class="chat-log" role="log" '
+        'aria-label="Mensajes de la conversación" tabindex="0" '
+        f'data-live-src="/asesor/live/cases/{case_path}" '
+        'data-ws="/asesor/ws?scope=mine" '
+        f'data-poll="{int(poll_seconds)}" '
+        f'data-case-id="{_esc(view.case_id)}">'
+        f"{render_history_fragment(view.history)}</div>"
+    )
+    tools = ""
+    if view.window == "closed":
+        options = "".join(
+            f'<option value="{_esc(template_name)}">'
+            f"{_esc(template_name)}</option>"
+            for template_name in view.templates
+        )
+        field = (
+            '<label class="chat-field">Plantilla <select name="template">'
+            f"{options}</select></label>"
+        )
+    else:
+        notice = ""
+        if view.reply_notice:
+            notice = (
+                '<p class="error" role="alert">'
+                "La respuesta guardada no existe o está desactivada."
+                "</p>\n"
+            )
+        selector = ""
+        if view.saved_replies:
+            reply_options = "".join(
+                f'<option value="{_esc(reply.id)}">{_esc(reply.title)}</option>'
+                for reply in view.saved_replies
+            )
+            selector = (
+                '<form method="get" action="/asesor/cases/'
+                f'{case_path}">'
+                '<label>Respuesta guardada <select name="respuesta">'
+                f"{reply_options}</select></label>"
+                '<button type="submit" class="btn-secondary">Cargar</button>'
+                "</form>\n"
+            )
+        if notice or selector:
+            tools = f'<div class="chat-tools">{notice}{selector}</div>'
+        selected_body = (
+            _esc(view.selected_reply.body) if view.selected_reply is not None else ""
+        )
+        field = (
+            '<label class="chat-field">Escribe un mensaje '
+            '<textarea name="text" maxlength="4096" required>'
+            f"{selected_body}</textarea></label>"
+        )
+    composer = (
+        '<form method="post" action="/asesor/reply" class="chat-composer">'
+        f"{admin.csrf_field(csrf)}"
+        f'<input type="hidden" name="case_id" value="{_esc(view.case_id)}">'
+        '<input type="hidden" name="origen" value="caso">'
+        f"{field}"
+        '<button type="submit">Enviar</button>'
+        "</form>"
+    )
+    return (
+        '<section class="chat" aria-label="Conversación del caso">'
+        f'<div class="chat-header"><h3>Historial</h3>'
+        f'<p class="chat-title">{_esc(title)}</p></div>'
+        f"{live_region}{tools}{composer}</section>"
+    )
 
 
 def _client_section(view) -> str:
@@ -562,54 +646,7 @@ def render_advisor_case(
     poll_seconds: int = 0,
 ) -> str:
     case_path = _esc(quote(view.case_id, safe=""))
-    saved_reply_notice = ""
-    saved_reply_selector = ""
-    if view.window == "closed":
-        options = "".join(
-            f'<option value="{_esc(name)}">{_esc(name)}</option>'
-            for name in view.templates
-        )
-        reply_field = (
-            '<label>Plantilla <select name="template">'
-            f"{options}</select></label>"
-        )
-    else:
-        if view.reply_notice:
-            saved_reply_notice = (
-                '<p class="error" role="alert">'
-                "La respuesta guardada no existe o está desactivada."
-                "</p>\n"
-            )
-        if view.saved_replies:
-            reply_options = "".join(
-                f'<option value="{_esc(reply.id)}">{_esc(reply.title)}</option>'
-                for reply in view.saved_replies
-            )
-            saved_reply_selector = (
-                '<form method="get" action="/asesor/cases/'
-                f'{case_path}">'
-                '<label>Respuesta guardada <select name="respuesta">'
-                f"{reply_options}</select></label>"
-                '<button type="submit" class="btn-secondary">Cargar</button>'
-                "</form>\n"
-            )
-        selected_body = (
-            _esc(view.selected_reply.body) if view.selected_reply is not None else ""
-        )
-        reply_field = (
-            '<label>Respuesta <textarea name="text" maxlength="4096" required>'
-            f"{selected_body}</textarea></label>"
-        )
-    reply_form = (
-        '<h3>Responder</h3>'
-        f"{saved_reply_notice}{saved_reply_selector}"
-        '<form method="post" action="/asesor/reply" class="card">'
-        f"{admin.csrf_field(csrf)}"
-        f'<input type="hidden" name="case_id" value="{_esc(view.case_id)}">'
-        f"{reply_field}"
-        '<button type="submit">Enviar</button>'
-        "</form>"
-    )
+    chat_block = _chat_block(view, csrf, poll_seconds)
     targets = "".join(
         f'<option value="{_esc(profile_id)}">{_esc(username)} '
         f"({_esc(presence)})</option>"
@@ -658,16 +695,8 @@ def render_advisor_case(
             '<button type="submit" class="btn-secondary">Reasignar</button>'
             "</form>"
         )
-    live_region = (
-        "<div id=\"live-region\" "
-        f"data-live-src=\"/asesor/live/cases/{case_path}\" "
-        'data-ws="/asesor/ws?scope=mine" '
-        f'data-poll="{int(poll_seconds)}" '
-        f'data-case-id="{_esc(view.case_id)}">'
-        f"{_history_section(view)}</div>"
-    )
     script = (
-        '<script src="/asesor/static/panel_live.js" defer>\n'
+        '<script src="/asesor/static/panel_live.js" defer></script>\n'
         if live_enabled
         else ""
     )
@@ -676,12 +705,12 @@ def render_advisor_case(
         f"Caso {_esc(view.case_id)} · Estado: "
         f"{_badge(view.client.conversation_state)}"
         f" · Ventana: {_esc(WINDOW_LABELS.get(view.window, view.window))}</p>"
+        f"{chat_block}"
         f"{_client_section(view)}"
-        f"{live_region}"
         f"{_notes_section(view, csrf)}"
         f"{_tags_section(view, csrf)}"
         f"{_memory_section(view)}"
-        f"{reply_form}\n{transfer_form}\n{resolve_form}\n{return_form}\n{reassign_form}"
+        f"{transfer_form}\n{resolve_form}\n{return_form}\n{reassign_form}"
     )
     return _page(
         f"Caso {view.case_id}",

@@ -34,11 +34,6 @@ nunca en el repositorio:
 | `EMBEDDINGS_API_KEY`, `EMBEDDINGS_MODEL` | rag | Proveedor de embeddings. |
 | `IDENTITY_PUBLIC_BASE_URL` | orchestrator | URL pública del orchestrator; debe empezar por `https://`. Se usa para el enlace `/acceso`. |
 | `IDENTITY_LINK_SIGNING_KEY` | orchestrator | Secreto de firma de los enlaces de login, distinto de `SERVICE_TOKEN`; mínimo 32 caracteres. |
-| `PANEL_2FA_ENCRYPTION_KEY` | orchestrator | Clave Fernet de 32 bytes en base64 urlsafe para cifrar el secreto TOTP. Obligatoria en producción; no se versiona. |
-| `PANEL_2FA_REQUIRED` | orchestrator | `true` en producción; si se deja sin definir, el valor efectivo es `true` con `APP_ENV=production` y `false` en otros entornos. |
-| `PANEL_2FA_ISSUER` | orchestrator | Nombre del emisor en la URI `otpauth://`; entre 1 y 64 caracteres. |
-| `PANEL_2FA_WINDOW_STEPS` | orchestrator | Ventana de pasos TOTP aceptada (0-2); por defecto 1. |
-| `PANEL_2FA_RECOVERY_CODES` | orchestrator | Códigos de recuperación generados al activar el factor (4-20); por defecto 8. |
 
 Las variables de privacidad y memoria ya llevan el valor aprobado en el
 Blueprint y en `.env.example`; se detallan en §2.1.
@@ -114,8 +109,11 @@ python -m orchestrator.bootstrap_admin --username <usuario>
 El comando se conecta a la base configurada por `DATABASE_URL`, pide la
 contraseña dos veces sin mostrarla y se niega si ya existe un administrador.
 No pases la contraseña como argumento ni la envíes por chat. Tras crearlo,
-inicia sesión en `/admin` y registra el segundo factor TOTP; en producción la
-sesión solo permitirá acceder al registro hasta que se complete.
+inicia sesión en `/admin` con ese usuario y contraseña.
+
+Las bases existentes pueden conservar las tablas y registros del segundo factor
+creados por versiones anteriores; no se eliminan automáticamente durante el
+despliegue.
 
 ## 3. Verificar `vector` en PostgreSQL
 
@@ -183,56 +181,3 @@ El orchestrator es público porque el panel `/admin` lo usan los clientes, pero
 sus rutas internas siguen exigiendo `X-Service-Token`; `/admin` exige sesión y
 CSRF. El gateway y handover hablan con el orchestrator por la red privada
 (`hostport`), no por la URL pública.
-
-## 6. Recuperar el segundo factor del panel
-
-Este procedimiento exige acceso operativo a la base de datos y está pensado
-para un administrador único que perdió su factor y sus códigos. El bootstrap de
-la feature #23 no sirve: se niega a actuar si ya existe un administrador.
-Declara explícitamente el perfil en `:'profile_id'` (un `profiles.id`) y no
-selecciona, muestra ni pide el secreto cifrado, los códigos de recuperación,
-sus hashes ni la clave de cifrado.
-
-```sql
--- psql "$DATABASE_URL" -v operator='nombre.operador' -v profile_id='<profiles.id>'
-BEGIN;
-SELECT id, username, role FROM profiles WHERE id = :'profile_id';  -- confirmar el perfil
-INSERT INTO panel_audit (actor_profile_id, actor_role, action, target, result, at)
-  SELECT 'ops:' || :'operator', 'operator', 'two_factor_reset_ops', id, 'ok', now()
-  FROM profiles WHERE id = :'profile_id';
-DELETE FROM staff_recovery_codes WHERE profile_id = :'profile_id';
-DELETE FROM staff_two_factor     WHERE profile_id = :'profile_id';
-DELETE FROM admin_sessions       WHERE profile_id = :'profile_id';
-COMMIT;
-```
-
-Verifica que el `SELECT` devolvió exactamente una fila antes del `COMMIT`. Si el
-perfil no existe, el `INSERT … SELECT` no inserta y los `DELETE` no tocan filas.
-El actor de auditoría es `ops:<operador>` y no es un perfil real; la columna
-`actor_profile_id` no tiene clave foránea.
-
-Tras ejecutarlo, el perfil inicia sesión sin segundo factor. Si
-`PANEL_2FA_REQUIRED` está activo, queda en una sesión restringida al registro
-del nuevo factor, como cualquier perfil sin segundo factor.
-
-### 6.1 Pérdida o cambio de `PANEL_2FA_ENCRYPTION_KEY`
-
-Esta clave no se rota sin ejecutar antes este procedimiento para los perfiles
-afectados: si cambia, los secretos cifrados dejan de descifrarse. La variante
-recorre `staff_two_factor` y borra los datos de todos los perfiles con segundo
-factor, dejando una fila de auditoría por perfil afectado.
-
-```sql
--- psql "$DATABASE_URL" -v operator='nombre.operador'
-BEGIN;
-INSERT INTO panel_audit (actor_profile_id, actor_role, action, target, result, at)
-  SELECT 'ops:' || :'operator', 'operator', 'two_factor_reset_ops',
-         profile_id, 'ok', now()
-  FROM staff_two_factor;
-DELETE FROM staff_recovery_codes
-  WHERE profile_id IN (SELECT profile_id FROM staff_two_factor);
-DELETE FROM admin_sessions
-  WHERE profile_id IN (SELECT profile_id FROM staff_two_factor);
-DELETE FROM staff_two_factor;
-COMMIT;
-```

@@ -48,12 +48,17 @@ def test_roles_constant_has_all_five_roles():
 
 
 def test_admin_role_selector_lists_five_roles(env, panel):
-    """R2: el selector de rol de /admin/profiles ofrece los cinco roles."""
+    """R2: /admin/profiles ofrece los roles de personal; `cliente` se crea en
+    /admin/clientes (con credencial) y no se ofrece aquí."""
     panel.login_admin(env)
     response = env.client.get("/admin/profiles")
     assert response.status_code == 200
     for role in ROLES:
-        assert f'value="{role}"' in response.text
+        if role == "cliente":
+            assert f'value="{role}"' not in response.text
+        else:
+            assert f'value="{role}"' in response.text
+    assert 'href="/admin/clientes"' in response.text
 
 
 def test_changing_role_saves_only_one_role_and_ends_sessions(env, panel):

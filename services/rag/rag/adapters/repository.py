@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from contextlib import suppress
 from dataclasses import replace
@@ -210,6 +211,20 @@ class FakeChunkRepository:
         raise ChunkNotFound("El fragmento no existe.")
 
 
+IDLE_PROBE_SECONDS = 10.0
+
+
+def _connection_alive(conn: Any) -> bool:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchall()
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
 def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
     import pg8000.dbapi
 
@@ -248,6 +263,7 @@ class PgVectorChunkRepository:
             lambda timeout: _pg_connect(self._database_url, timeout)
         )
         self._conn: Any = None
+        self._last_used = 0.0
 
     def health_check(self, timeout_seconds: float) -> None:
         """Conexión independiente y acotada; solo `SELECT 1`, sin esquema."""
@@ -275,6 +291,16 @@ class PgVectorChunkRepository:
         )
 
     def _connection(self) -> Any:
+        # Si Postgres se reinicia, la conexión guardada queda rota; tras un rato
+        # sin uso se comprueba con `SELECT 1` y, si falla, se abre otra.
+        if (
+            self._conn is not None
+            and time.monotonic() - self._last_used > IDLE_PROBE_SECONDS
+            and not _connection_alive(self._conn)
+        ):
+            conn, self._conn = self._conn, None
+            with suppress(Exception):
+                conn.close()
         if self._conn is None:
             conn = self._connect()
             cur = conn.cursor()
@@ -282,6 +308,7 @@ class PgVectorChunkRepository:
                 cur.execute(statement)
             conn.commit()
             self._conn = conn
+        self._last_used = time.monotonic()
         return self._conn
 
     def add_manual(self, manual_id: str, name: str, chunks: list[Chunk]) -> None:

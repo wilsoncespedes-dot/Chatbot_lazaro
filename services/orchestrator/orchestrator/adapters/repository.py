@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -1525,7 +1526,7 @@ class FakeRepository:
         self, token_hash: str, now: datetime, roles: Sequence[str]
     ) -> AdminSession | None:
         session = self.get_session_any(token_hash, now)
-        if session is None or session.enroll_only:
+        if session is None:
             return None
         profile = self.profiles.get(session.profile_id)
         if profile is None or profile.role not in set(roles):
@@ -3190,6 +3191,25 @@ def _is_unique_violation(error: BaseException) -> bool:
     return False
 
 
+IDLE_PROBE_SECONDS = 10.0
+
+
+def is_connection_error(exc: BaseException) -> bool:
+    """Errores de red/socket (p. ej. Postgres reiniciado), no errores de SQL."""
+    return isinstance(exc, OSError) or type(exc).__name__ == "InterfaceError"
+
+
+def _connection_alive(conn: Any) -> bool:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchall()
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
 def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
     import pg8000.dbapi
 
@@ -3255,9 +3275,24 @@ class PostgresRepository:
             connect is None if run_migrations is None else run_migrations
         )
         self._conn: Any = None
+        self._last_used = 0.0
         self._lock = threading.Lock()
 
+    def _discard_connection(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+
     def _connection(self) -> Any:
+        # Si Postgres se reinicia, la conexión guardada queda rota; tras un rato
+        # sin uso se comprueba con `SELECT 1` y, si falla, se abre otra.
+        if (
+            self._conn is not None
+            and time.monotonic() - self._last_used > IDLE_PROBE_SECONDS
+            and not _connection_alive(self._conn)
+        ):
+            self._discard_connection()
         if self._conn is None:
             conn = self._connect()
             cur = conn.cursor()
@@ -3270,6 +3305,7 @@ class PostgresRepository:
                     cur.execute(statement)
             conn.commit()
             self._conn = conn
+        self._last_used = time.monotonic()
         return self._conn
 
     def ensure_schema(self) -> None:
@@ -3296,8 +3332,11 @@ class PostgresRepository:
                 rows = list(cur.fetchall()) if fetch else []
                 conn.commit()
                 return rows
-            except Exception:
-                conn.rollback()
+            except Exception as exc:
+                with suppress(Exception):
+                    conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
                 raise
 
     def mark_message_if_new(
@@ -4158,8 +4197,7 @@ class PostgresRepository:
             "SELECT s.token_hash, s.profile_id, s.csrf_token, s.expires_at, "
             "s.enroll_only FROM admin_sessions s "
             "JOIN profiles p ON p.id = s.profile_id "
-            "WHERE s.token_hash = %s AND s.expires_at > %s AND p.role = ANY(%s) "
-            "AND s.enroll_only = FALSE",
+            "WHERE s.token_hash = %s AND s.expires_at > %s AND p.role = ANY(%s)",
             (token_hash, now, list(roles)),
             fetch=True,
         )

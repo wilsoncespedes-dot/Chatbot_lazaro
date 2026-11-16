@@ -1,15 +1,12 @@
 """Tests del arranque seguro en producción de orchestrator (#24)."""
 from __future__ import annotations
 
-import base64
-
 import pytest
 from pydantic import ValidationError
 
 from orchestrator.config import Settings
 
 TOKEN = "s" * 40
-PANEL_2FA_KEY = base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
 VALID = {
     "app_env": "production",
     "service_token": TOKEN,
@@ -28,8 +25,6 @@ VALID = {
     "identity_public_base_url": "https://orchestrator.example",
     "identity_link_signing_key": "k" * 32,
     "identity_login_required": True,
-    # #54: segundo factor
-    "panel_2fa_encryption_key": PANEL_2FA_KEY,
 }
 
 
@@ -40,7 +35,7 @@ def _failure(**overrides) -> str:
 
 
 def test_valid_production_settings_normalize_internal_urls():
-    """R12: las URLs internas host:puerto se normalizan con http://."""
+    """R12: las URLs internas host:puerto se normalizan sin requerir 2FA."""
     settings = Settings(**VALID)
     assert settings.rag_url == "http://rag:8000"
     assert settings.handover_url == "http://handover:8000"

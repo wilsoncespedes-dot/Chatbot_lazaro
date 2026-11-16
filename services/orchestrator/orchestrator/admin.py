@@ -146,8 +146,30 @@ tbody tr:nth-child(even) { background: var(--stripe); }
 tbody tr:hover { background: var(--hover); }
 code { background: var(--bg); padding: 0.1rem 0.3rem;
   border-radius: var(--radius); }
+.chat { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); display: flex;
+  flex-direction: column; margin: 0 0 var(--space-3); }
+.chat-header, .chat-tools, .chat-composer { padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border); margin: 0; }
+.chat-log { background: var(--bg); max-height: 60vh; min-height: 12rem;
+  overflow-y: auto; padding: var(--space-2); }
+.chat-messages { list-style: none; padding: 0; margin: 0; display: flex;
+  flex-direction: column; gap: var(--space-2); }
+.chat-msg { max-width: 85%; align-self: flex-start; background: var(--surface);
+  color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--space-2); display: flex;
+  flex-direction: column; gap: var(--space-1); }
+.chat-msg-advisor { align-self: flex-end; background: var(--ok-bg); }
+.chat-msg-bot { align-self: flex-end; background: var(--info-bg); }
+.chat-author, .chat-time { color: var(--muted); font-size: 0.8rem; }
+.chat-time { align-self: flex-end; }
+.chat-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-empty { margin: 0; color: var(--muted); }
+.chat-title { margin: 0; color: var(--muted); }
+.chat-field { flex: 1 1 16rem; }
+.chat-field textarea, .chat-field select { width: 100%; }
 a:focus-visible, button:focus-visible, input:focus-visible,
-select:focus-visible, textarea:focus-visible {
+select:focus-visible, textarea:focus-visible, .chat-log:focus-visible {
   outline: 3px solid var(--focus); outline-offset: 2px;
 }
 @media (max-width: 48rem) {
@@ -334,8 +356,6 @@ def render_login(message: str | None = None, code: str | None = None) -> str:
         '<label>Usuario <input name="username" autocomplete="username" required></label>'
         '<label>Contraseña <input type="password" name="password" '
         'autocomplete="current-password" required></label>'
-        '<label>Código de verificación <input name="code" inputmode="numeric" '
-        'autocomplete="one-time-code"></label>'
         '<button type="submit">Entrar</button>'
         "</form>"
     )
@@ -351,20 +371,22 @@ def render_home(csrf: str) -> str:
     )
 
 
+STAFF_PROFILE_ROLES = ("admin", "supervisor", "asesor", "responsable_datos")
+
+
 def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
     rows = []
     for profile in profiles:
         linked = "Sí" if profile.telegram_user_id is not None else "No"
+        # `cliente` solo aparece si ya es el rol actual: los clientes se crean
+        # en /admin/clientes, que les asigna credencial.
+        roles = STAFF_PROFILE_ROLES + (
+            ("cliente",) if profile.role == "cliente" else ()
+        )
         role_options = "".join(
             f'<option value="{_esc(role)}"'
             f'{" selected" if role == profile.role else ""}>{_esc(role)}</option>'
-            for role in (
-                "admin",
-                "supervisor",
-                "asesor",
-                "responsable_datos",
-                "cliente",
-            )
+            for role in roles
         )
         rows.append(
             "<tr>"
@@ -384,12 +406,6 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
             '<button type="submit" class="btn-secondary">Generar enlace</button>'
             "</form>"
             "</td>"
-            "<td>"
-            f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/2fa/reset">'
-            f"{csrf_field(csrf)}"
-            '<button type="submit" class="btn-danger">Restablecer 2FA</button>'
-            "</form>"
-            "</td>"
             "</tr>"
         )
     error_html = ""
@@ -397,6 +413,8 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
     body = (
         f"{error_html}"
+        '<p>Para crear clientes que inician sesión en el bot usa '
+        '<a href="/admin/clientes">Clientes</a>.</p>'
         '<form method="post" action="/admin/profiles" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Usuario <input name="username" autocomplete="off" required></label>'
@@ -405,7 +423,6 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         '<option value="supervisor">supervisor</option>'
         '<option value="asesor">asesor</option>'
         '<option value="responsable_datos">responsable_datos</option>'
-        '<option value="cliente">cliente</option>'
         "</select></label>"
         '<label>Contraseña <input type="password" name="password" '
         'autocomplete="new-password" required></label>'
@@ -413,7 +430,7 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         "</form>"
         + _table_wrap(
             "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Vinculado</th>"
-            "<th>Cambiar rol</th><th>Enlace de Telegram</th><th>Segundo factor</th>"
+            "<th>Cambiar rol</th><th>Enlace de Telegram</th>"
             "</tr></thead><tbody>"
             f"{''.join(rows)}"
             "</tbody></table>"

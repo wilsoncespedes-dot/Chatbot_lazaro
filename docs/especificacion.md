@@ -279,7 +279,7 @@ El panel es propio y sigue el modelo de bandeja de Chatwoot: todas las conversac
 | Responsable de datos | Atender y cerrar casos de supresión |
 | Administrador | Clientes y credenciales, cuentas de asesores, textos fijos, plantillas, horarios |
 
-Acceso con inicio de sesión individual y segundo factor, o con la cuenta corporativa de Google o Microsoft. Toda lectura y respuesta queda en el registro de auditoría.
+Acceso con usuario y contraseña individual. Toda lectura y respuesta queda en el registro de auditoría.
 
 ### Bandeja
 

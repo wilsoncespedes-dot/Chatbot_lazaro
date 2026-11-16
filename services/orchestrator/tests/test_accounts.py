@@ -412,6 +412,7 @@ def test_postgres_sessions_filter_by_roles_and_delete_by_profile():
     ) is None
     sql, params = statements[-1]
     assert "p.role = ANY(%s)" in sql
+    assert "s.enroll_only = FALSE" not in sql
     assert params == (
         "hash",
         FIXED_NOW,

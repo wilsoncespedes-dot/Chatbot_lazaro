@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from contextlib import suppress
 from datetime import datetime
 from typing import Any, Callable, Protocol
@@ -477,6 +478,25 @@ _CASE_COLUMNS = (
 )
 
 
+IDLE_PROBE_SECONDS = 10.0
+
+
+def is_connection_error(exc: BaseException) -> bool:
+    """Errores de red/socket (p. ej. Postgres reiniciado), no errores de SQL."""
+    return isinstance(exc, OSError) or type(exc).__name__ == "InterfaceError"
+
+
+def _connection_alive(conn: Any) -> bool:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchall()
+        conn.commit()
+        return True
+    except Exception:
+        return False
+
+
 def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
     import pg8000.dbapi
 
@@ -528,6 +548,7 @@ class PostgresCaseRepository:
             lambda timeout: _pg_connect(self._database_url, timeout)
         )
         self._conn: Any = None
+        self._last_used = 0.0
         self._lock = threading.Lock()
 
     def health_check(self, timeout_seconds: float) -> None:
@@ -541,7 +562,21 @@ class PostgresCaseRepository:
             with suppress(Exception):
                 conn.close()
 
+    def _discard_connection(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+
     def _connection(self) -> Any:
+        # Si Postgres se reinicia, la conexión guardada queda rota; tras un rato
+        # sin uso se comprueba con `SELECT 1` y, si falla, se abre otra.
+        if (
+            self._conn is not None
+            and time.monotonic() - self._last_used > IDLE_PROBE_SECONDS
+            and not _connection_alive(self._conn)
+        ):
+            self._discard_connection()
         if self._conn is None:
             conn = self._connect()
             cur = conn.cursor()
@@ -549,6 +584,7 @@ class PostgresCaseRepository:
                 cur.execute(statement)
             conn.commit()
             self._conn = conn
+        self._last_used = time.monotonic()
         return self._conn
 
     def _run(self, sql: str, params: tuple, fetch: bool = False) -> list:
@@ -560,8 +596,11 @@ class PostgresCaseRepository:
                 rows = list(cur.fetchall()) if fetch else []
                 conn.commit()
                 return rows
-            except Exception:
-                conn.rollback()
+            except Exception as exc:
+                with suppress(Exception):
+                    conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
                 raise
 
     def find_active_case(self, contact_id: str) -> Case | None:

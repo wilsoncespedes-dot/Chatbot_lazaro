@@ -116,17 +116,6 @@ services:
         sync: false
       - key: ADMIN_TRUST_PROXY_HEADERS
         value: "true"
-      # segundo factor del panel (#54); la clave se pide fuera del repositorio
-      - key: PANEL_2FA_REQUIRED
-        value: "true"
-      - key: PANEL_2FA_ENCRYPTION_KEY
-        sync: false
-      - key: PANEL_2FA_ISSUER
-        value: "Lazaro Software"
-      - key: PANEL_2FA_WINDOW_STEPS
-        value: "1"
-      - key: PANEL_2FA_RECOVERY_CODES
-        value: "8"
       - key: PRIVACY_NOTICE_TEXT
         value: "Lázaro Software es responsable de tus datos personales. Los usamos para atender tu consulta y, si lo necesitas, pasarte con un asesor. Conservamos tus mensajes 30 días y, hasta que pidas su supresión, la memoria de temas pendientes y acuerdos. Puedes pedir esa supresión o ejercer tus derechos por este mismo chat. Para continuar, responde ACEPTO."
       - key: PRIVACY_NOTICE_VERSION

@@ -84,3 +84,12 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Sin cambio de código:** los falsos positivos quedaron marcados con `# NOSONAR` (verificados por `scripts/tests/test_sonar_markers.py`); el hallazgo de `test_advisor_commands.py` estaba obsoleto y el archivo no se tocó.
 - **Resultado:** `./init.sh` verde, 3624 passed, 1 skipped (un ciclo de corrección por ids de `parametrize` en Windows); revisión de código `APPROVED`.
 - **Pendiente fuera de alcance:** `eval/scoring.py` línea 30 conserva la misma regex de correo; no estaba en el reporte y queda a decisión del leader.
+## 2026-11-16 — Retiro del segundo factor en paneles (solicitud del dueño)
+- **Cambios:** acceso admin/asesor con usuario y contraseña; se quitaron campos, validación, pantallas/rutas de segundo factor, acción de restablecimiento y variables/dependencia asociadas. Se actualizó `docs/especificacion.md` y la guía de despliegue.
+- **Sesiones y datos previos:** las sesiones antiguas restringidas ya pueden entrar al panel. Las tablas/filas 2FA existentes se conservan y no se eliminan automáticamente; el panel dejó de requerirlas.
+- **Verificación:** `./init.sh` verde, 3572 passed, 1 skipped; revisión de código sin hallazgos.
+## 2026-11-16 — Hotfix `</script>` y feature #59 chat_caso_asesor (done)
+- **Hotfix previo (a mano, pedido del dueño):** faltaba `</script>` en las dos etiquetas de `panel_live.js` de `advisor_panel.py`; con `panel_live_enabled` la bandeja y el detalle del caso quedaban en blanco. El test de regresión entró en el acceptance de #59.
+- **#59:** el detalle del caso (`/asesor/cases/{case_id}`) muestra la conversación como chat de burbujas (cliente a un lado; asesor y asistente al otro, con autor y hora UTC localizada por JS) y el compositor queda debajo del chat; con ventana de WhatsApp cerrada ofrece plantilla y las respuestas guardadas siguen cargándose. `POST /asesor/reply` con `origen=caso` vuelve al caso. Actualización en vivo con autoscroll, sin `innerHTML` ni tocar el compositor. CSS `.chat*` en `ADMIN_CSS` con contraste WCAG y foco visible. Spec en `specs/chat_caso_asesor/` (R1–R39, T1–T14).
+- **Tests:** nuevo `services/orchestrator/tests/test_chat_caso_asesor.py` y `test_every_script_tag_is_closed` en `test_panel_visual.py` (R30, regresión del hotfix). Ningún test existente editado.
+- **Resultado:** writer OpenCode/DeepSeek en un solo intento, sin ciclos de corrección; `./init.sh` verde, 3613 passed, 1 skipped. Revisiones de spec y de código `APPROVED`.

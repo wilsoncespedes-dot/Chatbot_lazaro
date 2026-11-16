@@ -117,6 +117,31 @@ def test_http_llm_client_sends_only_system_and_user(captured):
     ]
     assert "tools" not in body and "functions" not in body
     assert request.headers["Authorization"] == "Bearer key" and timeout == 4
+    assert "x-opencode-session" not in request.headers
+
+
+def test_http_llm_client_sends_stable_session_header_when_configured(captured):
+    requests, responses = captured
+    responses["/v1/chat/completions"] = httpx.Response(
+        200, json={"choices": [{"message": {"content": "hola"}}]}
+    )
+    client = llm.HttpLLMClient(
+        "http://llm/v1", "key", "modelo", 4, session_header="x-opencode-session"
+    )
+    client.complete("S", "U")
+    client.complete("S", "U")
+    first = requests[0][0].headers["x-opencode-session"]
+    second = requests[1][0].headers["x-opencode-session"]
+    assert first and first == second
+    assert requests[0][0].headers["Authorization"] == "Bearer key"
+
+
+def test_llm_settings_defaults():
+    from orchestrator.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.llm_session_header == ""
+    assert settings.llm_timeout_seconds == 60
 
 
 class _FakeCursor:

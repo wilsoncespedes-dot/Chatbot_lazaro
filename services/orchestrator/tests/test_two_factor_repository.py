@@ -84,15 +84,14 @@ def test_delete_two_factor_removes_secret_and_codes():
     assert repo.delete_two_factor(profile_id) is False
 
 
-def test_restricted_sessions_are_hidden_from_normal_reads():
-    """R23, R24: get_session y get_session_for_roles excluyen sesiones restringidas."""
+def test_legacy_restricted_sessions_are_accepted_by_normal_reads():
+    """Las sesiones heredadas con enroll_only ya no bloquean el acceso al panel."""
     repo, profile_id = _repo_with_profile()
     repo.create_session("restringida", profile_id, "csrf", NOW + timedelta(hours=1), True)
     assert repo.get_session_any("restringida", NOW) is not None
-    assert repo.get_session("restringida", NOW) is None
-    assert repo.get_session_for_roles("restringida", NOW, ["admin"]) is None
-    repo.promote_session("restringida")
     assert repo.get_session("restringida", NOW) is not None
+    session = repo.get_session_for_roles("restringida", NOW, ["admin"])
+    assert session is not None and session.enroll_only is True
 
 
 def test_delete_sessions_for_profile_can_keep_current():

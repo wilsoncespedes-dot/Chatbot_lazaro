@@ -67,7 +67,6 @@ from .domain import (
 )
 from .identity_routes import create_identity_router
 from .panel_live_routes import create_panel_live_router
-from .two_factor_routes import create_two_factor_router
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +216,11 @@ def build_default_adapters(settings: Settings) -> Adapters:
         repository=repository,
         rag=HttpRagClient(settings.rag_url, settings.service_token, timeout),
         llm=HttpLLMClient(
-            settings.llm_base_url, settings.llm_api_key, settings.llm_model, timeout
+            settings.llm_base_url,
+            settings.llm_api_key,
+            settings.llm_model,
+            settings.llm_timeout_seconds,
+            session_header=settings.llm_session_header,
         ),
         gateway=HttpGatewayClient(settings.telegram_gateway_url, settings.service_token, timeout),
         handover=HttpHandoverClient(
@@ -353,8 +356,6 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     # `include_router` las deja dentro de un objeto sin `path` en `app.routes`.
     app.router.routes.extend(create_admin_router(settings, adapters).routes)
     app.router.routes.extend(create_advisor_router(settings, adapters).routes)
-    app.router.routes.extend(create_two_factor_router(settings, adapters, "admin").routes)
-    app.router.routes.extend(create_two_factor_router(settings, adapters, "asesor").routes)
     app.router.routes.extend(create_panel_live_router(settings, adapters).routes)
     app.router.routes.extend(create_identity_router(settings, adapters).routes)
 

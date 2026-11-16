@@ -397,6 +397,43 @@ def test_invalid_profile_from_panel_returns_422(env, data):
     assert len(env.repo.profiles) == 1
 
 
+def test_client_role_cannot_be_created_from_profiles(env):
+    """Un perfil `cliente` sin credencial nunca podría iniciar sesión."""
+    _create_profile(env)
+    _login_ok(env)
+    page = env.client.get("/admin/profiles").text
+    assert 'href="/admin/clientes"' in page
+    assert '<option value="cliente">' not in page
+    csrf = _csrf(env)
+    response = env.client.post(
+        "/admin/profiles",
+        data={
+            "csrf_token": csrf,
+            "username": "cliente9",
+            "role": "cliente",
+            "password": PASSWORD,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 422
+    assert "/admin/clientes" in response.text
+    assert len(env.repo.profiles) == 1
+
+
+def test_staff_profile_cannot_be_changed_to_client(env):
+    _create_profile(env, "admin1", "admin")
+    other = _create_profile(env, "asesor9", "asesor")
+    _login_ok(env)
+    csrf = _csrf(env)
+    response = env.client.post(
+        f"/admin/profiles/{other['id']}/role",
+        data={"csrf_token": csrf, "role": "cliente"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 422
+    assert env.repo.profiles[other["id"]].role == "asesor"
+
+
 def test_duplicate_profile_from_panel_returns_409(env):
     """R7: username repetido -> 409 sin crear el perfil."""
     _create_profile(env)

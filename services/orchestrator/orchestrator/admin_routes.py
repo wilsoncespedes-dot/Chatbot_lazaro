@@ -37,10 +37,6 @@ from .domain import (
     TemplateExists,
     TemplateNotFound,
     TemplateTransitionInvalid,
-    TwoFactorCodeInvalid,
-    TwoFactorCodeRequired,
-    TwoFactorNotEnabled,
-    TwoFactorUnavailable,
     UsernameTaken,
     admin_metrics,
     authenticate_admin,
@@ -69,7 +65,6 @@ from .domain import (
     recent_events,
     record_panel_audit,
     renew_credential,
-    reset_two_factor,
     revoke_credential,
     close_client_session,
     save_operational_settings,
@@ -85,9 +80,6 @@ from .privacy import CONVERSATION_TEXT_FIELDS, ConversationTexts
 
 SESSION_COOKIE = "admin_session"
 LOGIN_ERROR = "Usuario o contraseña incorrectos."
-TWO_FACTOR_REQUIRED = "Introduce tu código de verificación."
-TWO_FACTOR_INVALID = "Código de verificación incorrecto."
-TWO_FACTOR_UNAVAILABLE = "El segundo factor no está disponible."
 
 
 class LoginRequired(Exception):
@@ -168,16 +160,25 @@ def _upstream_error(csrf: str | None) -> HTMLResponse:
     )
 
 
+CLIENT_ROLE = "cliente"
+# Un perfil `cliente` sin credencial nunca puede iniciar sesión: los clientes
+# solo se crean en /admin/clientes, que crea perfil y credencial juntos.
+CLIENT_ROLE_ERROR = (
+    "Los clientes se crean en Clientes (/admin/clientes), que les asigna la "
+    "credencial de acceso."
+)
+
+
 def _validate_profile_fields(
     username: str, role: str, password: str, settings: Settings
 ) -> str | None:
     normalized = username.lower()
     if not USERNAME_PATTERN.fullmatch(normalized):
         return "El usuario debe tener de 3 a 64 caracteres: letras minúsculas, números, . _ -"
+    if role == CLIENT_ROLE:
+        return CLIENT_ROLE_ERROR
     if role not in ROLES:
-        return (
-            "El rol debe ser admin, supervisor, asesor, responsable_datos o cliente."
-        )
+        return "El rol debe ser admin, supervisor, asesor o responsable_datos."
     if len(password) < settings.profile_password_min_length:
         return "La contraseña es demasiado corta."
     return None
@@ -360,36 +361,12 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 client_ip(request, settings),
                 settings,
                 adapters,
-                form.get("code", ""),
             )
         except LoginThrottled:
             return _html(admin.render_login(LOGIN_ERROR), status_code=429)
-        except TwoFactorCodeRequired:
-            return _html(
-                admin.render_login(TWO_FACTOR_REQUIRED, "two_factor_required"),
-                status_code=401,
-            )
-        except TwoFactorCodeInvalid:
-            return _html(
-                admin.render_login(TWO_FACTOR_INVALID, "two_factor_invalid"),
-                status_code=401,
-            )
-        except TwoFactorUnavailable:
-            return _html(
-                admin.render_login(TWO_FACTOR_UNAVAILABLE, "two_factor_unavailable"),
-                status_code=503,
-            )
         if token is None:
             return _html(admin.render_login(LOGIN_ERROR), status_code=401)
-        token_session = adapters.repository.get_session_any(
-            hash_token(token), adapters.clock()
-        )
-        target = (
-            "/admin/2fa"
-            if token_session is not None and token_session.enroll_only
-            else "/admin"
-        )
-        response = _redirect(target)
+        response = _redirect("/admin")
         response.set_cookie(
             key=SESSION_COOKIE,
             value=token,
@@ -465,6 +442,16 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 ),
                 status_code=422,
             )
+        current = next(
+            (p for p in list_profiles(adapters) if p.id == profile_id), None
+        )
+        if role == CLIENT_ROLE and current is not None and current.role != CLIENT_ROLE:
+            return _html(
+                admin.render_profiles(
+                    list_profiles(adapters), session.csrf_token, CLIENT_ROLE_ERROR
+                ),
+                status_code=422,
+            )
         try:
             change_role(profile_id, role, adapters)
         except ProfileNotFound:
@@ -508,70 +495,6 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 issued.token, link, issued.expires_at, session.csrf_token
             )
         )
-
-    @router.post("/admin/profiles/{profile_id}/2fa/reset")
-    async def reset_profile_two_factor(profile_id: str, request: Request) -> Response:
-        """R35–R38, R40: solo un admin con CSRF restablece el segundo factor."""
-        token = request.cookies.get(SESSION_COOKIE)
-        if not token:
-            raise LoginRequired()
-        session = adapters.repository.get_session_any(
-            hash_token(token), adapters.clock()
-        )
-        if session is None:
-            raise LoginRequired()
-        actor = _actor(session, adapters)
-        if actor is None or actor.role != "admin":
-            if actor is not None:
-                _audit(
-                    actor,
-                    "two_factor_reset",
-                    "forbidden",
-                    adapters,
-                    target=profile_id,
-                )
-            return _html(
-                admin.render_error(403, "forbidden", session.csrf_token),
-                status_code=403,
-            )
-        form = await _form(request)
-        _require_csrf_audited(
-            session,
-            form,
-            actor,
-            "two_factor_reset",
-            adapters,
-            target=profile_id,
-        )
-        try:
-            reset_two_factor(actor, profile_id, adapters)
-        except ProfileNotFound:
-            _audit(actor, "two_factor_reset", "profile_not_found", adapters,
-                   target=profile_id)
-            return _html(
-                admin.render_message(
-                    "Perfil no encontrado", "profile_not_found", session.csrf_token
-                ),
-                status_code=404,
-            )
-        except TwoFactorNotEnabled:
-            _audit(actor, "two_factor_reset", "two_factor_not_enabled", adapters,
-                   target=profile_id)
-            return _html(
-                admin.render_profiles(
-                    list_profiles(adapters),
-                    session.csrf_token,
-                    "two_factor_not_enabled",
-                ),
-                status_code=409,
-            )
-        except DomainError as exc:
-            _audit(actor, "two_factor_reset", exc.code, adapters, target=profile_id)
-            return _html(
-                admin.render_error(exc.status_code, exc.code, session.csrf_token),
-                status_code=exc.status_code,
-            )
-        return _redirect("/admin/profiles")
 
     @router.get("/admin/events")
     async def events_page(request: Request) -> HTMLResponse:

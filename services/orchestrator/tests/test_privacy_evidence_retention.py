@@ -1,7 +1,6 @@
 """Retención y supresión de la evidencia de consentimiento (#57)."""
 from __future__ import annotations
 
-import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -496,7 +495,6 @@ def test_approved_values_pass_production_validation():
         identity_public_base_url="https://orchestrator.example",
         identity_link_signing_key="k" * 32,
         identity_login_required=True,
-        panel_2fa_encryption_key=base64.urlsafe_b64encode(b"k" * 32).decode("ascii"),
     )
 
     assert settings.retention_days == 30

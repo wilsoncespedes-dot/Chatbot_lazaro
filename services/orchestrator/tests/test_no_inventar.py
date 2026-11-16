@@ -21,7 +21,7 @@ from orchestrator.domain import (
     validate_llm_answer,
 )
 
-NO_ANSWER = "No encontré información sobre eso en los manuales. Te paso con un asesor."
+NO_ANSWER = "No encontré información sobre eso en los manuales. Si quieres hablar con una persona, escribe «quiero un asesor»."
 ROOT = Path(__file__).resolve().parents[3]
 PKG = Path(__file__).resolve().parents[1] / "orchestrator"
 

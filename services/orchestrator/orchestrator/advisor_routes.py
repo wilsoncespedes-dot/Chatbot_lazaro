@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -12,9 +13,6 @@ from . import admin, advisor_panel
 from .accounts import hash_token
 from .admin_routes import (
     LOGIN_ERROR,
-    TWO_FACTOR_INVALID,
-    TWO_FACTOR_REQUIRED,
-    TWO_FACTOR_UNAVAILABLE,
     CsrfInvalid,
     LoginRequired,
     _form,
@@ -33,9 +31,6 @@ from .domain import (
     LoginThrottled,
     PanelValidationError,
     ServiceUnavailable,
-    TwoFactorCodeInvalid,
-    TwoFactorCodeRequired,
-    TwoFactorUnavailable,
     UpstreamError,
     add_case_note,
     admin_metrics,
@@ -202,31 +197,9 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 ("asesor", "supervisor", "responsable_datos"),
                 settings,
                 adapters,
-                form.get("code", ""),
             )
         except LoginThrottled:
             return _html(advisor_panel.render_advisor_login(LOGIN_ERROR), status_code=429)
-        except TwoFactorCodeRequired:
-            return _html(
-                advisor_panel.render_advisor_login(
-                    TWO_FACTOR_REQUIRED, "two_factor_required"
-                ),
-                status_code=401,
-            )
-        except TwoFactorCodeInvalid:
-            return _html(
-                advisor_panel.render_advisor_login(
-                    TWO_FACTOR_INVALID, "two_factor_invalid"
-                ),
-                status_code=401,
-            )
-        except TwoFactorUnavailable:
-            return _html(
-                advisor_panel.render_advisor_login(
-                    TWO_FACTOR_UNAVAILABLE, "two_factor_unavailable"
-                ),
-                status_code=503,
-            )
         if token is None:
             return _html(advisor_panel.render_advisor_login(LOGIN_ERROR), status_code=401)
         session = adapters.repository.get_session_any(
@@ -237,14 +210,11 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
             if session is not None
             else None
         )
-        if session is not None and session.enroll_only:
-            target = "/asesor/2fa"
-        else:
-            target = (
-                "/asesor/supresiones"
-                if profile is not None and profile.role == "responsable_datos"
-                else "/asesor"
-            )
+        target = (
+            "/asesor/supresiones"
+            if profile is not None and profile.role == "responsable_datos"
+            else "/asesor"
+        )
         response = _redirect(target)
         response.set_cookie(
             key=ADVISOR_SESSION_COOKIE,
@@ -585,6 +555,8 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
             case_id=case_id,
             target=template or None,
         )
+        if form.get("origen", "") == "caso":
+            return _redirect(f"/asesor/cases/{quote(case_id, safe='')}")
         return _redirect("/asesor?ok=reply")
 
     @router.post("/asesor/assign")
