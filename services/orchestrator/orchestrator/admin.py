@@ -35,7 +35,6 @@ ERROR_MESSAGES = {
     ),
 }
 
-_EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+")
 _LONG_DIGITS_RE = re.compile(r"\d{6,}")
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,}")
 
@@ -170,9 +169,29 @@ select:focus-visible, textarea:focus-visible {
 """
 
 
+def _redact_emails(text: str) -> str:
+    output: list[str] = []
+    for token in re.split(r"(\s+)", text):
+        if not token or token.isspace():
+            output.append(token)
+            continue
+        parts = token.split("@")
+        index = 0
+        while index < len(parts):
+            if index + 1 < len(parts) and parts[index] and parts[index + 1]:
+                output.append(REDACTED)
+                index += 2
+            else:
+                output.append(parts[index])
+                index += 1
+            if index < len(parts):
+                output.append("@")
+    return "".join(output)
+
+
 def redact_reason(reason: str) -> str:
     """Oculta correos, secuencias de 6+ dígitos y cadenas URL-safe de 20+ caracteres."""
-    reason = _EMAIL_RE.sub(REDACTED, reason)
+    reason = _redact_emails(reason)
     reason = _LONG_DIGITS_RE.sub(REDACTED, reason)
     return _LONG_TOKEN_RE.sub(REDACTED, reason)
 

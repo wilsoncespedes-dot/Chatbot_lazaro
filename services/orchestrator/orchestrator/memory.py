@@ -75,7 +75,13 @@ def in_window(at: datetime, window: tuple[datetime, datetime, datetime]) -> bool
     return since <= at <= until and at < idle_limit
 
 
-_EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+def _contains_email(text: str) -> bool:
+    for word in text.split():
+        parts = word.split("@")
+        for index in range(len(parts) - 1):
+            if parts[index] and "." in parts[index + 1][1:-1]:
+                return True
+    return False
 
 
 def is_sensitive(text: str, keywords: Sequence[str], min_digits: int) -> bool:
@@ -87,7 +93,7 @@ def is_sensitive(text: str, keywords: Sequence[str], min_digits: int) -> bool:
         return True
     if _has_sensitive_digits(text, min_digits):
         return True
-    return _EMAIL.search(text) is not None
+    return _contains_email(text)
 
 
 def _digits_pattern(min_digits: int) -> re.Pattern[str]:
@@ -106,7 +112,7 @@ def _is_sensitive_with(text: str, keywords: Sequence[str], min_digits: int) -> b
         return True
     if _has_sensitive_digits(text, min_digits):
         return True
-    return _EMAIL.search(text) is not None
+    return _contains_email(text)
 
 
 def clean_memory_items(

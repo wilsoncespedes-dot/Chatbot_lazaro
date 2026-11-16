@@ -6,7 +6,7 @@ import hmac
 import re
 import secrets
 
-PASSWORD_SCHEME = "pbkdf2_sha256"
+PASSWORD_SCHEME = "pbkdf2_sha256"  # NOSONAR: nombre de algoritmo, no credencial
 SCRYPT_SCHEME = "scrypt"
 SALT_BYTES = 16
 SCRYPT_KEY_BYTES = 32

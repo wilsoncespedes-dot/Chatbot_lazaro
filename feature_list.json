@@ -73,6 +73,7 @@
     {"id": 54, "name": "segundo_factor_panel", "title": "Segundo factor en el acceso del personal al panel", "sdd": true, "status": "done"},
     {"id": 55, "name": "evaluacion_ataques_y_preguntas_reales", "title": "Evaluación con casos de ataque y preguntas reales", "sdd": true, "status": "done"},
     {"id": 56, "name": "rediseño_visual_paneles", "title": "Rediseño visual moderno de los paneles", "sdd": true, "status": "done"},
-    {"id": 57, "name": "retencion_evidencia_y_privacidad_inicial", "title": "Aplicar la retención aprobada a la evidencia de consentimiento", "sdd": true, "status": "done"}
+    {"id": 57, "name": "retencion_evidencia_y_privacidad_inicial", "title": "Aplicar la retención aprobada a la evidencia de consentimiento", "sdd": true, "status": "done"},
+    {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"}
   ]
 }

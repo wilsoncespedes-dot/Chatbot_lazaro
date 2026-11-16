@@ -36,20 +36,18 @@ def _response_ok(response: httpx.Response) -> tuple[bool, dict]:
     return bool(body.get("ok")), body
 
 
-def _network_error(exc: Exception) -> int:
+def _network_error(exc: Exception) -> None:
     print(
         f"Error de red al llamar a Telegram: {type(exc).__name__}",
         file=sys.stderr,
     )
-    return 1
 
 
-def _http_error(action: str, response: httpx.Response) -> int:
+def _http_error(action: str, response: httpx.Response) -> None:
     print(
         f"{action} falló: Telegram respondió con código {response.status_code}",
         file=sys.stderr,
     )
-    return 1
 
 
 def _print_webhook_info(result: Mapping[str, object]) -> None:
@@ -117,18 +115,22 @@ def main(
             try:
                 response = http.post(f"{API_BASE}/bot{token}/setWebhook", json=payload)
             except Exception as exc:
-                return _network_error(exc)
+                _network_error(exc)
+                return 1
             ok, _ = _response_ok(response)
             if not ok:
-                return _http_error("setWebhook", response)
+                _http_error("setWebhook", response)
+                return 1
 
         try:
             response = http.get(f"{API_BASE}/bot{token}/getWebhookInfo")
         except Exception as exc:
-            return _network_error(exc)
+            _network_error(exc)
+            return 1
         ok, body = _response_ok(response)
         if not ok:
-            return _http_error("getWebhookInfo", response)
+            _http_error("getWebhookInfo", response)
+            return 1
         result = body.get("result")
         _print_webhook_info(result if isinstance(result, dict) else {})
         return 0

@@ -1,10 +1,16 @@
 """Tests del arranque seguro en producción de rag (#24)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+from fastapi import FastAPI
 from pydantic import ValidationError
 
 from rag.config import Settings
+from rag.main import create_app
+
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "rag" / "config.py"
 
 TOKEN = "s" * 40
 VALID = {
@@ -64,3 +70,31 @@ def test_error_message_does_not_include_values():
     text = _failure(embeddings_api_key="", embeddings_model=secret)
     assert "EMBEDDINGS_API_KEY" in text
     assert secret not in text
+
+
+def test_database_url_defaults_to_empty(monkeypatch):
+    """R5: sin DATABASE_URL el valor por defecto es vacío y sin DSN de desarrollo."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert Settings().database_url == ""
+    assert "lazaro:lazaro@" not in CONFIG_PATH.read_text(encoding="utf-8")
+
+
+def test_create_app_without_database_url_does_not_connect(monkeypatch):
+    """R6: sin DATABASE_URL ni APP_ENV, create_app no abre ninguna conexión."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("create_app no debe conectar a la base de datos")
+
+    monkeypatch.setattr("rag.adapters.repository._pg_connect", boom)
+    assert isinstance(create_app(), FastAPI)
+
+
+def test_production_without_database_url_is_rejected(monkeypatch):
+    """R7: en producción un DATABASE_URL vacío impide arrancar."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    values = {key: value for key, value in VALID.items() if key != "database_url"}
+    with pytest.raises(ValidationError) as exc:
+        Settings(**values)
+    assert "Configuración de producción inválida: DATABASE_URL" in str(exc.value)

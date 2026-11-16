@@ -37,7 +37,7 @@ def normalize_service_url(value: str) -> str:
         return ""
     if "://" in text:
         return text
-    return f"http://{text}"
+    return f"http://{text}"  # NOSONAR: red privada entre servicios (#24)
 
 
 def parse_app_env(value: str) -> AppEnv:

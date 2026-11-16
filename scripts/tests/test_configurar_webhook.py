@@ -181,3 +181,68 @@ def test_env_example_declares_environment_and_public_url():
         if "=" in line and not line.lstrip().startswith("#")
     }
     assert {"APP_ENV", "PUBLIC_BASE_URL"} <= lines
+
+
+def test_error_helpers_return_none(capsys):
+    """R8: los helpers solo escriben en stderr y devuelven None."""
+    assert webhook._network_error(RuntimeError("x")) is None
+    assert "Error de red al llamar a Telegram: RuntimeError" in capsys.readouterr().err
+    assert webhook._http_error("setWebhook", httpx.Response(500)) is None
+    assert (
+        "setWebhook falló: Telegram respondió con código 500"
+        in capsys.readouterr().err
+    )
+
+
+def test_http_error_exits_with_one(capsys):
+    """R9: una respuesta sin éxito devuelve 1 y conserva el mensaje."""
+
+    def handler(request):
+        return httpx.Response(500, text="x")
+
+    assert webhook.main([], env=VALID_ENV, client=_client(handler)) == 1
+    assert (
+        "setWebhook falló: Telegram respondió con código 500"
+        in capsys.readouterr().err
+    )
+
+    assert (
+        webhook.main(
+            ["--solo-consultar"],
+            env={"TELEGRAM_BOT_TOKEN": TOKEN},
+            client=_client(handler),
+        )
+        == 1
+    )
+    assert (
+        "getWebhookInfo falló: Telegram respondió con código 500"
+        in capsys.readouterr().err
+    )
+
+
+def test_network_error_exits_with_one(capsys):
+    """R9: un fallo de red devuelve 1 y nombra la excepción."""
+
+    def handler(request):
+        raise httpx.ConnectError("sin conexión")
+
+    assert webhook.main([], env=VALID_ENV, client=_client(handler)) == 1
+    assert (
+        "Error de red al llamar a Telegram: ConnectError"
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {key: value for key, value in VALID_ENV.items() if key != "TELEGRAM_BOT_TOKEN"},
+        {**VALID_ENV, "PUBLIC_BASE_URL": "http://lazaro-gateway.onrender.com"},
+        {**VALID_ENV, "TELEGRAM_WEBHOOK_SECRET": "cambia-esto"},
+    ],
+)
+def test_config_errors_exit_with_two(env):
+    """R10: los errores de configuración devuelven 2 sin llamar a Telegram."""
+    calls: list = []
+    assert webhook.main([], env=env, client=_telegram_ok(calls)) == 2
+    assert calls == []

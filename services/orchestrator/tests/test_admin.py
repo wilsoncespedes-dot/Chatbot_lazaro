@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+import orchestrator.admin
 from orchestrator.adapters.db_query import FakeDbQuery
 from orchestrator.adapters.gateway import FakeGatewayClient
 from orchestrator.adapters.handover import FakeHandoverClient
@@ -17,6 +19,7 @@ from orchestrator.adapters.llm import FakeLLM
 from orchestrator.adapters.rag import FakeRagClient
 from orchestrator.adapters.repository import FakeRepository
 from orchestrator.accounts import hash_token
+from orchestrator.admin import redact_reason
 from orchestrator.config import Settings
 from orchestrator.domain import Adapters
 from orchestrator.main import create_app
@@ -691,3 +694,41 @@ def test_navigation_links_to_new_admin_sections(env):
         "/admin/metricas",
     ):
         assert f'href="{href}"' in page.text
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("ana@example.com", "[redactado]"),
+        ("a@b@c", "[redactado]@c"),
+        ("a@b@c@d", "[redactado]@[redactado]"),
+        ("x a@b y c@d", "x [redactado] y [redactado]"),
+        ("a@b\t c@d\n", "[redactado]\t [redactado]\n"),
+        ("@b", "@b"),
+        ("a@", "a@"),
+        ("a@@b", "a@@b"),
+        ("a @ b", "a @ b"),
+        ("", ""),
+    ],
+)
+def test_redact_reason_matches_previous_email_regex(reason, expected):
+    """R2: la redacción de correos equivale a sustituir `[^\\s@]+@[^\\s@]+` por el texto fijo."""
+    assert redact_reason(reason) == expected
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["a" * 100000, "a@" + "b" * 100000, "@" * 100000, "a@" * 50000],
+    ids=["solo_a", "a_arroba_b", "solo_arrobas", "a_arroba_repetido"],
+)
+def test_redact_reason_is_linear_on_adversarial_input(reason):
+    """R3: la redacción de entradas adversarias termina en menos de 2 segundos."""
+    started = time.perf_counter()
+    redact_reason(reason)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 2
+
+
+def test_admin_has_no_email_regex():
+    """R4: `admin.py` ya no define la regex `_EMAIL_RE`."""
+    assert not hasattr(orchestrator.admin, "_EMAIL_RE")

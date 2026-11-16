@@ -1,10 +1,12 @@
 """Lógica pura de memoria por cliente: ventana, sensibles, prompt y parser (#40)."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import orchestrator.memory
 from orchestrator.memory import (
     MEMORY_CONTEXT_NOTE,
     MEMORY_SUMMARY_PROMPT,
@@ -175,3 +177,43 @@ def test_memory_context_note_marks_context_as_not_citable():
     assert "<historial>" in MEMORY_CONTEXT_NOTE
     assert "<fragmento>" in MEMORY_CONTEXT_NOTE
     assert PromptContext(memory=(), history=()).memory == ()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("ana@example.com", True),
+        ("x a@b.c y", True),
+        ("ana@mail.example.com", True),
+        ("a@b@c.d", True),
+        ("ana@example", False),
+        ("@example.com", False),
+        ("ana@.com", False),
+        ("ana@example.", False),
+        ("ana @example.com", False),
+        ("ana@ example.com", False),
+        ("sin arroba.com", False),
+    ],
+)
+def test_email_detection_matches_previous_regex(text, expected):
+    """R1: la detección de correo equivale a `[^\\s@]+@[^\\s@]+\\.[^\\s@]+` con search."""
+    assert is_sensitive(text, (), 6) is expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a" * 100000, "a@" + "b" * 100000, "@" * 100000, "a@" * 50000],
+    ids=["solo_a", "a_arroba_b", "solo_arrobas", "a_arroba_repetido"],
+)
+def test_email_detection_is_linear_on_adversarial_input(text):
+    """R3: entradas adversarias se evalúan en menos de 2 segundos y no son correo."""
+    started = time.perf_counter()
+    result = is_sensitive(text, (), 6)
+    elapsed = time.perf_counter() - started
+    assert result is False
+    assert elapsed < 2
+
+
+def test_memory_has_no_email_regex():
+    """R4: `memory.py` ya no define la regex `_EMAIL`."""
+    assert not hasattr(orchestrator.memory, "_EMAIL")

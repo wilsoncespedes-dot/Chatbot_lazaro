@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     service_token: str = ""
-    database_url: str = "postgresql://lazaro:lazaro@postgres:5432/lazaro"
+    database_url: str = ""
     embeddings_base_url: str = "https://api.openai.com/v1"
     embeddings_api_key: str = ""
     embeddings_model: str = ""

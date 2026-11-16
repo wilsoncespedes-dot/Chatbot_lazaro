@@ -11,7 +11,10 @@ from rag.domain import Chunk, ChunkNotFound, EmbeddingsUnavailable, cosine_simil
 
 def test_fake_embeddings_is_deterministic():
     """R23: mismo texto -> mismo vector en instancias distintas."""
-    assert FakeEmbeddings().embed(["hola mundo"]) == FakeEmbeddings().embed(["hola mundo"])
+    first = FakeEmbeddings().embed(["hola mundo"])
+    second = FakeEmbeddings().embed(["hola mundo"])
+    assert first == second
+    assert first and first[0]
 
 
 def test_fake_embeddings_same_text_cosine_one():
