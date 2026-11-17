@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
     rag_top_k: int = Field(default=5, ge=1, le=20)
+    # #64: preguntas de seguimiento ("¿y cómo la anulo?") buscan también con la
+    # pregunta anterior del mismo contacto.
+    rag_followup_enabled: bool = True
+    rag_followup_max_words: int = Field(default=8, ge=1, le=50)
+    rag_followup_window_minutes: int = Field(default=30, ge=1, le=1440)
     no_answer_reply: str = (
         "No encontré información sobre eso en los manuales. Si quieres hablar "
         "con una persona, escribe «quiero un asesor»."

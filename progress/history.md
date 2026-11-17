@@ -104,3 +104,6 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 
 ## 2026-11-17 — #62 validacion_respuestas_flexible (done)
 - La validación anti-alucinación dejaba de rechazar respuestas correctas: quita bloques ```json, ignora marcadores de pasos al inicio de línea y compara citas sin tildes ni puntuación (palabras completas). Cifras inventadas y paráfrasis se siguen rechazando. Spec `specs/validacion_respuestas_flexible/`. PR #5.
+
+## 2026-11-17 — #63 fragmentos_por_seccion (done)
+- `rag.domain.chunk_text` trocea por secciones (títulos Markdown y numerados) y frases, con la ruta de títulos al inicio de cada fragmento; la extracción DOCX conserva títulos y filas de tabla. Requiere volver a subir los manuales. Spec `specs/fragmentos_por_seccion/`. PR #6 (encima de #5).

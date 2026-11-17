@@ -28,13 +28,11 @@
 - Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
   sesión se formaliza como feature.
 
-## 2026-11-17 — #63 fragmentos_por_seccion (in_progress, rama `lazaro/fragmentos-por-seccion`, encima de PR #5)
+## 2026-11-17 — #64 preguntas_seguimiento (in_progress, rama `lazaro/preguntas-seguimiento`, encima de PR #6)
 
-- `rag.domain.chunk_text` trocea por secciones (títulos Markdown y numerados
-  "2.1 …") y frases, con la ruta de títulos al inicio de cada fragmento; ya no
-  corta palabras ni mezcla secciones. La ventana por caracteres queda como
-  último recurso para palabras más largas que el fragmento.
-- `extraction`: títulos de Word como "## Título" y filas de tabla unidas
-  ("Plan | Usuarios | Precio").
-- Operación: los manuales ya cargados conservan sus fragmentos antiguos;
-  hay que volver a subirlos desde el panel para aprovechar el cambio.
+- `_tool_rag`: si el mensaje tiene <= RAG_FOLLOWUP_MAX_WORDS palabras y el
+  contacto hizo otra pregunta en los últimos RAG_FOLLOWUP_WINDOW_MINUTES, se
+  busca con el mensaje y con "pregunta anterior + mensaje" y se combinan los
+  resultados (mejor puntuación, sin duplicados).
+- El prompt recibe `<pregunta_anterior>` (neutralizada) solo como contexto.
+- Funciona también sin sesión iniciada (usa `last_messages` del contacto).
