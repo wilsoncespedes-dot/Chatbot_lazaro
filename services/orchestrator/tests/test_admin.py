@@ -319,7 +319,9 @@ def test_admin_html_has_csp_and_no_external_resources(env):
     for response in _admin_pages(env):
         assert response.status_code == 200
         assert response.headers["content-security-policy"] == expected
-        assert "<script" not in response.text.lower()
+        # #60 R26: solo el script propio del login (mismo origen) está permitido.
+        own = '<script src="/admin/static/login.js" defer></script>'
+        assert "<script" not in response.text.lower().replace(own, "")
         for value in re.findall(r'(?:src|href)="([^"]*)"', response.text):
             assert not value.startswith(("http://", "https://", "//"))
 

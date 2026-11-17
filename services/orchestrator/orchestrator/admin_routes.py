@@ -347,6 +347,15 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
             headers=admin.security_headers(),
         )
 
+    @router.get("/admin/static/login.js")
+    async def login_js() -> Response:
+        """#60 R26: botón para ver la contraseña; público, como admin.css."""
+        return Response(
+            content=admin.LOGIN_JS,
+            media_type="text/javascript",
+            headers=admin.security_headers(),
+        )
+
     @router.get("/admin/login")
     async def login_page() -> HTMLResponse:
         return _html(admin.render_login())

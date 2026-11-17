@@ -12,3 +12,4 @@
 - [x] T10 Inicio de asesores con accesos, presencia y tarjetas de acción (R24).
 - [x] T11 `metrics_body` compartido con tarjetas de cifras (R25).
 - [x] T12 Pruebas R23–R25, `./init.sh` y revisión visual.
+- [x] T13 Botón para ver la contraseña en los tres logins (R26).
