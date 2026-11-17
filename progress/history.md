@@ -98,3 +98,6 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - Nueva identidad visual (turquesa, claro/oscuro) en `/admin`, `/asesor` y `/acceso`; marca "Lázaro Software". Shell común con menú lateral agrupado e iconos SVG en línea; menú de asesores por rol (Atención / Supervisión / Privacidad) vía `ContextVar`.
 - Inicio con accesos rápidos, editor de "Textos del flujo" en dos columnas sin JS (`:target` + `:has()`), perfiles con avatar e insignias, métricas en tarjetas (`admin.metrics_body`), login nuevo con ojo para ver la contraseña (`/admin/static/login.js`, R26).
 - Escrito por Claude a pedido del usuario (OpenCode no instalado en ese equipo). Spec `specs/rediseno_identidad_panel/` (R1–R26). PR #1 y #2 unidos por el dueño. `./init.sh`: 3650 passed, 1 skipped.
+
+## 2026-11-17 — #61 fechas_y_formularios_panel (done)
+- Fechas legibles ("17 nov 2026, 2:33 p. m.") en la zona del negocio con `admin.time_html`, también en el chat del caso y el JS en vivo (sustituye `dd/mm HH:MM UTC` de #59 R3). Formularios de alta en cuadrícula (`create-form`) y acciones de Clientes de igual ancho. R7: `/admin/supresiones` dentro del panel admin (PR #4). Spec `specs/fechas_y_formularios_panel/`. PR #3 unido.

@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Callable, Literal, Mapping
@@ -159,8 +160,9 @@ LLM_SYSTEM_PROMPT = (
     "Responde SOLO con un JSON válido, sin texto adicional ni bloques de código, con la forma "
     '{"answer": <texto>, "citations": [{"chunk_id": <texto>, "quote": <texto>}]}. '
     "Cada cita debe usar el id de un <fragmento> proporcionado y un quote copiado "
-    "literalmente de ese fragmento. Cualquier número de answer debe aparecer en los "
-    "fragmentos citados. Si los fragmentos no bastan, no inventes: responde con "
+    "literalmente de ese fragmento. Puedes usar pasos numerados (1., 2., 3.); "
+    "cualquier otra cifra de answer debe aparecer en los fragmentos citados. "
+    "Si los fragmentos no bastan, no inventes: responde con "
     "citations vacía."
 )
 
@@ -554,10 +556,43 @@ def extract_numbers(text: str) -> set[str]:
     return set(_NUMBER_RE.findall(text))
 
 
+# #62: falsos rechazos de la validación anti-alucinación.
+_CODE_FENCE_RE = re.compile(r"^```[\w-]*[ \t]*\n(.*)\n?```$", re.S)
+_STEP_MARKER_RE = re.compile(r"(?im)^[ \t]*(?:paso[ \t]+)?\d{1,2}[ \t]*[.):-][ \t]+")
+_NON_WORD_RE = re.compile(r"[^\w]+")
+
+
+def _strip_code_fence(raw: str) -> str:
+    """R1: quita un bloque ```json … ``` que envuelva toda la salida."""
+    text = raw.strip()
+    match = _CODE_FENCE_RE.match(text)
+    return match.group(1).strip() if match else text
+
+
+def _answer_numbers(answer: str) -> set[str]:
+    """R3: cifras de la respuesta sin contar los marcadores de pasos ("1.", "Paso 2:")."""
+    return extract_numbers(_STEP_MARKER_RE.sub("", answer))
+
+
+def _loose_text(text: str) -> str:
+    """R5: minúsculas, sin tildes ni puntuación, palabras separadas por un espacio."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    without_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(_NON_WORD_RE.sub(" ", without_marks).replace("_", " ").split())
+
+
+def _quote_in_chunk(quote: str, chunk_text: str) -> bool:
+    """R5, R6: la cita debe estar, palabra por palabra, en su propio fragmento."""
+    loose_quote = _loose_text(quote)
+    if not loose_quote:
+        return False
+    return f" {loose_quote} " in f" {_loose_text(chunk_text)} "
+
+
 def validate_llm_answer(raw: str, chunks: list[SearchResult]) -> LLMAnswer:
     """Valida la salida del LLM contra los fragmentos. Pura: sin IO."""
     try:
-        data = json.loads(raw)
+        data = json.loads(_strip_code_fence(raw))
     except ValueError:
         raise InvalidAnswer("invalid_json") from None
     try:
@@ -571,12 +606,11 @@ def validate_llm_answer(raw: str, chunks: list[SearchResult]) -> LLMAnswer:
         raise InvalidAnswer("foreign_chunk_id")
     cited_numbers: set[str] = set()
     for cit in parsed.citations:
-        quote = normalize_quote(cit.quote)
         text = by_id[cit.chunk_id].text
-        if not quote or quote not in normalize_quote(text):
+        if not _quote_in_chunk(cit.quote, text):
             raise InvalidAnswer("quote_not_literal")
         cited_numbers |= extract_numbers(text)
-    if not extract_numbers(parsed.answer) <= cited_numbers:
+    if not _answer_numbers(parsed.answer) <= cited_numbers:
         raise InvalidAnswer("number_not_in_citations")
     return parsed
 

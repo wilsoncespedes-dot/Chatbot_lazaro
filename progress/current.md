@@ -28,11 +28,14 @@
 - Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
   sesión se formaliza como feature.
 
-## 2026-11-17 — #61 fechas_y_formularios_panel (in_progress, rama `lazaro/ajustes-fechas-formularios`)
+## 2026-11-17 — #62 validacion_respuestas_flexible (in_progress, rama `lazaro/validacion-respuestas`)
 
-- Fechas legibles ("17 nov 2026, 2:33 p. m.") en la zona del negocio
-  (`BUSINESS_HOURS_UTC_OFFSET_MINUTES`) con `admin.time_html`; el chat del caso
-  y el JS en vivo usan el mismo formato (sustituye `dd/mm HH:MM UTC` de #59 R3).
-- Formularios de alta en cuadrícula alineada (`create-form`) y acciones de
-  Clientes con botones del mismo ancho (`row-actions`).
-- Pruebas en `tests/test_fechas_formularios.py`.
+- Diagnóstico: la validación anti-alucinación rechazaba respuestas correctas
+  (pasos numerados → `number_not_in_citations`; JSON en ```json → `invalid_json`;
+  citas con otra tilde o coma → `quote_not_literal`) y el cliente recibía
+  "No encontré información…". El usuario confirma `RAG_SIMILARITY_THRESHOLD=0.5`.
+- Cambio: quitar el bloque de código, ignorar marcadores de pasos al inicio de
+  línea y comparar citas sin tildes ni puntuación (palabras completas). Cifras
+  inventadas, paráfrasis y citas de otro fragmento se siguen rechazando.
+- Pendiente (otras features): fragmentación por secciones, búsqueda híbrida,
+  preguntas de seguimiento con historial, medir con `eval/run_eval.py`.

@@ -77,6 +77,7 @@
     {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"},
     {"id": 59, "name": "chat_caso_asesor", "title": "Vista de chat en el detalle del caso del panel de asesores", "sdd": true, "status": "done"},
     {"id": 60, "name": "rediseno_identidad_panel", "title": "Rediseño de los paneles con la nueva identidad visual (menú lateral agrupado, editor de textos del flujo, login)", "sdd": true, "status": "done"},
-    {"id": 61, "name": "fechas_y_formularios_panel", "title": "Fechas legibles y formularios simétricos en los paneles", "sdd": true, "status": "in_progress"}
+    {"id": 61, "name": "fechas_y_formularios_panel", "title": "Fechas legibles y formularios simétricos en los paneles", "sdd": true, "status": "done"},
+    {"id": 62, "name": "validacion_respuestas_flexible", "title": "Validación de respuestas del bot sin falsos rechazos (bloques de código, pasos numerados, citas con tildes o puntuación)", "sdd": true, "status": "in_progress"}
   ]
 }
