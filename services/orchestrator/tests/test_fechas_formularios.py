@@ -123,3 +123,28 @@ def test_validity_dates_show_local_date_only():
     late = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
     assert admin.human_datetime(late, with_time=False) == "1 ene 2026"
     assert ">1 ene 2026</time>" in admin.time_html(late, with_time=False)
+
+
+# --- R7: supresiones desde el panel administrativo ---------------------------------
+
+
+def test_admin_suppressions_stay_in_admin_panel(env_factory, panel):
+    """R7: /admin/supresiones usa el marco de admin y no enlaza a /asesor."""
+    env = env_factory(suppression_executor_roles="admin")
+    panel.login_admin(env)
+    html = env.client.get("/admin/supresiones").text
+    assert "<small>Panel administrativo</small>" in html
+    assert 'aria-label="Navegación administrativa"' in html
+    assert '<a href="/admin/supresiones" aria-current="page">' in html
+    assert 'action="/admin/logout"' in html
+    assert 'href="/asesor' not in html
+    assert "/asesor/logout" not in html
+
+
+def test_advisor_suppressions_keep_advisor_panel(env_factory, panel):
+    """R7: la cola en /asesor sigue con el marco de asesores."""
+    env = env_factory(suppression_executor_roles="responsable_datos")
+    panel.login(env, role="responsable_datos")
+    html = env.client.get("/asesor/supresiones").text
+    assert "<small>Panel de asesores</small>" in html
+    assert 'action="/asesor/logout"' in html

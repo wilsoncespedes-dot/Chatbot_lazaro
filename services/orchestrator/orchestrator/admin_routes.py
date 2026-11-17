@@ -1080,7 +1080,7 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
         _audit(profile, "suppression_queue_viewed", "ok", adapters)
         return _html(
             advisor_panel.render_suppression_queue(
-                rows, session.csrf_token, "/admin/supresiones"
+                rows, session.csrf_token, "/admin/supresiones", panel="admin"
             )
         )
 

@@ -28,3 +28,9 @@ alineados arriba, las áreas de texto a todo el ancho y el botón debajo.
 ## R6
 Las acciones de cada cliente (Renovar, Revocar, Cerrar sesión) DEBEN
 mostrarse en una fila con botones del mismo ancho.
+
+## R7
+CUANDO un administrador abre `/admin/supresiones`, el sistema DEBE mostrar la
+cola de supresión dentro del panel administrativo (marca "Panel
+administrativo", menú de `/admin` con Supresiones activo y salida
+`/admin/logout`), sin enlaces al panel de asesores.
