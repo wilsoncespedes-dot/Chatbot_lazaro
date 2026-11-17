@@ -197,13 +197,12 @@ def test_selection_works_without_javascript(env_factory, panel):
 
 
 def test_profiles_card_avatar_badge_and_pill(env_factory, panel):
-    """R18: tarjeta "Nuevo perfil", avatar, insignia de rol y Sí/No."""
+    """R18: tarjeta "Nuevo perfil", avatar e insignia de rol (#65 quitó la columna de Telegram)."""
     html = _admin_page(env_factory, panel, "/admin/profiles")
     assert 'class="card form-grid"><h2 class="card-title">Nuevo perfil</h2>' in html
-    assert "<th>Telegram vinculado</th>" in html
     assert re.search(r'<span class="av" aria-hidden="true">A</span>admin1', html)
     assert '<span class="badge">admin</span>' in html
-    assert re.search(r'<span class="pill pill-(yes|no)">(Sí|No)</span>', html)
+    assert "<th>Telegram vinculado</th>" not in html
 
 
 # --- R19, R20: inicio de sesión ---------------------------------------------------------

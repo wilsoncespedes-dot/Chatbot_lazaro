@@ -99,7 +99,6 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/static/login.js",
         "/admin/profiles",
         "/admin/profiles/{profile_id}/role",
-        "/admin/profiles/{profile_id}/link-token",
         "/admin/events",
         "/admin/manuals",
         "/admin/manuals/{manual_id}",

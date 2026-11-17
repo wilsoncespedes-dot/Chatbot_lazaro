@@ -903,7 +903,6 @@ STAFF_PROFILE_ROLES = ("admin", "supervisor", "asesor", "responsable_datos")
 def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
     rows = []
     for profile in profiles:
-        linked = "Sí" if profile.telegram_user_id is not None else "No"
         # `cliente` solo aparece si ya es el rol actual: los clientes se crean
         # en /admin/clientes, que les asigna credencial.
         roles = STAFF_PROFILE_ROLES + (
@@ -915,25 +914,17 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
             for role in roles
         )
         initial = (profile.username or "?")[:1].upper()
-        pill = "pill-yes" if profile.telegram_user_id is not None else "pill-no"
         rows.append(
             "<tr>"
             f'<td><span class="user-cell"><span class="av" aria-hidden="true">'
             f"{_esc(initial)}</span>{_esc(profile.username)}</span></td>"
             f'<td><span class="badge">{_esc(profile.role)}</span></td>'
-            f'<td><span class="pill {pill}">{linked}</span></td>'
             "<td>"
             f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/role" '
             'class="inline-form">'
             f"{csrf_field(csrf)}"
             f'<select name="role">{role_options}</select>'
             '<button type="submit" class="btn-secondary">Cambiar rol</button>'
-            "</form>"
-            "</td>"
-            "<td>"
-            f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/link-token">'
-            f"{csrf_field(csrf)}"
-            '<button type="submit" class="btn-secondary">Generar enlace</button>'
             "</form>"
             "</td>"
             "</tr>"
@@ -960,24 +951,13 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         '<button type="submit">Crear perfil</button>'
         "</form>"
         + _table_wrap(
-            "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Telegram vinculado</th>"
-            "<th>Cambiar rol</th><th>Enlace de Telegram</th>"
+            "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Cambiar rol</th>"
             "</tr></thead><tbody>"
             f"{''.join(rows)}"
             "</tbody></table>"
         )
     )
     return render_page("Perfiles y roles", body, csrf, "/admin/profiles")
-
-
-def render_link(token: str, link: str | None, expires_at: datetime, csrf: str) -> str:
-    shown = link if link is not None else token
-    body = (
-        f"<p>Enlace: <code>{_esc(shown)}</code></p>"
-        f"<p>Caduca: {time_html(expires_at)}</p>"
-        '<p><a href="/admin/profiles">Volver a perfiles</a></p>'
-    )
-    return render_page("Enlace de vinculación", body, csrf, "/admin/profiles")
 
 
 def render_events(events, csrf: str) -> str:

@@ -44,7 +44,6 @@ ERROR_MESSAGES = {
     "case_closed": "El caso ya está cerrado.",
     "validation_error": "Los datos enviados no son válidos.",
     "upstream_error": "El servicio de casos no está disponible.",
-    "telegram_not_linked": "Tu perfil no tiene una cuenta de Telegram vinculada.",
     "channel_window_closed": "La ventana de WhatsApp del cliente está cerrada.",
     "advisor_unavailable": "El asesor destino no está disponible.",
     "suppression_not_pending": "La solicitud de supresión ya no está pendiente.",
@@ -165,22 +164,12 @@ def render_advisor_login(message: str | None = None, code: str | None = None) ->
 def render_advisor_home(
     csrf: str,
     ok: str | None = None,
-    linked: bool = True,
     presence: str | None = None,
     role: str = "asesor",
 ) -> str:
     ok_html = ""
     if ok in OK_MESSAGES:
         ok_html = f'<p class="ok" role="status">{_esc(OK_MESSAGES[ok])}</p>\n'
-    if not linked:
-        warning = (
-            '<p class="error" role="alert">'
-            "Tu perfil no tiene una cuenta de Telegram vinculada. Pide a un "
-            "administrador que genere tu enlace de vinculación."
-            "</p>\n"
-        )
-        return _page("Inicio", f"{ok_html}{warning}", csrf, current_path="/asesor")
-
     available = presence == "available"
     state = (
         '<span class="pill pill-yes">Disponible</span>'
