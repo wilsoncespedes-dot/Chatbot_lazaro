@@ -33,13 +33,23 @@ PANEL_LIVE_JS = r"""
     return value < 10 ? "0" + value : "" + value;
   }
 
+  var MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+  function humanDate(value) {
+    var hours = value.getHours();
+    var suffix = hours < 12 ? "a. m." : "p. m.";
+    return value.getDate() + " " + MONTHS[value.getMonth()] + " " + value.getFullYear() +
+      ", " + (hours % 12 || 12) + ":" + pad(value.getMinutes()) + " " + suffix;
+  }
+
   function localizeTimes() {
     var times = region.querySelectorAll("time[datetime]");
     for (var i = 0; i < times.length; i++) {
-      var parsed = new Date(times[i].getAttribute("datetime"));
+      var raw = times[i].getAttribute("datetime");
+      if (raw.indexOf("T") < 0) { continue; }
+      var parsed = new Date(raw);
       if (isNaN(parsed.getTime())) { continue; }
-      times[i].textContent = pad(parsed.getDate()) + "/" + pad(parsed.getMonth() + 1) +
-        " " + pad(parsed.getHours()) + ":" + pad(parsed.getMinutes());
+      times[i].textContent = humanDate(parsed);
     }
   }
 

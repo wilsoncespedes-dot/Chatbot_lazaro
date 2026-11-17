@@ -95,8 +95,8 @@ def _chat_datetime(at: datetime) -> datetime:
 
 
 def _chat_time(at: datetime) -> str:
-    """R3: fecha y hora en UTC con el formato `dd/mm HH:MM UTC`."""
-    return _chat_datetime(at).astimezone(timezone.utc).strftime("%d/%m %H:%M") + " UTC"
+    """#61: mismo formato legible que el resto del panel ("2 ene 2026, 3:04 a. m.")."""
+    return admin.human_datetime(_chat_datetime(at))
 
 
 def _page(
@@ -294,7 +294,7 @@ def render_inbox_table(
             f"<td>{_esc(row.case_id)}</td>"
             f"<td>{_esc(row.channel)}</td>"
             f"<td>{_badge(row.status)}</td>"
-            f"<td>{_esc(row.created_at.isoformat())}</td>"
+            f"<td>{admin.time_html(row.created_at)}</td>"
             f"<td>{_esc(conversation)}</td>"
             f"<td>{_esc(assignment)}</td>"
             f"{advisor_cell}"
@@ -540,7 +540,7 @@ def _client_section(view) -> str:
             f"<tr><th>Versión del aviso</th>"
             f"<td>{_esc(client.consent_version or '—')}</td></tr>"
             f"<tr><th>Fecha del consentimiento</th>"
-            f"<td>{_esc(client.consent_at.isoformat() if client.consent_at else '—')}"
+            f"<td>{admin.time_html(client.consent_at)}"
             "</td></tr>"
             f"<tr><th>Usuario</th><td>{_esc(client.username)}</td></tr>"
             f"<tr><th>Credencial</th>"
@@ -566,7 +566,7 @@ def _memory_section(view) -> str:
     summary_rows = "".join(
         "<tr>"
         f"<td>{_esc(item.channel)}</td>"
-        f"<td>{_esc(item.updated_at.isoformat())}</td>"
+        f"<td>{admin.time_html(item.updated_at)}</td>"
         f"<td>{_esc(item.trigger)}</td>"
         f"<td>{_esc(item.summary)}</td>"
         "</tr>"
@@ -592,7 +592,7 @@ def _notes_section(view, csrf: str) -> str:
             + "".join(
                 "<tr>"
                 f"<td>{_esc(note.author_username or note.author_profile_id)}</td>"
-                f"<td>{_esc(note.created_at.isoformat())}</td>"
+                f"<td>{admin.time_html(note.created_at)}</td>"
                 f"<td>{_esc(note.body)}</td>"
                 "<td>"
                 '<form method="post" action="/asesor/cases/'
@@ -753,7 +753,7 @@ def render_suppression_queue(
             counts = request.removed_counts or {}
             summary = ", ".join(f"{key}: {value}" for key, value in counts.items())
             executed = (
-                f"<tr><th>Ejecutada</th><td>{_esc(request.executed_at.isoformat() if request.executed_at else '—')}"
+                f"<tr><th>Ejecutada</th><td>{admin.time_html(request.executed_at)}"
                 f" · {_esc(row.executor_username or '—')} · {_esc(summary)}"
                 f" · Nota: {_esc(request.result_note or '—')}"
                 f" · Aviso: {_esc(request.notification_result or '—')}</td></tr>"
@@ -773,8 +773,8 @@ def render_suppression_queue(
             f"<td>{_esc(request.id)}</td>"
             f"<td>{_esc(row.client_username or '—')}</td>"
             f"<td>{_esc(request.channel)}</td>"
-            f"<td>{_esc(request.created_at.isoformat())}</td>"
-            f"<td>{_esc(row.deadline.isoformat())}</td>"
+            f"<td>{admin.time_html(request.created_at)}</td>"
+            f"<td>{admin.time_html(row.deadline)}</td>"
             f"<td>{_esc(priority)}</td>"
             f"<td>{_esc(state)}</td>"
             f"<td>{_esc(request.case_id or '—')}</td>"
@@ -810,7 +810,7 @@ def render_advisor_memory(view, csrf: str) -> str:
     if view.memory_updated_at is not None:
         updated = (
             "<p>Memoria actualizada: "
-            f"{_esc(view.memory_updated_at.isoformat())}</p>"
+            f"{admin.time_html(view.memory_updated_at)}</p>"
         )
     if view.items:
         memory = "<ul>" + "".join(
@@ -821,7 +821,7 @@ def render_advisor_memory(view, csrf: str) -> str:
     summary_rows = "".join(
         "<tr>"
         f"<td>{_esc(item.channel)}</td>"
-        f"<td>{_esc(item.updated_at.isoformat())}</td>"
+        f"<td>{admin.time_html(item.updated_at)}</td>"
         f"<td>{_esc(item.trigger)}</td>"
         f"<td>{_esc(item.summary)}</td>"
         "</tr>"
