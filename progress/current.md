@@ -28,14 +28,13 @@
 - Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
   sesión se formaliza como feature.
 
-## 2026-11-17 — #62 validacion_respuestas_flexible (in_progress, rama `lazaro/validacion-respuestas`)
+## 2026-11-17 — #63 fragmentos_por_seccion (in_progress, rama `lazaro/fragmentos-por-seccion`, encima de PR #5)
 
-- Diagnóstico: la validación anti-alucinación rechazaba respuestas correctas
-  (pasos numerados → `number_not_in_citations`; JSON en ```json → `invalid_json`;
-  citas con otra tilde o coma → `quote_not_literal`) y el cliente recibía
-  "No encontré información…". El usuario confirma `RAG_SIMILARITY_THRESHOLD=0.5`.
-- Cambio: quitar el bloque de código, ignorar marcadores de pasos al inicio de
-  línea y comparar citas sin tildes ni puntuación (palabras completas). Cifras
-  inventadas, paráfrasis y citas de otro fragmento se siguen rechazando.
-- Pendiente (otras features): fragmentación por secciones, búsqueda híbrida,
-  preguntas de seguimiento con historial, medir con `eval/run_eval.py`.
+- `rag.domain.chunk_text` trocea por secciones (títulos Markdown y numerados
+  "2.1 …") y frases, con la ruta de títulos al inicio de cada fragmento; ya no
+  corta palabras ni mezcla secciones. La ventana por caracteres queda como
+  último recurso para palabras más largas que el fragmento.
+- `extraction`: títulos de Word como "## Título" y filas de tabla unidas
+  ("Plan | Usuarios | Precio").
+- Operación: los manuales ya cargados conservan sus fragmentos antiguos;
+  hay que volver a subirlos desde el panel para aprovechar el cambio.

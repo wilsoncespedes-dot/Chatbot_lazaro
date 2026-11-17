@@ -101,3 +101,6 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 
 ## 2026-11-17 — #61 fechas_y_formularios_panel (done)
 - Fechas legibles ("17 nov 2026, 2:33 p. m.") en la zona del negocio con `admin.time_html`, también en el chat del caso y el JS en vivo (sustituye `dd/mm HH:MM UTC` de #59 R3). Formularios de alta en cuadrícula (`create-form`) y acciones de Clientes de igual ancho. R7: `/admin/supresiones` dentro del panel admin (PR #4). Spec `specs/fechas_y_formularios_panel/`. PR #3 unido.
+
+## 2026-11-17 — #62 validacion_respuestas_flexible (done)
+- La validación anti-alucinación dejaba de rechazar respuestas correctas: quita bloques ```json, ignora marcadores de pasos al inicio de línea y compara citas sin tildes ni puntuación (palabras completas). Cifras inventadas y paráfrasis se siguen rechazando. Spec `specs/validacion_respuestas_flexible/`. PR #5.
