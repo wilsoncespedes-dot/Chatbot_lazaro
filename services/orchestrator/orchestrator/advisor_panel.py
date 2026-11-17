@@ -740,7 +740,11 @@ def render_advisor_case(
 
 
 def render_suppression_queue(
-    rows, csrf: str, action_prefix: str, show_inbox: bool = True
+    rows,
+    csrf: str,
+    action_prefix: str,
+    show_inbox: bool = True,
+    panel: str = "asesor",
 ) -> str:
     ordered = list(rows)
     table_rows = []
@@ -788,6 +792,10 @@ def render_suppression_queue(
         "<th>Caso</th><th>Acción</th></tr></thead>"
         f"<tbody>{''.join(table_rows)}</tbody></table>"
     )
+    if panel == "admin":
+        # #61 R7: desde /admin la cola se muestra dentro del panel administrativo
+        # (menú, marca y salida de admin), no con el marco de asesores.
+        return admin.render_page("Cola de supresión", body, csrf, "/admin/supresiones")
     return _page(
         "Cola de supresión",
         body,

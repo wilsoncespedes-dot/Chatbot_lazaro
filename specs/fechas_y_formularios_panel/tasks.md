@@ -5,3 +5,4 @@
 - [x] T3 `create-form` en los formularios de alta (R5).
 - [x] T4 `row-actions` en Clientes (R6).
 - [x] T5 Pruebas en `tests/test_fechas_formularios.py`, ajuste de #59 R3, `./init.sh`.
+- [x] T6 Cola de supresión de /admin dentro del panel administrativo (R7).
