@@ -5,7 +5,7 @@ import html
 import json
 import re
 import secrets
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 CSP = "default-src 'self'; form-action 'self'; frame-ancestors 'none'"
@@ -191,6 +191,20 @@ button:disabled, .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .form-grid input, .form-grid select { width: 100%; }
 .inline-form { flex-direction: row; flex-wrap: wrap; align-items: center;
   gap: var(--space-2); }
+.row-actions { display: grid; grid-template-columns: repeat(3, 6.75rem);
+  gap: 0.375rem; align-items: center; }
+.row-actions form { margin: 0; display: block; }
+.row-actions button { width: 100%; min-height: 2.125rem; padding: 0 0.5rem;
+  font-size: 0.8125rem; }
+form.create-form { display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr));
+  gap: 0.875rem 1rem; align-items: start; }
+.create-form input, .create-form select, .create-form textarea { width: 100%; }
+.create-form label:has(textarea), .create-form label:has(input[type="file"]) {
+  grid-column: 1 / -1; }
+.create-form textarea { min-height: 5.5rem; resize: vertical; }
+.create-form > button { grid-column: 1 / -1; justify-self: start; }
+time { white-space: nowrap; }
 .badge { display: inline-block; padding: 0.125rem 0.625rem; border-radius: 999px;
   border: 1px solid transparent; background: var(--soft); color: var(--text);
   font-size: 0.8125rem; font-weight: 600; }
@@ -421,6 +435,58 @@ def redact_reason(reason: str) -> str:
 
 def short_id(value: str | None) -> str:
     return (value or "")[:8]
+
+
+# #61: fechas legibles. Se muestran en la zona del negocio
+# (BUSINESS_HOURS_UTC_OFFSET_MINUTES, Colombia = -300); `main` la fija al crear la app.
+_MONTHS = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+_display_tz = timezone(timedelta(minutes=-300))
+
+
+def set_display_utc_offset(minutes: int) -> None:
+    global _display_tz
+    _display_tz = timezone(timedelta(minutes=minutes))
+
+
+def _offset_label() -> str:
+    offset = _display_tz.utcoffset(None)
+    minutes = int(offset.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "−"
+    hours, rest = divmod(abs(minutes), 60)
+    return f"UTC{sign}{hours}" + (f":{rest:02d}" if rest else "")
+
+
+def human_datetime(value: datetime | date | None, with_time: bool = True) -> str:
+    """#61: "17 nov 2026, 2:33 p. m." en la zona del negocio; solo fecha si es `date`
+    o si `with_time` es falso (la fecha es la local, no la UTC)."""
+    if value is None:
+        return "—"
+    if not isinstance(value, datetime):
+        return f"{value.day} {_MONTHS[value.month - 1]} {value.year}"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    local = value.astimezone(_display_tz)
+    if not with_time:
+        return f"{local.day} {_MONTHS[local.month - 1]} {local.year}"
+    hour = local.hour % 12 or 12
+    suffix = "a. m." if local.hour < 12 else "p. m."
+    return (
+        f"{local.day} {_MONTHS[local.month - 1]} {local.year}, "
+        f"{hour}:{local.minute:02d} {suffix}"
+    )
+
+
+def time_html(value: datetime | date | None, with_time: bool = True) -> str:
+    """#61: `<time>` con la fecha exacta en `datetime` y el texto legible."""
+    if value is None:
+        return "—"
+    title = (
+        f' title="Hora local ({_offset_label()})"' if isinstance(value, datetime) else ""
+    )
+    return (
+        f'<time datetime="{_esc(value.isoformat())}"{title}>'
+        f"{_esc(human_datetime(value, with_time))}</time>"
+    )
 
 
 def new_session_token() -> str:
@@ -908,7 +974,7 @@ def render_link(token: str, link: str | None, expires_at: datetime, csrf: str) -
     shown = link if link is not None else token
     body = (
         f"<p>Enlace: <code>{_esc(shown)}</code></p>"
-        f"<p>Caduca: <code>{_esc(expires_at.isoformat())}</code></p>"
+        f"<p>Caduca: {time_html(expires_at)}</p>"
         '<p><a href="/admin/profiles">Volver a perfiles</a></p>'
     )
     return render_page("Enlace de vinculación", body, csrf, "/admin/profiles")
@@ -920,7 +986,7 @@ def render_events(events, csrf: str) -> str:
         f"<td>{_esc(short_id(event.contact_id))}</td>"
         f"<td>{_esc(event.type)}</td>"
         f"<td>{_esc(redact_reason(event.reason))}</td>"
-        f"<td>{_esc(event.at.isoformat())}</td>"
+        f"<td>{time_html(event.at)}</td>"
         "</tr>"
         for event in events
     )
@@ -951,7 +1017,7 @@ def render_manuals(manuals, csrf: str, error: str | None = None) -> str:
         )
     upload = (
         '<form method="post" action="/admin/manuals" '
-        'enctype="multipart/form-data" class="card">'
+        'enctype="multipart/form-data" class="card create-form">'
         f"{csrf_field(csrf)}"
         '<label>Nombre <input name="name" maxlength="200" required></label>'
         '<label>Archivo <input type="file" name="file" accept=".pdf,.docx" required></label>'
@@ -1040,7 +1106,7 @@ def render_categories(categories, threshold: float, csrf: str, error: str | None
     if error:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
     create = (
-        '<form method="post" action="/admin/categories" class="card">'
+        '<form method="post" action="/admin/categories" class="card create-form">'
         f"{csrf_field(csrf)}"
         '<label>Código <input name="code" maxlength="16" required></label>'
         '<label>Nombre <input name="name" maxlength="60" required></label>'
@@ -1051,7 +1117,7 @@ def render_categories(categories, threshold: float, csrf: str, error: str | None
     threshold_text = f"{threshold:g}"
     threshold_form = (
         f"<p>Umbral vigente: <code>{_esc(threshold_text)}</code></p>"
-        '<form method="post" action="/admin/categories/threshold" class="card">'
+        '<form method="post" action="/admin/categories/threshold" class="card create-form">'
         f"{csrf_field(csrf)}"
         f'<label>Umbral <input name="threshold" value="{_esc(threshold_text)}" '
         'inputmode="decimal" required></label>'
@@ -1103,7 +1169,7 @@ def render_tags(tags, csrf: str, error: str | None = None) -> str:
             "</tr>"
         )
     create = (
-        '<form method="post" action="/admin/etiquetas" class="card">'
+        '<form method="post" action="/admin/etiquetas" class="card create-form">'
         f"{csrf_field(csrf)}"
         '<label>Nombre <input name="name" maxlength="100" required></label>'
         '<button type="submit">Crear etiqueta</button>'
@@ -1156,7 +1222,7 @@ def render_saved_replies(replies, csrf: str, error: str | None = None) -> str:
             "</tr>"
         )
     create = (
-        '<form method="post" action="/admin/respuestas" class="card">'
+        '<form method="post" action="/admin/respuestas" class="card create-form">'
         f"{csrf_field(csrf)}"
         '<label>Título <input name="title" maxlength="200" required></label>'
         '<label>Texto <textarea name="body" maxlength="4096" required></textarea></label>'
@@ -1318,7 +1384,7 @@ def render_text_history(field: str, versions, csrf: str) -> str:
         "<tr>"
         f"<td>{_esc(item.version)}</td>"
         f"<td>{_esc(item.created_by)}</td>"
-        f"<td>{_esc(item.created_at.isoformat())}</td>"
+        f"<td>{time_html(item.created_at)}</td>"
         f"<td>{_esc(item.value)}</td>"
         "</tr>"
         for item in versions
@@ -1344,12 +1410,12 @@ def render_clients(clients, csrf: str, error: str | None = None) -> str:
             "<tr>"
             f"<td>{_esc(client.username)}</td>"
             f"<td>{_esc(client.status)}</td>"
-            f"<td>{_esc(client.valid_from.isoformat())}</td>"
-            f"<td>{_esc(client.valid_until.isoformat())}</td>"
+            f"<td>{time_html(client.valid_from, with_time=False)}</td>"
+            f"<td>{time_html(client.valid_until, with_time=False)}</td>"
             f"<td>{_esc(client.days_remaining)}</td>"
             f"<td>{'Sí' if client.has_active_session else 'No'}</td>"
             f"<td>{_esc(client.expiry_notice_status or '')}</td>"
-            "<td>"
+            '<td><div class="row-actions">'
             f'<form method="post" action="/admin/clientes/{path}/renovar">'
             f"{csrf_field(csrf)}"
             '<button type="submit" class="btn-secondary">Renovar</button>'
@@ -1362,12 +1428,12 @@ def render_clients(clients, csrf: str, error: str | None = None) -> str:
             f"{csrf_field(csrf)}"
             '<button type="submit" class="btn-secondary">Cerrar sesión</button>'
             "</form>"
-            "</td>"
+            "</div></td>"
             "</tr>"
         )
     body = (
         f"{error_html}"
-        '<form method="post" action="/admin/clientes" class="card">'
+        '<form method="post" action="/admin/clientes" class="card create-form">'
         f"{csrf_field(csrf)}"
         '<label>Usuario <input name="username" autocomplete="off" required></label>'
         '<label>Contraseña <input type="password" name="password" '
@@ -1393,7 +1459,7 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
     for template in templates:
         path = quote(template.name, safe="")
         approved = (
-            f"{template.approved_by} {template.approved_at.isoformat()}"
+            f"{_esc(template.approved_by)} · {time_html(template.approved_at)}"
             if template.approved_by is not None and template.approved_at is not None
             else "—"
         )
@@ -1405,7 +1471,7 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
             f"<td>{_esc(template.variables)}</td>"
             f"<td>{_esc(template.body)}</td>"
             f"<td>{_esc(template.status)}</td>"
-            f"<td>{_esc(approved)}</td>"
+            f"<td>{approved}</td>"
             "<td>"
             f'<form method="post" action="/admin/plantillas/{path}">'
             f"{csrf_field(csrf)}"
@@ -1428,7 +1494,7 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
             "</tr>"
         )
     create = (
-        '<form method="post" action="/admin/plantillas" class="card">'
+        '<form method="post" action="/admin/plantillas" class="card create-form">'
         f"{csrf_field(csrf)}"
         '<label>Nombre <input name="name" required></label>'
         '<label>Propósito <select name="purpose">'
@@ -1531,12 +1597,12 @@ def metrics_body(metrics) -> str:
         for reason, count in metrics.escalation_reasons
     ) or '<tr><td colspan="2">Sin datos</td></tr>'
     samples = "".join(
-        f"<li>{_esc(at.isoformat())}: {_esc(text)}</li>"
+        f"<li>{time_html(at)}: {_esc(text)}</li>"
         for at, text in metrics.unanswered_samples
     ) or "<li>Sin muestras</li>"
     return (
-        f'<p class="lead">Intervalo: {_esc(metrics.since.isoformat())} — '
-        f"{_esc(metrics.until.isoformat())}</p>"
+        f'<p class="lead">Intervalo: {time_html(metrics.since)} — '
+        f"{time_html(metrics.until)}</p>"
         f'<ul class="stats">{cards}</ul>'
         '<div class="split"><section>'
         "<h2>Conversaciones por asesor</h2>"

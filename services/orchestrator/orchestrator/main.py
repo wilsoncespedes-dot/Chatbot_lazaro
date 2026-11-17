@@ -240,6 +240,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     settings = settings or Settings()
     adapters = adapters or build_default_adapters(settings)
     install_access_log_redaction()
+    # #61: las fechas del panel se muestran en la zona del negocio.
+    admin.set_display_utc_offset(settings.business_hours_utc_offset_minutes)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
