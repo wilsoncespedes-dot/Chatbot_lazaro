@@ -66,7 +66,9 @@ def test_valid_answer_is_sent_and_logged(env):
 def test_invalid_json_rejected():
     """R2"""
     assert _reason("esto no es json") == "invalid_json"
-    assert _reason("```json\n{}\n```") == "invalid_json"
+    # #62 R1: el bloque ```json se quita; el JSON interior se valida como siempre.
+    assert _reason("```json\n{}\n```") == "invalid_shape"
+    assert _reason("```json\nno es json\n```") == "invalid_json"
 
 
 @pytest.mark.parametrize(
@@ -100,9 +102,11 @@ def test_non_literal_quote_rejected():
     """R6, R8"""
     assert _reason(_raw(citations=[{"chunk_id": "a", "quote": "plan Premium"}])) == "quote_not_literal"
     assert _reason(_raw(citations=[{"chunk_id": "a", "quote": ""}])) == "quote_not_literal"
-    assert _reason(_raw(citations=[{"chunk_id": "b", "quote": "Reinicie el modulo"}])) == "quote_not_literal"
-    # la puntuación también cuenta
-    assert _reason(_raw(citations=[{"chunk_id": "b", "quote": "Reinicie el módulo,"}])) == "quote_not_literal"
+    assert _reason(_raw(citations=[{"chunk_id": "a", "quote": " ,. "}])) == "quote_not_literal"
+    # #62 R5: tildes y puntuación ya no cuentan, pero las palabras sí
+    validate_llm_answer(_raw(answer="x", citations=[{"chunk_id": "b", "quote": "Reinicie el modulo"}]), CHUNKS)
+    validate_llm_answer(_raw(answer="x", citations=[{"chunk_id": "b", "quote": "Reinicie el módulo,"}]), CHUNKS)
+    assert _reason(_raw(citations=[{"chunk_id": "b", "quote": "Reinicie el mod"}])) == "quote_not_literal"
     # el quote debe estar en SU fragmento, no en otro
     assert _reason(_raw(citations=[{"chunk_id": "b", "quote": "plan Pro"}])) == "quote_not_literal"
 
