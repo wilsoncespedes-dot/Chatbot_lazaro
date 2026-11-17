@@ -27,3 +27,24 @@
 - `./init.sh`: 3622 passed, 1 skipped.
 - Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
   sesión se formaliza como feature.
+
+## 2026-11-17 — #60 rediseno_identidad_panel (in_progress, rama `lazaro/rediseno-identidad-panel`)
+
+- Nueva identidad visual del prototipo del dueño (paleta turquesa, claro y
+  oscuro); la marca visible sigue siendo "Lázaro Software" (decisión del usuario).
+- Shell común `admin._shell` (barra lateral con menú agrupado e iconos SVG en
+  línea, ruta `Panel / título`, salida al pie) usado por `/admin` y `/asesor`.
+- Inicio con accesos rápidos; editor de "Textos del flujo" de dos columnas sin
+  JavaScript (`:target` + `:has()`); perfiles con tarjeta, avatar, insignia y
+  Sí/No; login con curvas y tarjeta translúcida en `/admin/login`,
+  `/asesor/login` y `/acceso`.
+- Escrito directamente por Claude a pedido del usuario (OpenCode no está
+  instalado en este equipo). Sin cambios de rutas, formularios ni CSP.
+- Pruebas: `tests/test_rediseno_identidad.py` (R1–R22) y ajuste en
+  `test_panel_visual.py`. `./init.sh`: 3643 passed, 1 skipped.
+- Panel de asesores (R23–R25): menú por rol (Atención / Supervisión /
+  Privacidad) vía `ContextVar` fijada en `_require_session`; Inicio con accesos
+  rápidos, tarjeta de presencia y tarjetas de acción; métricas en tarjetas
+  (`admin.metrics_body`, compartido con `/admin/metricas`).
+- `./init.sh`: 3648 passed, 1 skipped.
+- Pendiente: revisión del dueño en el PR; marcar `done` tras el merge.

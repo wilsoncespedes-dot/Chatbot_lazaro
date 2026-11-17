@@ -2,10 +2,41 @@
 from __future__ import annotations
 
 import html
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from urllib.parse import quote, urlencode
 
 from . import admin
+
+# #60: rol de la sesión que se está atendiendo; lo fija `advisor_routes` al
+# validar la sesión para armar el menú lateral sin pasar el rol a cada vista.
+_PANEL_ROLE: ContextVar[str | None] = ContextVar("panel_role", default=None)
+
+
+def set_panel_role(role: str | None) -> None:
+    _PANEL_ROLE.set(role)
+
+
+def advisor_nav_groups(role: str | None, show_inbox: bool = True):
+    """#60 R23: menú del panel de asesores agrupado según el rol."""
+    groups = []
+    if show_inbox and role != "responsable_datos":
+        groups.append(
+            ("Atención", [("/asesor", "Inicio", "home"), ("/asesor/cases", "Casos", "chat")])
+        )
+        if role == "supervisor":
+            groups.append(
+                (
+                    "Supervisión",
+                    [
+                        ("/asesor/todos", "Todos los casos", "users"),
+                        ("/asesor/metricas", "Métricas", "chart"),
+                    ],
+                )
+            )
+    groups.append(("Privacidad", [("/asesor/supresiones", "Supresiones", "trash")]))
+    return groups
+
 
 ERROR_MESSAGES = {
     "forbidden": "No tienes permiso para realizar esa acción.",
@@ -77,49 +108,35 @@ def _page(
     script: str = "",
     current_path: str | None = None,
     wide: bool = False,
+    show_inbox: bool = True,
 ) -> str:
     logout = ""
     navigation = ""
     if csrf is not None:
-        logout = (
-            '<form method="post" action="/asesor/logout">'
-            f"{admin.csrf_field(csrf)}"
-            '<button type="submit" class="btn-secondary">Salir</button>'
-            "</form>"
+        logout = admin._logout_form("/asesor/logout", csrf)
+        groups = (
+            [("Atención", nav_links)]
+            if nav_links
+            else advisor_nav_groups(_PANEL_ROLE.get(), show_inbox)
         )
-        links = nav_links or [
-            ("/asesor", "Inicio"),
-            ("/asesor/cases", "Casos"),
-            ("/asesor/supresiones", "Supresiones"),
-        ]
-        # #56: se reutilizan a propósito los helpers privados de `admin` para
-        # que ambos paneles compartan cabecera, navegación y enlace de salto.
+        # #56/#60: se reutilizan a propósito los helpers privados de `admin`
+        # para que ambos paneles compartan barra lateral, cabecera y salto.
         navigation = admin._nav_html(
-            links, current_path, "Navegación del panel de asesores"
+            groups, current_path, "Navegación del panel de asesores"
         )
     meta = (
         f'<noscript><meta http-equiv="refresh" content="{int(refresh)}"></noscript>\n'
         if refresh > 0
         else ""
     )
-    main_class = ' class="wide"' if wide else ""
-    return (
-        "<!DOCTYPE html>\n"
-        '<html lang="es">\n'
-        "<head>\n"
-        '<meta charset="utf-8">\n'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"{meta}{script}"
-        f"<title>{_esc(title)}</title>\n"
-        '<link rel="stylesheet" href="/admin/static/admin.css">\n'
-        "</head>\n"
-        "<body>\n"
-        f"{admin._skip_link()}\n"
-        f'<header class="site-header"><h1>Panel de asesores</h1>{logout}</header>\n'
-        f'<main id="contenido"{main_class}>\n{navigation}<h2>{_esc(title)}</h2>\n'
-        f"{body_html}\n</main>\n"
-        "</body>\n"
-        "</html>\n"
+    return admin._shell(
+        title,
+        body_html,
+        panel_name="Panel de asesores",
+        navigation=navigation,
+        logout_html=logout,
+        head_extra=f"{meta}{script}",
+        main_class="wide" if wide else "",
     )
 
 
@@ -141,20 +158,8 @@ def _badge(status: str | None) -> str:
 
 
 def render_advisor_login(message: str | None = None, code: str | None = None) -> str:
-    error = ""
-    if message:
-        data = f' data-error="{_esc(code)}"' if code else ""
-        error = f'<p class="error" role="alert"{data}>{_esc(message)}</p>\n'
-    body = (
-        f"{error}"
-        '<form method="post" action="/asesor/login" class="card">'
-        '<label>Usuario <input name="username" autocomplete="username" required></label>'
-        '<label>Contraseña <input type="password" name="password" '
-        'autocomplete="current-password" required></label>'
-        '<button type="submit">Entrar</button>'
-        "</form>"
-    )
-    return _page("Iniciar sesión", body)
+    body = f"{admin._alert(message, code)}{admin.login_form('/asesor/login')}"
+    return admin.render_auth_page("Iniciar sesión", "Panel de asesores", body)
 
 
 def render_advisor_home(
@@ -176,12 +181,18 @@ def render_advisor_home(
         )
         return _page("Inicio", f"{ok_html}{warning}", csrf, current_path="/asesor")
 
+    available = presence == "available"
+    state = (
+        '<span class="pill pill-yes">Disponible</span>'
+        if available
+        else '<span class="pill pill-no">Ausente</span>'
+    )
     presence_form = (
-        '<h3>Mi presencia</h3>'
-        '<form method="post" action="/asesor/presence" class="card">'
+        '<form method="post" action="/asesor/presence" class="card presence-card">'
+        f'<h2 class="card-title">{admin._icon("user")}Mi presencia {state}</h2>'
         f"{admin.csrf_field(csrf)}"
         f'<label>Estado <select name="status">'
-        f'<option value="available"{" selected" if presence == "available" else ""}>'
+        f'<option value="available"{" selected" if available else ""}>'
         "Disponible</option>"
         f'<option value="away"{" selected" if presence == "away" else ""}>'
         "Ausente</option>"
@@ -190,8 +201,8 @@ def render_advisor_home(
         "</form>"
     )
     reply = (
-        '<h3>Responder a un caso</h3>'
-        '<form method="post" action="/asesor/reply" class="card">'
+        '<form method="post" action="/asesor/reply" class="card action-card">'
+        f'<h2 class="card-title">{admin._icon("chat")}Responder a un caso</h2>'
         f"{admin.csrf_field(csrf)}"
         '<label>Caso <input name="case_id" maxlength="64" required></label>'
         '<label>Respuesta <textarea name="text" maxlength="4096" required></textarea></label>'
@@ -199,36 +210,42 @@ def render_advisor_home(
         "</form>"
     )
     assign = (
-        '<h3>Asignarme un caso</h3>'
-        '<form method="post" action="/asesor/assign" class="card">'
+        '<form method="post" action="/asesor/assign" class="card action-card">'
+        f'<h2 class="card-title">{admin._icon("users")}Asignarme un caso</h2>'
         f"{admin.csrf_field(csrf)}"
         '<label>Caso <input name="case_id" maxlength="64" required></label>'
         '<button type="submit">Asignar</button>'
         "</form>"
     )
     close = (
-        '<h3>Cerrar un caso</h3>'
-        '<form method="post" action="/asesor/close" class="card">'
+        '<form method="post" action="/asesor/close" class="card action-card">'
+        f'<h2 class="card-title">{admin._icon("shield")}Cerrar un caso</h2>'
         f"{admin.csrf_field(csrf)}"
         '<label>Caso <input name="case_id" maxlength="64" required></label>'
         '<button type="submit" class="btn-danger">Resolver</button>'
         "</form>"
     )
-    supervisor = ""
+    quick = [
+        ("/asesor/cases", "chat", "Bandeja de casos", "Casos tuyos y sin asignar."),
+    ]
     if role == "supervisor":
-        supervisor = (
-            '<h3>Supervisión</h3>'
-            '<ul>'
-            '<li><a href="/asesor/todos">Todos los casos</a></li>'
-            '<li><a href="/asesor/metricas">Métricas</a></li>'
-            "</ul>"
-        )
-    return _page(
-        "Inicio",
-        f"{ok_html}{presence_form}\n{reply}\n{assign}\n{close}\n{supervisor}",
-        csrf,
-        current_path="/asesor",
+        quick += [
+            ("/asesor/todos", "users", "Todos los casos", "Vista global y reasignación."),
+            ("/asesor/metricas", "chart", "Métricas", "Tiempos de respuesta y escalamientos."),
+        ]
+    cards = "".join(
+        f'<li><a href="{_esc(href)}"><span class="quick-icon">{admin._icon(icon)}</span>'
+        f"<span><b>{_esc(name)}</b><small>{_esc(hint)}</small></span></a></li>"
+        for href, icon, name, hint in quick
     )
+    body = (
+        f"{ok_html}"
+        '<p class="lead">Atiende los casos que llegan del bot.</p>'
+        f'<ul class="quick">{cards}</ul>'
+        f"{presence_form}"
+        f'<div class="card-grid">{reply}{assign}{close}</div>'
+    )
+    return _page("Inicio", body, csrf, current_path="/asesor")
 
 
 def render_inbox_table(
@@ -771,17 +788,12 @@ def render_suppression_queue(
         "<th>Caso</th><th>Acción</th></tr></thead>"
         f"<tbody>{''.join(table_rows)}</tbody></table>"
     )
-    nav_links = (
-        [("/asesor", "Inicio"), ("/asesor/supresiones", "Supresiones")]
-        if show_inbox
-        else [("/asesor/supresiones", "Supresiones")]
-    )
     return _page(
         "Cola de supresión",
         body,
         csrf,
-        nav_links=nav_links,
         current_path="/asesor/supresiones",
+        show_inbox=show_inbox,
     )
 
 
@@ -828,38 +840,9 @@ def render_advisor_memory(view, csrf: str) -> str:
 
 def render_supervisor_metrics(metrics, csrf: str) -> str:
     """R19: las mismas métricas de #42 en solo lectura, sin formularios."""
-    first = metrics.first_response
-    average = f"{first.avg_minutes:.1f}" if first.avg_minutes is not None else "—"
-    median = (
-        f"{first.median_minutes:.1f}" if first.median_minutes is not None else "—"
+    return _page(
+        "Métricas", admin.metrics_body(metrics), csrf, current_path="/asesor/metricas"
     )
-    advisors = "".join(
-        f"<tr><td>{_esc(label)}</td><td>{_esc(count)}</td></tr>"
-        for label, count in metrics.per_advisor
-    ) or '<tr><td colspan="2">Sin datos</td></tr>'
-    reasons = "".join(
-        f"<tr><td>{_esc(reason)}</td><td>{_esc(count)}</td></tr>"
-        for reason, count in metrics.escalation_reasons
-    ) or '<tr><td colspan="2">Sin datos</td></tr>'
-    samples = "".join(
-        f"<li>{_esc(at.isoformat())}: {_esc(text)}</li>"
-        for at, text in metrics.unanswered_samples
-    ) or "<li>Sin muestras</li>"
-    body = (
-        f'<p>Intervalo: {_esc(metrics.since.isoformat())} — '
-        f"{_esc(metrics.until.isoformat())}</p>"
-        "<h3>Primera respuesta</h3>"
-        f"<p>Casos: {_esc(first.cases)} · Respondidos: {_esc(first.answered)} · "
-        f"Sin respuesta: {_esc(first.unanswered)} · Promedio: {_esc(average)} min · "
-        f"Mediana: {_esc(median)} min</p>"
-        "<h3>Conversaciones por asesor</h3>"
-        + admin._table_wrap(f"<table><tbody>{advisors}</tbody></table>")
-        + "<h3>Motivos de escalamiento</h3>"
-        + admin._table_wrap(f"<table><tbody>{reasons}</tbody></table>")
-        + f"<h3>Preguntas sin respuesta: {_esc(metrics.unanswered_total)}</h3>"
-        f"<ul>{samples}</ul>"
-    )
-    return _page("Métricas", body, csrf, current_path="/asesor/metricas")
 
 
 def render_advisor_error(status: int, code: str, csrf: str | None = None) -> str:

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import html
 
+from orchestrator import admin
+
 _ERRORS = {
     400: "El enlace no es válido o ya se usó.",
     401: "Usuario o contraseña incorrectos.",
@@ -17,38 +19,14 @@ def _esc(value: object) -> str:
 
 
 def _page(title: str, body: str) -> str:
-    return (
-        "<!DOCTYPE html>\n"
-        '<html lang="es">\n'
-        "<head>\n"
-        '<meta charset="utf-8">\n'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"<title>{_esc(title)}</title>\n"
-        '<link rel="stylesheet" href="/admin/static/admin.css">\n'
-        "</head>\n"
-        "<body>\n"
-        '<a class="skip-link" href="#contenido">Saltar al contenido</a>\n'
-        f'<main id="contenido">\n<h2>{_esc(title)}</h2>\n{body}\n</main>\n'
-        "</body>\n"
-        "</html>\n"
-    )
+    """#60 R19: misma identidad visual que el acceso de los paneles."""
+    return admin.render_auth_page(title, "Acceso de clientes", body)
 
 
 def render_login_form(token: str, error: str | None = None) -> str:
     """R10: formulario con el token oculto; no consume el enlace."""
-    alert = ""
-    if error:
-        alert = f'<p class="error" role="alert">{_esc(error)}</p>\n'
-    body = (
-        f"{alert}"
-        '<form method="post" action="/acceso">'
-        f'<input type="hidden" name="t" value="{_esc(token)}">'
-        '<label>Usuario <input name="username" autocomplete="username" required></label>'
-        '<label>Contraseña <input type="password" name="password" '
-        'autocomplete="current-password" required></label>'
-        '<button type="submit">Entrar</button>'
-        "</form>"
-    )
+    hidden = f'<input type="hidden" name="t" value="{_esc(token)}">'
+    body = f"{admin._alert(error)}{admin.login_form('/acceso', hidden)}"
     return _page("Iniciar sesión", body)
 
 

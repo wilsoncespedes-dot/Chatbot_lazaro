@@ -102,6 +102,8 @@ def _require_session(
     profile = adapters.repository.get_profile(session.profile_id)
     if profile is None:
         raise LoginRequired()
+    # #60: el menú lateral depende del rol de la sesión.
+    advisor_panel.set_panel_role(profile.role)
     if profile.role not in allowed_roles:
         raise AdvisorAccessDenied()
     if profile.role in ADVISOR_ROLES:

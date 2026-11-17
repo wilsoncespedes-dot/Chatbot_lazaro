@@ -163,7 +163,10 @@ def test_css_defines_button_card_and_badge_styles():
 
 
 def test_mobile_media_query_stacks_navigation_and_forms():
-    """R7: a 375 px la navegación y los formularios se apilan y ocupan el ancho."""
+    """R7: a 375 px los formularios se apilan y ocupan el ancho.
+
+    #60 R22: la navegación lateral pasa arriba y se desplaza en horizontal.
+    """
     block = _media(CSS, "@media (max-width: 48rem)")
     assert "flex-direction: column" in block
     assert block.count("flex-direction: column") >= 2
@@ -272,9 +275,10 @@ def test_both_panels_share_header_navigation_and_skip_link(env_factory, panel):
     advisor_pages = _advisor_pages(env_factory, panel)
 
     for html in list(admin_pages.values()) + list(advisor_pages.values()):
-        assert '<header class="site-header">' in html
+        # #60: el login usa `site-header auth-header` y `<body class="auth">`.
+        assert re.search(r'<header class="site-header(?: auth-header)?">', html)
         assert 'id="contenido"' in html
-        assert re.search(r'<body>\s*<a class="skip-link" href="#contenido">', html)
+        assert re.search(r'<body[^>]*>\s*<a class="skip-link" href="#contenido">', html)
 
     assert '<nav class="site-nav" aria-label="Navegación administrativa">' in admin_pages["inicio"]
     assert '<a href="/admin" aria-current="page">' in admin_pages["inicio"]
