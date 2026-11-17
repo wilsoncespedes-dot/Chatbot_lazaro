@@ -5,6 +5,7 @@ Sin IO: la extracción de texto y los adaptadores entran como dependencias.
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
@@ -88,21 +89,120 @@ def detect_format(data: bytes) -> str:
     raise UnsupportedFormat("Solo se aceptan archivos PDF o DOCX.")
 
 
-def chunk_text(text: str, size: int, overlap: int) -> list[str]:
-    """Ventana deslizante de `size` caracteres con paso `size - overlap` sobre texto normalizado."""
-    normalized = " ".join(text.split())
-    if not normalized:
-        return []
+def _window(text: str, size: int, overlap: int) -> list[str]:
+    """Ventana deslizante de `size` caracteres con paso `size - overlap` (último recurso)."""
     step = max(size - overlap, 1)
-    chunks: list[str] = []
+    pieces: list[str] = []
     start = 0
-    while start < len(normalized):
-        piece = normalized[start:start + size]
+    while start < len(text):
+        piece = text[start:start + size]
         if piece.strip():
-            chunks.append(piece)
-        if start + size >= len(normalized):
+            pieces.append(piece)
+        if start + size >= len(text):
             break
         start += step
+    return pieces
+
+
+# #63: títulos Markdown ("## Facturas", que también produce la extracción DOCX)
+# y numerados de varios niveles ("2.1 Notas crédito"). "1. Ingresa…" es un paso,
+# no un título, por eso se exige al menos un punto interior.
+_HEADING_MD_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+_HEADING_NUM_RE = re.compile(r"^\s*(\d+(?:\.\d+)+)\.?\s+(\S.{0,78})$")
+_SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
+_HEADING_LEVELS_KEPT = 2
+
+
+def _heading(line: str) -> tuple[int, str] | None:
+    match = _HEADING_MD_RE.match(line)
+    if match:
+        return len(match.group(1)), " ".join(match.group(2).split())
+    match = _HEADING_NUM_RE.match(line)
+    if match and not line.rstrip().endswith((".", ",", ";", ":")):
+        return match.group(1).count(".") + 1, " ".join(line.split())
+    return None
+
+
+def _sections(text: str) -> list[tuple[str, str]]:
+    """R1, R2: (ruta de títulos, cuerpo normalizado) en el orden del documento."""
+    sections: list[tuple[str, str]] = []
+    stack: list[tuple[int, str]] = []
+    body: list[str] = []
+
+    def flush() -> None:
+        content = " ".join(" ".join(body).split())
+        body.clear()
+        if content:
+            path = " > ".join(title for _, title in stack[-_HEADING_LEVELS_KEPT:])
+            sections.append((path, content))
+
+    for line in text.splitlines():
+        heading = _heading(line)
+        if heading is None:
+            stripped = line.strip()
+            # R6: cada fila de tabla ("Plan | Usuarios") cuenta como una frase.
+            if " | " in stripped and not stripped.endswith((".", "!", "?", "…")):
+                line = f"{stripped}."
+            body.append(line)
+            continue
+        flush()
+        level, title = heading
+        stack = [item for item in stack if item[0] < level]
+        stack.append((level, title))
+    flush()
+    return sections
+
+
+def _units(body: str, budget: int, overlap: int) -> list[str]:
+    """R3: frases; una frase más larga que el presupuesto se parte por palabras
+    y una palabra más larga, por caracteres."""
+    units: list[str] = []
+    for sentence in _SENTENCE_RE.split(body):
+        if len(sentence) <= budget:
+            units.append(sentence)
+            continue
+        for word in sentence.split(" "):
+            if len(word) > budget:
+                units.extend(_window(word, budget, overlap))
+            else:
+                units.append(word)
+    return units
+
+
+def _pack(prefix: str, body: str, size: int, overlap: int) -> list[str]:
+    """R3, R4: agrupa unidades sin pasar de `size` y repite al inicio las
+    unidades finales del fragmento anterior que quepan en `overlap`."""
+    budget = size - len(prefix)
+    if budget < max(20, size // 4):
+        prefix, budget = "", size
+    chunks: list[str] = []
+    current: list[str] = []
+    for unit in _units(body, budget, overlap):
+        if current and len(" ".join([*current, unit])) > budget:
+            chunks.append(prefix + " ".join(current))
+            tail: list[str] = []
+            for previous in reversed(current):
+                if len(" ".join([previous, *tail])) > overlap:
+                    break
+                tail.insert(0, previous)
+            current = tail if len(" ".join([*tail, unit])) <= budget else []
+        current.append(unit)
+    if current:
+        chunks.append(prefix + " ".join(current))
+    return chunks
+
+
+def chunk_text(text: str, size: int, overlap: int) -> list[str]:
+    """#63: fragmentos de hasta `size` caracteres que respetan secciones y frases.
+
+    Cada fragmento empieza con la ruta de títulos de su sección ("Facturas >
+    Anulación: …") para que la búsqueda tenga contexto; nunca mezcla dos
+    secciones ni corta palabras salvo que una sola palabra exceda `size`.
+    """
+    chunks: list[str] = []
+    for path, body in _sections(text):
+        prefix = f"{path}: " if path else ""
+        chunks.extend(_pack(prefix, body, size, overlap))
     return chunks
 
 
