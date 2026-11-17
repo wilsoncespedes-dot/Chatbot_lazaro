@@ -38,88 +38,161 @@ ERROR_MESSAGES = {
 _LONG_DIGITS_RE = re.compile(r"\d{6,}")
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,}")
 
-ADMIN_CSS = """
+_BASE_CSS = """
 :root {
   color-scheme: light;
-  --bg: #f4f6fa;
+  --brand: #0f5257;
+  --brand-contrast: #ffffff;
+  --accent: #1fc5d6;
+  --btn: #0b7f8a;
+  --bg: #eef8f8;
   --surface: #ffffff;
-  --text: #1b2733;
-  --muted: #4a5568;
-  --primary: #1d4ed8;
+  --surface-2: #f4fbfb;
+  --soft: #e0f5f7;
+  --line: #cde6e8;
+  --text: #0b3b40;
+  --muted: #4d6b70;
+  --primary: #0b7f8a;
   --primary-contrast: #ffffff;
-  --border: #6b7a8d;
-  --focus: #0b63ce;
-  --ok: #14532d;
-  --ok-bg: #e6f4ea;
-  --warn: #7c4a03;
-  --warn-bg: #fff4d6;
+  --border: #5f8b90;
+  --focus: #0b7f8a;
+  --ok: #0f6b44;
+  --ok-bg: #dcf5e8;
+  --warn: #7a4f00;
+  --warn-bg: #fff1d2;
   --danger: #8a1c1c;
   --danger-bg: #fdecec;
   --info: #0b4f6c;
-  --info-bg: #e6f2f8;
-  --stripe: #f8fafc;
-  --hover: #eef2f7;
-  --radius: 0.5rem;
+  --info-bg: #e0f5f7;
+  --stripe: #f7fcfc;
+  --hover: #e0f5f7;
+  --radius: 0.625rem;
+  --radius-lg: 0.875rem;
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 1rem;
   --space-4: 1.5rem;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 2px 8px rgba(16, 24, 40, 0.06);
-  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --shadow: 0 4px 18px rgba(31, 197, 214, 0.12);
+  --glow: 0 12px 40px rgba(31, 197, 214, 0.28);
+  --font: system-ui, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --brand: #14727a;
+    --brand-contrast: #ffffff;
+    --btn: #1fc5d6;
+    --bg: #0a1719;
+    --surface: #102326;
+    --surface-2: #142b2f;
+    --soft: #17383c;
+    --line: #24474b;
+    --text: #e3f4f5;
+    --muted: #a3c2c6;
+    --primary: #1fc5d6;
+    --primary-contrast: #062a2e;
+    --border: #6f9a9e;
+    --focus: #1fc5d6;
+    --ok: #6fe0aa;
+    --ok-bg: #14382a;
+    --warn: #f2c46b;
+    --warn-bg: #3a2f12;
+    --danger: #ff9b9b;
+    --danger-bg: #3d1717;
+    --info: #8fdde6;
+    --info-bg: #123238;
+    --stripe: #122a2d;
+    --hover: #17383c;
+    --shadow: none;
+    --glow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
 }
 * { box-sizing: border-box; }
-body { font-family: var(--font); margin: 0; background: var(--bg); color: var(--text);
-  line-height: 1.5; }
+body { font-family: var(--font); margin: 0; min-height: 100vh; color: var(--text);
+  background: linear-gradient(180deg, var(--bg), var(--surface-2));
+  font-size: 0.9375rem; line-height: 1.5; }
 h1, h2, h3 { line-height: 1.2; margin: 0 0 var(--space-2); }
-h1 { font-size: 1.5rem; letter-spacing: 0.02em; }
-h2 { font-size: 1.25rem; border-bottom: 2px solid var(--border);
-  padding-bottom: var(--space-1); }
-h3 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--muted); }
+h1 { font-size: 2.125rem; letter-spacing: -0.01em; margin-top: var(--space-2); }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 0.875rem; font-weight: 600; color: var(--muted);
+  margin-top: var(--space-4); }
 a { color: var(--primary); }
 a:hover { color: var(--text); }
-.site-header { background: var(--primary); color: var(--primary-contrast);
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: var(--space-2); padding: var(--space-2) var(--space-3); }
-.site-header h1 { color: var(--primary-contrast); margin: 0; }
-.site-nav ul { list-style: none; padding: 0; margin: 0 0 var(--space-3);
-  display: flex; flex-direction: column; gap: var(--space-1); }
-.site-nav a { display: block; padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius); text-decoration: none; color: var(--primary); }
-.site-nav a:hover { background: var(--hover); color: var(--text); }
-.site-nav a:disabled { opacity: 0.55; cursor: not-allowed; }
-.site-nav a[aria-current="page"] { background: var(--primary);
-  color: var(--primary-contrast); font-weight: 600; }
+p { margin: 0 0 var(--space-3); }
+.lead { color: var(--muted); }
+.icon { width: 1.125rem; height: 1.125rem; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .skip-link { position: absolute; left: -9999px; top: 0; background: var(--surface);
   color: var(--text); padding: var(--space-2) var(--space-3);
   border-radius: var(--radius); }
 .skip-link:focus { left: var(--space-2); z-index: 10; }
-main { max-width: 64rem; margin: 0 auto; padding: var(--space-3); }
-main.wide { max-width: 90rem; }
-.card { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--space-3);
-  margin: 0 0 var(--space-3); }
+.shell { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr);
+  min-height: 100vh; }
+.shell-bare { grid-template-columns: minmax(0, 1fr); }
+.sidebar { background: var(--surface); border-right: 1px solid var(--line);
+  padding: 1.125rem 0.875rem; display: flex; flex-direction: column;
+  gap: var(--space-1); position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.brand { display: flex; align-items: center; gap: 0.625rem;
+  padding: 0.125rem 0.5rem 0.875rem; }
+.brand-mark { width: 2.125rem; height: 2.125rem; border-radius: 50%;
+  background: var(--brand); color: var(--brand-contrast); display: grid;
+  place-items: center; flex: none; }
+.brand-name { font-weight: 700; font-size: 1.125rem; line-height: 1.2; }
+.brand-name small { display: block; color: var(--muted); font-size: 0.75rem;
+  font-weight: 400; }
+.nav-group { font-size: 0.8125rem; font-weight: 600; color: var(--muted);
+  margin: 0.875rem 0.5rem 0.25rem; }
+.site-nav ul { list-style: none; padding: 0; margin: 0; display: flex;
+  flex-direction: column; gap: 0.125rem; }
+.site-nav a { display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.5rem 0.625rem; border-radius: 0.5rem; color: var(--text);
+  text-decoration: none; font-size: 0.90625rem; }
+.site-nav a:hover { background: var(--soft); color: var(--text); }
+.site-nav a[aria-current="page"] { background: var(--brand);
+  color: var(--brand-contrast); font-weight: 600; }
+.sidebar-foot { margin: auto 0 0; padding-top: var(--space-3); }
+.sidebar-foot button { width: 100%; display: flex; align-items: center;
+  justify-content: center; gap: var(--space-2); }
+.main-col { min-width: 0; display: flex; flex-direction: column; }
+.site-header { display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: var(--space-3); padding: 1rem 1.75rem; }
+.crumb { margin: 0; font-size: 0.9375rem; }
+.crumb span { color: var(--muted); }
+main { width: 100%; max-width: 70rem; margin: 0 auto; padding: 0.5rem 1.75rem 3rem; }
+main.wide { max-width: 96rem; }
+.card { background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 1.25rem;
+  margin: 0 0 1.125rem; }
+.card-title { grid-column: 1 / -1; font-size: 1rem; margin: 0; }
 form { display: flex; flex-direction: column; gap: var(--space-2);
   align-items: stretch; margin: var(--space-3) 0; }
-label { display: flex; flex-direction: column; font-size: 0.9rem;
-  gap: var(--space-1); }
-input, select, textarea, button { font: inherit; padding: var(--space-2);
-  border-radius: var(--radius); border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); }
-textarea { min-height: 4rem; }
+td form { margin: 0; }
+label { display: flex; flex-direction: column; font-size: 0.875rem;
+  font-weight: 600; color: var(--muted); gap: var(--space-1); }
+input, select, textarea, button { font: inherit; padding: 0.5625rem 0.75rem;
+  border-radius: 0.5rem; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); min-height: 2.5rem; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { min-height: 4rem; line-height: 1.5; }
 button, .btn { cursor: pointer; background: var(--primary);
   color: var(--primary-contrast); border: 1px solid var(--primary);
-  font-weight: 600; }
+  border-radius: var(--radius); font-weight: 600; padding: 0 1.25rem;
+  white-space: nowrap; }
 button:hover, .btn:hover { filter: brightness(1.08); }
-button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-.btn-secondary { background: var(--surface); color: var(--primary);
+button:disabled, .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-secondary { background: transparent; color: var(--primary);
   border-color: var(--primary); }
+.btn-secondary:hover { background: var(--soft); filter: none; }
 .btn-danger { background: var(--danger); border-color: var(--danger);
   color: var(--surface); }
-.badge { display: inline-block; padding: 0.1rem var(--space-2);
-  border-radius: 999px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 0.85rem;
-  font-weight: 600; }
+.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 0.875rem; align-items: end; }
+.form-grid input, .form-grid select { width: 100%; }
+.inline-form { flex-direction: row; flex-wrap: wrap; align-items: center;
+  gap: var(--space-2); }
+.badge { display: inline-block; padding: 0.125rem 0.625rem; border-radius: 999px;
+  border: 1px solid transparent; background: var(--soft); color: var(--text);
+  font-size: 0.8125rem; font-weight: 600; }
 .badge-ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
 .badge-warn { background: var(--warn-bg); color: var(--warn);
   border-color: var(--warn); }
@@ -127,9 +200,24 @@ button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
   border-color: var(--danger); }
 .badge-info { background: var(--info-bg); color: var(--info);
   border-color: var(--info); }
-.error, .ok { padding: var(--space-2); border-radius: var(--radius);
+.pill { display: inline-flex; align-items: center; gap: 0.375rem;
+  padding: 0.125rem 0.625rem; border-radius: 999px; font-size: 0.8125rem;
+  font-weight: 600; }
+.pill::before { content: ""; width: 0.4375rem; height: 0.4375rem;
+  border-radius: 50%; background: currentColor; }
+.pill-yes { background: var(--ok-bg); color: var(--ok); }
+.pill-no { background: var(--soft); color: var(--muted); }
+.av { width: 2.125rem; height: 2.125rem; border-radius: 50%;
+  background: var(--brand); color: var(--brand-contrast); display: inline-grid;
+  place-items: center; font-size: 0.8125rem; font-weight: 700; flex: none; }
+.user-cell { display: flex; align-items: center; gap: 0.625rem; font-weight: 600; }
+.chip { background: var(--soft); color: var(--text); font-weight: 700;
+  border-radius: 999px; padding: 0 0.5625rem; }
+.note { background: var(--warn-bg); color: var(--warn); border-radius: var(--radius);
+  padding: 0.625rem 0.875rem; font-size: 0.875rem; margin: 0; }
+.error, .ok { padding: 0.625rem 0.875rem; border-radius: var(--radius);
   border: 1px solid var(--border); border-left-width: 6px;
-  margin: var(--space-2) 0; }
+  margin: var(--space-2) 0 var(--space-3); }
 .error { background: var(--danger-bg); color: var(--danger);
   border-left-color: var(--danger); }
 .ok { background: var(--ok-bg); color: var(--ok); border-left-color: var(--ok); }
@@ -137,28 +225,119 @@ button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .ok::before { content: "Hecho: "; font-weight: 700; }
 input:user-invalid, select:user-invalid, textarea:user-invalid,
 [aria-invalid="true"] { border: 2px solid var(--danger); border-left-width: 6px; }
-.table-wrap { overflow-x: auto; max-width: 100%; margin: 0 0 var(--space-3); }
+.table-wrap { overflow-x: auto; max-width: 100%; margin: 0 0 var(--space-3);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); }
 table { width: 100%; border-collapse: collapse; background: var(--surface); }
-th, td { border: 1px solid var(--border); padding: var(--space-2);
-  text-align: left; vertical-align: top; }
-thead th { background: var(--bg); font-weight: 700; }
+th, td { border-bottom: 1px solid var(--line); padding: var(--space-2) var(--space-3);
+  text-align: left; vertical-align: middle; }
+thead th { background: var(--surface-2); color: var(--muted); font-size: 0.8125rem;
+  font-weight: 600; }
 tbody tr:nth-child(even) { background: var(--stripe); }
 tbody tr:hover { background: var(--hover); }
-code { background: var(--bg); padding: 0.1rem 0.3rem;
-  border-radius: var(--radius); }
-.chat { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow); display: flex;
-  flex-direction: column; margin: 0 0 var(--space-3); }
+tbody tr:last-child td { border-bottom: 0; }
+code { background: var(--soft); padding: 0.1rem 0.3rem; border-radius: 0.375rem; }
+.quick { list-style: none; padding: 0; margin: 0 0 var(--space-4); display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--space-3); }
+.quick a { display: flex; align-items: flex-start; gap: 0.875rem; height: 100%;
+  padding: 1.125rem; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); color: var(--text);
+  text-decoration: none; }
+.quick a:hover { border-color: var(--accent); }
+.quick b { display: block; }
+.quick small { display: block; color: var(--muted); font-size: 0.8125rem; }
+.quick-icon { width: 2.5rem; height: 2.5rem; border-radius: 0.75rem;
+  background: var(--soft); color: var(--primary); display: grid;
+  place-items: center; flex: none; }
+.card-title { display: flex; align-items: center; gap: var(--space-2); }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--space-3); align-items: start; margin: 0 0 var(--space-3); }
+.card-grid .card { margin: 0; }
+form.action-card, form.presence-card { flex-direction: column; flex-wrap: nowrap;
+  align-items: stretch; }
+.action-card input, .action-card textarea, .presence-card select { width: 100%; }
+.presence-card select { max-width: 20rem; }
+.action-card button, .presence-card button { align-self: flex-start; }
+.card-title .pill { margin-left: auto; }
+.stats { list-style: none; padding: 0; margin: 0 0 var(--space-4); display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-3); }
+.stat { background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 1rem 1.125rem;
+  display: flex; flex-direction: column; gap: var(--space-1); }
+.stat-label { color: var(--muted); font-size: 0.8125rem; font-weight: 600; }
+.stat-value { color: var(--primary); font-size: 1.75rem; line-height: 1.1; }
+.stat-value small { font-size: 0.875rem; color: var(--muted); font-weight: 600; }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--space-3); }
+.samples { margin: 0; padding-left: 1.25rem; }
+.texts-editor { display: grid; grid-template-columns: 18rem minmax(0, 1fr);
+  gap: 0; padding: 0; overflow: hidden; align-items: stretch; margin: 0 0 var(--space-3); }
+.texts-list { border-right: 1px solid var(--line); background: var(--surface-2);
+  padding: var(--space-2); overflow-y: auto; max-height: 40rem; }
+.texts-group { font-size: 0.75rem; font-weight: 600; color: var(--muted);
+  margin: 0.875rem 0.625rem 0.25rem; }
+.texts-list ul { list-style: none; padding: 0; margin: 0; }
+.texts-list a { display: block; padding: 0.5rem 0.625rem; border-radius: 0.5rem;
+  color: var(--text); text-decoration: none; }
+.texts-list a:hover { background: var(--soft); }
+.texts-main { display: flex; flex-direction: column; min-width: 0; }
+.text-pane { display: none; flex-direction: column; gap: 0.875rem; padding: 1.5rem;
+  scroll-margin-top: var(--space-3); }
+.text-pane:target { display: flex; }
+.texts-panes:not(:has(.text-pane:target)) .text-pane:first-child { display: flex; }
+.text-pane-group { color: var(--muted); font-size: 0.8125rem; margin: 0; }
+.text-pane h2 { margin: 0; }
+.text-pane h2 label { font-size: inherit; font-weight: 700; color: var(--text); }
+.text-pane textarea { width: 100%; min-height: 13.75rem; resize: vertical; }
+.text-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.625rem;
+  font-size: 0.8125rem; color: var(--muted); margin: 0; }
+.text-meta a { color: var(--primary); font-weight: 600; }
+.texts-foot { display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-3); margin-top: auto; padding: 1rem 1.5rem;
+  border-top: 1px solid var(--line); }
+.texts-foot span { font-size: 0.8125rem; color: var(--muted); }
+body.auth { position: relative; overflow-x: hidden;
+  background: linear-gradient(160deg, var(--surface) 0%, var(--bg) 55%, var(--surface-2) 100%); }
+.auth-waves { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0;
+  pointer-events: none; }
+.wave-fill { fill: var(--soft); opacity: 0.7; }
+.wave-line { fill: none; stroke: var(--brand); stroke-width: 2; opacity: 0.75; }
+.wave-line-2 { stroke: var(--accent); opacity: 0.5; }
+.auth-header { position: relative; z-index: 1; }
+.auth-title { margin: 0; padding-left: 0.75rem; border-left: 4px solid var(--accent);
+  color: var(--brand); font-size: 1.75rem; font-weight: 700; line-height: 1.15; }
+main.auth-main { position: relative; z-index: 1; max-width: none; display: grid;
+  place-items: center; min-height: calc(100vh - 6rem); padding: var(--space-3); }
+.auth-card { width: min(100%, 26rem); padding: 1.5rem 1.75rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 1rem; box-shadow: var(--glow); }
+@supports (backdrop-filter: blur(1px)) {
+  .auth-card { background: color-mix(in srgb, var(--surface) 78%, transparent);
+    backdrop-filter: blur(14px); }
+}
+.auth-card h1 { font-size: 1.375rem; margin: 0 0 var(--space-3);
+  padding-left: 0.625rem; border-left: 4px solid var(--btn); }
+.auth-form { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.875rem 0.75rem; align-items: end; margin: 0; }
+.auth-form .span-2 { grid-column: 1 / -1; }
+.auth-form button { display: flex; align-items: center; gap: var(--space-2); }
+.field { position: relative; display: flex; align-items: center; }
+.field .icon { position: absolute; left: 0.75rem; color: var(--muted);
+  pointer-events: none; }
+.field input { width: 100%; padding-left: 2.5rem; }
+.chat { background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); display: flex;
+  flex-direction: column; margin: 0 0 var(--space-3); overflow: hidden; }
 .chat-header, .chat-tools, .chat-composer { padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border); margin: 0; }
-.chat-log { background: var(--bg); max-height: 60vh; min-height: 12rem;
-  overflow-y: auto; padding: var(--space-2); }
+  border-bottom: 1px solid var(--line); margin: 0; }
+.chat-log { background: var(--surface-2); max-height: 60vh; min-height: 12rem;
+  overflow-y: auto; padding: var(--space-3); }
 .chat-messages { list-style: none; padding: 0; margin: 0; display: flex;
   flex-direction: column; gap: var(--space-2); }
 .chat-msg { max-width: 85%; align-self: flex-start; background: var(--surface);
-  color: var(--text); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: var(--space-2); display: flex;
-  flex-direction: column; gap: var(--space-1); }
+  color: var(--text); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); padding: var(--space-2) var(--space-3);
+  display: flex; flex-direction: column; gap: var(--space-1); }
 .chat-msg-advisor { align-self: flex-end; background: var(--ok-bg); }
 .chat-msg-bot { align-self: flex-end; background: var(--info-bg); }
 .chat-author, .chat-time { color: var(--muted); font-size: 0.8rem; }
@@ -173,14 +352,28 @@ select:focus-visible, textarea:focus-visible, .chat-log:focus-visible {
   outline: 3px solid var(--focus); outline-offset: 2px;
 }
 @media (max-width: 48rem) {
-  .site-header { flex-direction: column; align-items: stretch; }
-  .site-nav ul { flex-direction: column; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: static; height: auto; flex-direction: row; align-items: center;
+    overflow-x: auto; padding: 0.625rem 0.75rem; border-right: 0;
+    border-bottom: 1px solid var(--line); }
+  .brand { padding: 0 0.5rem 0 0; }
+  .brand-name, .nav-group { display: none; }
+  .site-nav { display: flex; gap: 0.125rem; }
+  .site-nav ul { flex-direction: row; }
+  .site-nav a { white-space: nowrap; }
+  .sidebar-foot { margin: 0 0 0 auto; padding: 0 0 0 var(--space-2); }
+  .site-header { padding: 0.75rem 1rem; }
+  main { padding: 0.5rem 1rem 2.5rem; }
+  h1 { font-size: 1.75rem; }
   form { flex-direction: column; align-items: stretch; }
+  .form-grid, .auth-form, .texts-editor { grid-template-columns: minmax(0, 1fr); }
+  .texts-list { border-right: 0; border-bottom: 1px solid var(--line);
+    max-height: 14rem; }
+  .texts-foot { flex-direction: column; align-items: stretch; }
   input, select, textarea, button, .btn { width: 100%; }
+  .sidebar-foot button { width: auto; }
 }
 @media (min-width: 48.01rem) {
-  .site-header { flex-direction: row; align-items: center; }
-  .site-nav ul { flex-direction: row; flex-wrap: wrap; }
   form { flex-direction: row; flex-wrap: wrap; align-items: end; }
   input, select, textarea, button, .btn { width: auto; }
 }
@@ -266,67 +459,227 @@ def _skip_link() -> str:
     return '<a class="skip-link" href="#contenido">Saltar al contenido</a>'
 
 
-def _nav_html(
-    links: list[tuple[str, str]],
-    current: str | None = None,
-    label: str = "Navegación",
-) -> str:
-    """R3, R16: misma cabecera y navegación para ambos paneles.
+ICON_PATHS = {
+    "home": "M3 11l9-8 9 8v10H3z",
+    "bolt": "M13 2L4 14h7l-1 8 9-12h-7z",
+    "users": (
+        "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"
+        "M22 21v-2a4 4 0 0 0-3-3.9"
+    ),
+    "chart": "M5 21V10M12 21V4M19 21v-7",
+    "book": (
+        "M4 5h6a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4zM20 5h-6a2 2 0 0 0-2 2v13"
+        "a2 2 0 0 1 2-2h6z"
+    ),
+    "file": "M6 2h8l5 5v15H6zM14 2v5h5",
+    "chat": "M4 4h16v12H9l-5 4z",
+    "flow": "M4 6h16M4 12h10M4 18h16",
+    "folder": "M3 6h6l2 2h10v11H3z",
+    "tag": "M3 12V3h9l9 9-9 9z",
+    "shield": "M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z",
+    "gear": (
+        "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3"
+    ),
+    "trash": "M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14",
+    "headset": "M4 14v-2a8 8 0 0 1 16 0v2M4 14h3v5H4zM20 14h-3v5h3z",
+    "user": "M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10",
+    "lock": "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
+    "arrow": "M5 12h14M13 6l6 6-6 6",
+    "logout": "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10",
+    "memory": "M12 3a9 9 0 1 0 9 9M12 7v5l3 3",
+    "dot": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+}
 
-    `advisor_panel` importa estos helpers privados a propósito para compartir la
-    estructura visual (decisión de #56).
-    """
-    items = []
-    for href, text in links:
-        is_current = bool(current) and (
-            current == href
-            or (href not in ("/admin", "/asesor") and current.startswith(f"{href}/"))
-        )
-        marker = ' aria-current="page"' if is_current else ""
-        items.append(
-            f'<li><a href="{_esc(href)}"{marker}>{_esc(text)}</a></li>'
-        )
+# Icono por ruta para las listas planas de enlaces (panel de asesores).
+HREF_ICONS = {
+    "/admin": "home",
+    "/asesor": "home",
+    "/asesor/cases": "chat",
+    "/asesor/supresiones": "trash",
+    "/asesor/metricas": "chart",
+    "/asesor/memoria": "memory",
+}
+
+BRAND_NAME = "Lázaro Software"
+
+
+def _icon(name: str) -> str:
+    """R7: icono decorativo en línea; la CSP no lo trata como recurso externo."""
+    path = ICON_PATHS.get(name, ICON_PATHS["dot"])
     return (
-        f'<nav class="site-nav" aria-label="{_esc(label)}"><ul>'
-        f"{''.join(items)}</ul></nav>\n"
+        '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+        f'<path d="{path}"/></svg>'
     )
 
 
+NavLink = tuple[str, str] | tuple[str, str, str]
+NavGroup = tuple[str | None, list[NavLink]]
+
+
+def _as_groups(links) -> list[NavGroup]:
+    """Acepta grupos `(título, enlaces)` o una lista plana `(href, texto)`."""
+    if links and isinstance(links[0][1], str):
+        return [(None, list(links))]
+    return list(links)
+
+
+def _nav_html(
+    links,
+    current: str | None = None,
+    label: str = "Navegación",
+) -> str:
+    """R6, R7, R10: navegación lateral agrupada con iconos y enlace actual.
+
+    `advisor_panel` importa estos helpers privados a propósito para compartir la
+    estructura visual (decisiones de #56 y #60).
+    """
+    parts = []
+    for group, group_links in _as_groups(links):
+        if group:
+            parts.append(f'<p class="nav-group">{_esc(group)}</p>')
+        items = []
+        for link in group_links:
+            href, text = link[0], link[1]
+            icon = link[2] if len(link) > 2 else HREF_ICONS.get(href, "dot")
+            is_current = bool(current) and (
+                current == href
+                or (
+                    href not in ("/admin", "/asesor")
+                    and current.startswith(f"{href}/")
+                )
+            )
+            marker = ' aria-current="page"' if is_current else ""
+            items.append(
+                f'<li><a href="{_esc(href)}"{marker}>{_icon(icon)}'
+                f"<span>{_esc(text)}</span></a></li>"
+            )
+        parts.append(f"<ul>{''.join(items)}</ul>")
+    return (
+        f'<nav class="site-nav" aria-label="{_esc(label)}">'
+        f"{''.join(parts)}</nav>\n"
+    )
+
+
+ADMIN_NAV_GROUPS: list[NavGroup] = [
+    (
+        "Operación",
+        [
+            ("/admin", "Inicio", "home"),
+            ("/admin/events", "Eventos recientes", "bolt"),
+            ("/admin/clientes", "Clientes", "users"),
+            ("/admin/metricas", "Métricas", "chart"),
+        ],
+    ),
+    (
+        "Contenido",
+        [
+            ("/admin/manuals", "Manuales", "book"),
+            ("/admin/plantillas", "Plantillas", "file"),
+            ("/admin/respuestas", "Respuestas guardadas", "chat"),
+            ("/admin/texts", "Textos del flujo", "flow"),
+        ],
+    ),
+    (
+        "Organización",
+        [
+            ("/admin/categories", "Categorías", "folder"),
+            ("/admin/etiquetas", "Etiquetas", "tag"),
+        ],
+    ),
+    (
+        "Administración",
+        [
+            ("/admin/profiles", "Perfiles y roles", "shield"),
+            ("/admin/ajustes", "Ajustes", "gear"),
+            ("/admin/supresiones", "Supresiones", "trash"),
+        ],
+    ),
+]
+
+# Lista plana derivada, conservada para quien la importe.
 ADMIN_NAV_LINKS = [
-    ("/admin", "Inicio"),
-    ("/admin/profiles", "Perfiles y roles"),
-    ("/admin/events", "Eventos recientes"),
-    ("/admin/manuals", "Manuales"),
-    ("/admin/categories", "Categorías"),
-    ("/admin/etiquetas", "Etiquetas"),
-    ("/admin/respuestas", "Respuestas guardadas"),
-    ("/admin/texts", "Textos del flujo"),
-    ("/admin/clientes", "Clientes"),
-    ("/admin/plantillas", "Plantillas"),
-    ("/admin/ajustes", "Ajustes"),
-    ("/admin/metricas", "Métricas"),
-    ("/admin/supresiones", "Supresiones"),
+    (href, text) for _, links in ADMIN_NAV_GROUPS for href, text, _icon_name in links
 ]
 
 
-def render_page(
+def _logout_form(action: str, csrf: str) -> str:
+    """R8: la salida vive al pie de la barra lateral, con su CSRF."""
+    return (
+        f'<form method="post" action="{_esc(action)}" class="sidebar-foot">'
+        f"{csrf_field(csrf)}"
+        f'<button type="submit" class="btn-secondary">{_icon("logout")}Salir</button>'
+        "</form>"
+    )
+
+
+def _brand(panel_name: str) -> str:
+    return (
+        f'<div class="brand"><span class="brand-mark">{_icon("headset")}</span>'
+        f'<span class="brand-name">{_esc(BRAND_NAME)}'
+        f"<small>{_esc(panel_name)}</small></span></div>"
+    )
+
+
+def _shell(
     title: str,
     body_html: str,
-    csrf: str | None = None,
-    current_path: str | None = None,
+    *,
+    panel_name: str,
+    navigation: str = "",
+    logout_html: str = "",
+    head_extra: str = "",
+    main_class: str = "",
 ) -> str:
-    logout = ""
-    navigation = ""
-    if csrf is not None:
-        logout = (
-            '<form method="post" action="/admin/logout">'
-            f"{csrf_field(csrf)}"
-            '<button type="submit" class="btn-secondary">Salir</button>'
-            "</form>"
+    """R4, R5, R9, R10: documento común a ambos paneles (barra lateral + contenido)."""
+    sidebar = ""
+    shell_class = "shell shell-bare"
+    if navigation:
+        shell_class = "shell"
+        sidebar = (
+            f'<aside class="sidebar">{_brand(panel_name)}\n'
+            f"{navigation}{logout_html}</aside>\n"
         )
-        navigation = _nav_html(
-            ADMIN_NAV_LINKS, current_path, "Navegación administrativa"
-        )
+    main_attr = f' class="{_esc(main_class)}"' if main_class else ""
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="es">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"{head_extra}"
+        f"<title>{_esc(title)}</title>\n"
+        '<link rel="stylesheet" href="/admin/static/admin.css">\n'
+        "</head>\n"
+        "<body>\n"
+        f"{_skip_link()}\n"
+        f'<div class="{shell_class}">\n'
+        f"{sidebar}"
+        '<div class="main-col">\n'
+        '<header class="site-header"><p class="crumb"><b>Panel</b> '
+        f"<span>/</span> <span>{_esc(title)}</span></p></header>\n"
+        f'<main id="contenido"{main_attr}>\n<h1>{_esc(title)}</h1>\n{body_html}\n</main>\n'
+        "</div>\n"
+        "</div>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+_AUTH_WAVES = (
+    '<svg class="auth-waves" viewBox="0 0 1440 900" preserveAspectRatio="none" '
+    'aria-hidden="true" focusable="false">'
+    '<path class="wave-fill" d="M0 640C320 500 560 780 860 660C1120 560 1260 320 '
+    '1440 180L1440 900L0 900Z"/>'
+    '<path class="wave-line" d="M0 540C300 440 520 840 840 720C1100 620 1250 280 '
+    '1440 60"/>'
+    '<path class="wave-line wave-line-2" d="M0 720C360 620 600 880 920 780C1180 700 '
+    '1320 440 1440 320"/>'
+    "</svg>"
+)
+
+
+def render_auth_page(title: str, panel_name: str, body_html: str) -> str:
+    """R19: diseño de acceso (curvas decorativas y tarjeta translúcida)."""
     return (
         "<!DOCTYPE html>\n"
         '<html lang="es">\n'
@@ -336,39 +689,94 @@ def render_page(
         f"<title>{_esc(title)}</title>\n"
         '<link rel="stylesheet" href="/admin/static/admin.css">\n'
         "</head>\n"
-        "<body>\n"
+        '<body class="auth">\n'
         f"{_skip_link()}\n"
-        f'<header class="site-header"><h1>Panel administrativo</h1>{logout}</header>\n'
-        f'<main id="contenido">\n{navigation}<h2>{_esc(title)}</h2>\n{body_html}\n</main>\n'
+        f"{_AUTH_WAVES}\n"
+        f'<header class="site-header auth-header"><p class="auth-title">'
+        f"{_esc(panel_name)}</p></header>\n"
+        '<main id="contenido" class="auth-main">\n'
+        f'<div class="auth-card"><h1>{_esc(title)}</h1>\n{body_html}\n</div>\n'
+        "</main>\n"
         "</body>\n"
         "</html>\n"
     )
 
 
-def render_login(message: str | None = None, code: str | None = None) -> str:
-    error = ""
-    if message:
-        data = f' data-error="{_esc(code)}"' if code else ""
-        error = f'<p class="error" role="alert"{data}>{_esc(message)}</p>\n'
-    body = (
-        f"{error}"
-        '<form method="post" action="/admin/login" class="card">'
-        '<label>Usuario <input name="username" autocomplete="username" required></label>'
-        '<label>Contraseña <input type="password" name="password" '
-        'autocomplete="current-password" required></label>'
-        '<button type="submit">Entrar</button>'
+def login_form(action: str, hidden_html: str = "") -> str:
+    """R20: usuario y contraseña con icono; conserva nombres y autocompletado."""
+    return (
+        f'<form method="post" action="{_esc(action)}" class="auth-form">'
+        f"{hidden_html}"
+        '<label class="span-2">Usuario <span class="field">'
+        f'{_icon("user")}<input name="username" autocomplete="username" '
+        'placeholder="Ingresa tu usuario" required></span></label>'
+        '<label>Contraseña <span class="field">'
+        f'{_icon("lock")}<input type="password" name="password" '
+        'autocomplete="current-password" placeholder="Ingresa tu contraseña" '
+        "required></span></label>"
+        f'<button type="submit">Entrar {_icon("arrow")}</button>'
         "</form>"
     )
-    return render_page("Iniciar sesión", body)
+
+
+def _alert(message: str | None, code: str | None = None) -> str:
+    if not message:
+        return ""
+    data = f' data-error="{_esc(code)}"' if code else ""
+    return f'<p class="error" role="alert"{data}>{_esc(message)}</p>\n'
+
+
+def render_page(
+    title: str,
+    body_html: str,
+    csrf: str | None = None,
+    current_path: str | None = None,
+) -> str:
+    navigation = ""
+    logout = ""
+    if csrf is not None:
+        logout = _logout_form("/admin/logout", csrf)
+        navigation = _nav_html(
+            ADMIN_NAV_GROUPS, current_path, "Navegación administrativa"
+        )
+    return _shell(
+        title,
+        body_html,
+        panel_name="Panel administrativo",
+        navigation=navigation,
+        logout_html=logout,
+    )
+
+
+def render_login(message: str | None = None, code: str | None = None) -> str:
+    body = f"{_alert(message, code)}{login_form('/admin/login')}"
+    return render_auth_page("Iniciar sesión", "Panel administrativo", body)
+
+
+QUICK_ACTIONS = (
+    ("/admin/clientes", "users", "Clientes", "Cuentas que inician sesión en el bot."),
+    ("/admin/manuals", "book", "Manuales", "Documentos que alimentan las respuestas."),
+    ("/admin/plantillas", "file", "Plantillas", "Mensajes de WhatsApp aprobados."),
+    ("/admin/etiquetas", "tag", "Etiquetas", "Clasificación de los casos."),
+    ("/admin/texts", "flow", "Textos del flujo", "Lo que dice el bot en cada paso."),
+    ("/admin/metricas", "chart", "Métricas", "Tiempos de respuesta y escalamientos."),
+)
 
 
 def render_home(csrf: str) -> str:
-    return render_page(
-        "Inicio",
-        "<p>Selecciona una sección del panel.</p>",
-        csrf,
-        current_path="/admin",
+    """R11: accesos rápidos a las secciones más usadas."""
+    cards = "".join(
+        f'<li><a href="{_esc(href)}"><span class="quick-icon">{_icon(icon)}</span>'
+        f"<span><b>{_esc(name)}</b><small>{_esc(hint)}</small></span></a></li>"
+        for href, icon, name, hint in QUICK_ACTIONS
     )
+    body = (
+        '<p class="lead">Te damos la bienvenida al panel de Lázaro Software. '
+        "Elige una sección para empezar.</p>"
+        '<h2>Accesos rápidos</h2>'
+        f'<ul class="quick">{cards}</ul>'
+    )
+    return render_page("Inicio", body, csrf, current_path="/admin")
 
 
 STAFF_PROFILE_ROLES = ("admin", "supervisor", "asesor", "responsable_datos")
@@ -388,13 +796,17 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
             f'{" selected" if role == profile.role else ""}>{_esc(role)}</option>'
             for role in roles
         )
+        initial = (profile.username or "?")[:1].upper()
+        pill = "pill-yes" if profile.telegram_user_id is not None else "pill-no"
         rows.append(
             "<tr>"
-            f"<td>{_esc(profile.username)}</td>"
-            f"<td>{_esc(profile.role)}</td>"
-            f"<td>{linked}</td>"
+            f'<td><span class="user-cell"><span class="av" aria-hidden="true">'
+            f"{_esc(initial)}</span>{_esc(profile.username)}</span></td>"
+            f'<td><span class="badge">{_esc(profile.role)}</span></td>'
+            f'<td><span class="pill {pill}">{linked}</span></td>'
             "<td>"
-            f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/role">'
+            f'<form method="post" action="/admin/profiles/{_esc(profile.id)}/role" '
+            'class="inline-form">'
             f"{csrf_field(csrf)}"
             f'<select name="role">{role_options}</select>'
             '<button type="submit" class="btn-secondary">Cambiar rol</button>'
@@ -413,9 +825,10 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
     body = (
         f"{error_html}"
-        '<p>Para crear clientes que inician sesión en el bot usa '
+        '<p class="lead">Para crear clientes que inician sesión en el bot usa '
         '<a href="/admin/clientes">Clientes</a>.</p>'
-        '<form method="post" action="/admin/profiles" class="card">'
+        '<form method="post" action="/admin/profiles" class="card form-grid">'
+        '<h2 class="card-title">Nuevo perfil</h2>'
         f"{csrf_field(csrf)}"
         '<label>Usuario <input name="username" autocomplete="off" required></label>'
         '<label>Rol <select name="role">'
@@ -429,7 +842,7 @@ def render_profiles(profiles, csrf: str, error: str | None = None) -> str:
         '<button type="submit">Crear perfil</button>'
         "</form>"
         + _table_wrap(
-            "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Vinculado</th>"
+            "<table><thead><tr><th>Usuario</th><th>Rol</th><th>Telegram vinculado</th>"
             "<th>Cambiar rol</th><th>Enlace de Telegram</th>"
             "</tr></thead><tbody>"
             f"{''.join(rows)}"
@@ -729,39 +1142,123 @@ TEXT_FIELD_LABELS = {
 }
 
 
+TEXT_GROUPS = (
+    ("Consentimiento legal", ("notice_text", "notice_version", "confirm_button_reply")),
+    (
+        "Conversación",
+        (
+            "greeting",
+            "active_welcome",
+            "topics_list",
+            "accepted_reply",
+            "rejected_reply",
+            "unsupported_reply",
+        ),
+    ),
+    (
+        "Sesión y acceso",
+        ("login_reminder", "login_link_label", "session_closed_reply", "expiry_notice"),
+    ),
+    ("Servicio y casos", ("suspended_reply", "out_of_hours_reply", "closing_reply")),
+)
+LEGAL_TEXT_FIELDS = frozenset({"notice_text", "notice_version"})
+
+
+def text_groups() -> list[tuple[str, list[str]]]:
+    """R12, R16: grupos del editor; los campos sin grupo van a "Otros"."""
+    grouped: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+    for name, fields in TEXT_GROUPS:
+        present = [field for field in fields if field in TEXT_FIELD_LABELS]
+        seen.update(present)
+        if present:
+            grouped.append((name, present))
+    others = [field for field in TEXT_FIELD_LABELS if field not in seen]
+    if others:
+        grouped.append(("Otros", others))
+    return grouped
+
+
+def _text_anchor(field: str) -> str:
+    return f"texto-{field}"
+
+
 def render_conversation_texts(
     texts,
     csrf: str,
     error: str | None = None,
     versions: dict[str, int] | None = None,
 ) -> str:
+    """R12–R17: editor de dos columnas; un solo formulario con todos los campos."""
     error_html = ""
     if error:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
-    rows = []
-    for field, label in TEXT_FIELD_LABELS.items():
-        value = getattr(texts, field)
-        version = (versions or {}).get(field)
-        version_text = str(version) if version is not None else "sin historial"
-        rows.append(
-            f'<label>{_esc(label)} '
-            f'<textarea name="{_esc(field)}" maxlength="4096" required>'
-            f"{_esc(value)}</textarea></label>"
-            f'<p>Versión vigente: <code>{_esc(version_text)}</code> '
-            f'<a href="/admin/texts/{quote(field, safe="")}/historial">Historial</a></p>'
+    nav_parts = []
+    panes = []
+    for group, fields in text_groups():
+        items = []
+        for field in fields:
+            label = TEXT_FIELD_LABELS[field]
+            anchor = _text_anchor(field)
+            version = (versions or {}).get(field)
+            version_text = str(version) if version is not None else "sin historial"
+            legal = (
+                '<p class="note">La versión legal se guarda junto al texto; al '
+                "cambiarla, los clientes deberán aceptar de nuevo antes de "
+                "continuar.</p>"
+                if field in LEGAL_TEXT_FIELDS
+                else ""
+            )
+            items.append(f'<li><a href="#{_esc(anchor)}">{_esc(label)}</a></li>')
+            # Sin `required`: un campo inválido oculto bloquearía el envío sin
+            # aviso visible; el servidor valida los vacíos.
+            panes.append(
+                f'<section class="text-pane" id="{_esc(anchor)}">'
+                f'<p class="text-pane-group">{_esc(group)}</p>'
+                f'<h2><label for="campo-{_esc(field)}">{_esc(label)}</label></h2>'
+                f'<textarea id="campo-{_esc(field)}" name="{_esc(field)}" '
+                f'maxlength="4096">{_esc(getattr(texts, field))}</textarea>'
+                '<p class="text-meta">Versión vigente '
+                f'<span class="chip">{_esc(version_text)}</span> '
+                f'<a href="/admin/texts/{quote(field, safe="")}/historial">Historial</a>'
+                "</p>"
+                f"{legal}"
+                "</section>"
+            )
+        nav_parts.append(
+            f'<p class="texts-group">{_esc(group)}</p><ul>{"".join(items)}</ul>'
         )
-    fields_html = "".join(rows)
     body = (
         f"{error_html}"
-        '<form method="post" action="/admin/texts" class="card">'
+        '<p class="lead">Elige un mensaje de la lista y edítalo.</p>'
+        '<form method="post" action="/admin/texts" class="card texts-editor">'
         f"{csrf_field(csrf)}"
-        f"{fields_html}"
-        '<button type="submit">Guardar textos</button>'
+        f'<nav class="texts-list" aria-label="Mensajes">{"".join(nav_parts)}</nav>'
+        '<div class="texts-main">'
+        f'<div class="texts-panes">{"".join(panes)}</div>'
+        '<div class="texts-foot"><span>Se guardan juntos todos los mensajes '
+        "modificados.</span>"
+        '<button type="submit">Guardar textos</button></div>'
+        "</div>"
         "</form>"
-        '<p>La versión legal se guarda junto al texto; al cambiarla, los '
-        "clientes deberán aceptar de nuevo antes de continuar.</p>"
     )
     return render_page("Textos del flujo", body, csrf, "/admin/texts")
+
+
+def _texts_css() -> str:
+    """R17: resalta en la lista el mensaje visible, sin JavaScript."""
+    current = ",\n".join(
+        f'.texts-editor:has(#{_text_anchor(field)}:target) '
+        f'a[href="#{_text_anchor(field)}"]'
+        for field in TEXT_FIELD_LABELS
+    )
+    return (
+        f"{current} {{ background: var(--brand); color: var(--brand-contrast);\n"
+        "  font-weight: 600; }\n"
+        ".texts-editor:not(:has(.text-pane:target)) .texts-list > "
+        "ul:first-of-type > li:first-child > a { background: var(--brand);\n"
+        "  color: var(--brand-contrast); font-weight: 600; }\n"
+    )
 
 
 def render_text_history(field: str, versions, csrf: str) -> str:
@@ -953,11 +1450,25 @@ def render_settings(settings_rows, csrf: str, error: str | None = None) -> str:
     return render_page("Ajustes operativos", body, csrf, "/admin/ajustes")
 
 
-def render_metrics(metrics, csrf: str) -> str:
+def _minutes(value: float | None) -> str:
+    return f"{value:.1f}" if value is not None else "—"
+
+
+def metrics_body(metrics) -> str:
+    """#60 R25: métricas en tarjetas y tablas; compartido por admin y supervisor."""
     first = metrics.first_response
-    average = f"{first.avg_minutes:.1f}" if first.avg_minutes is not None else "—"
-    median = (
-        f"{first.median_minutes:.1f}" if first.median_minutes is not None else "—"
+    stats = (
+        ("Casos", first.cases, None),
+        ("Respondidos", first.answered, None),
+        ("Sin respuesta", first.unanswered, None),
+        ("Primera respuesta promedio", _minutes(first.avg_minutes), "min"),
+        ("Primera respuesta mediana", _minutes(first.median_minutes), "min"),
+    )
+    cards = "".join(
+        f'<li class="stat"><span class="stat-label">{_esc(label)}</span>'
+        f'<b class="stat-value">{_esc(value)}'
+        f'{f" <small>{_esc(unit)}</small>" if unit else ""}</b></li>'
+        for label, value, unit in stats
     )
     advisors = "".join(
         f"<tr><td>{_esc(label)}</td><td>{_esc(count)}</td></tr>"
@@ -971,21 +1482,30 @@ def render_metrics(metrics, csrf: str) -> str:
         f"<li>{_esc(at.isoformat())}: {_esc(text)}</li>"
         for at, text in metrics.unanswered_samples
     ) or "<li>Sin muestras</li>"
-    body = (
-        f'<p>Intervalo: {_esc(metrics.since.isoformat())} — '
+    return (
+        f'<p class="lead">Intervalo: {_esc(metrics.since.isoformat())} — '
         f"{_esc(metrics.until.isoformat())}</p>"
-        "<h3>Primera respuesta</h3>"
-        f"<p>Casos: {_esc(first.cases)} · Respondidos: {_esc(first.answered)} · "
-        f"Sin respuesta: {_esc(first.unanswered)} · Promedio: {_esc(average)} min · "
-        f"Mediana: {_esc(median)} min</p>"
-        "<h3>Conversaciones por asesor</h3>"
-        + _table_wrap(f"<table><tbody>{advisors}</tbody></table>")
-        + "<h3>Motivos de escalamiento</h3>"
-        + _table_wrap(f"<table><tbody>{reasons}</tbody></table>")
-        + f"<h3>Preguntas sin respuesta: {_esc(metrics.unanswered_total)}</h3>"
-        f"<ul>{samples}</ul>"
+        f'<ul class="stats">{cards}</ul>'
+        '<div class="split"><section>'
+        "<h2>Conversaciones por asesor</h2>"
+        + _table_wrap(
+            "<table><thead><tr><th>Asesor</th><th>Conversaciones</th></tr></thead>"
+            f"<tbody>{advisors}</tbody></table>"
+        )
+        + "</section><section><h2>Motivos de escalamiento</h2>"
+        + _table_wrap(
+            "<table><thead><tr><th>Motivo</th><th>Casos</th></tr></thead>"
+            f"<tbody>{reasons}</tbody></table>"
+        )
+        + "</section></div>"
+        f'<section class="card"><h2>Preguntas sin respuesta: '
+        f"{_esc(metrics.unanswered_total)}</h2>"
+        f'<ul class="samples">{samples}</ul></section>'
     )
-    return render_page("Métricas", body, csrf, "/admin/metricas")
+
+
+def render_metrics(metrics, csrf: str) -> str:
+    return render_page("Métricas", metrics_body(metrics), csrf, "/admin/metricas")
 
 
 def render_error(status: int, code: str, csrf: str | None = None) -> str:
@@ -995,3 +1515,6 @@ def render_error(status: int, code: str, csrf: str | None = None) -> str:
 
 def render_message(title: str, message: str, csrf: str | None = None) -> str:
     return render_page(title, f"<p>{_esc(message)}</p>", csrf)
+
+
+ADMIN_CSS = _BASE_CSS + _texts_css()

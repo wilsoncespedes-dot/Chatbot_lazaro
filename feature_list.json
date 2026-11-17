@@ -75,6 +75,7 @@
     {"id": 56, "name": "rediseño_visual_paneles", "title": "Rediseño visual moderno de los paneles", "sdd": true, "status": "done"},
     {"id": 57, "name": "retencion_evidencia_y_privacidad_inicial", "title": "Aplicar la retención aprobada a la evidencia de consentimiento", "sdd": true, "status": "done"},
     {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"},
-    {"id": 59, "name": "chat_caso_asesor", "title": "Vista de chat en el detalle del caso del panel de asesores", "sdd": true, "status": "done"}
+    {"id": 59, "name": "chat_caso_asesor", "title": "Vista de chat en el detalle del caso del panel de asesores", "sdd": true, "status": "done"},
+    {"id": 60, "name": "rediseno_identidad_panel", "title": "Rediseño de los paneles con la nueva identidad visual (menú lateral agrupado, editor de textos del flujo, login)", "sdd": true, "status": "in_progress"}
   ]
 }
