@@ -140,3 +140,9 @@ CSRF.
 Las páginas de métricas de `/admin/metricas` y `/asesor/metricas` DEBEN
 mostrar las cifras de primera respuesta como tarjetas y las tablas por asesor
 y por motivo con encabezados, sin formularios en la vista del supervisor.
+
+## R26
+Los inicios de sesión de `/admin/login`, `/asesor/login` y `/acceso` DEBEN
+ofrecer junto a la contraseña un botón discreto (icono de ojo) que alterne
+entre mostrarla y ocultarla, cargado desde `/admin/static/login.js` y oculto
+cuando no hay JavaScript.

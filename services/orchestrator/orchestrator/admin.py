@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 import secrets
 from datetime import datetime
@@ -325,6 +326,13 @@ main.auth-main { position: relative; z-index: 1; max-width: none; display: grid;
 .field .icon { position: absolute; left: 0.75rem; color: var(--muted);
   pointer-events: none; }
 .field input { width: 100%; padding-left: 2.5rem; }
+.field input.has-toggle { padding-right: 2.75rem; }
+.pw-toggle { position: absolute; right: 0.375rem; width: 2rem; height: 2rem;
+  min-height: 2rem; padding: 0; display: grid; place-items: center;
+  background: transparent; border: 0; border-radius: 0.375rem; color: var(--muted); }
+.pw-toggle[hidden] { display: none; }
+.pw-toggle:hover { color: var(--primary); background: var(--soft); filter: none; }
+.field .pw-toggle .icon { position: static; }
 .chat { background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius-lg); box-shadow: var(--shadow); display: flex;
   flex-direction: column; margin: 0 0 var(--space-3); overflow: hidden; }
@@ -488,6 +496,14 @@ ICON_PATHS = {
     "logout": "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10",
     "memory": "M12 3a9 9 0 1 0 9 9M12 7v5l3 3",
     "dot": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+    "eye": (
+        "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"
+        "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"
+    ),
+    "eye_off": (
+        "M3 3l18 18M10.6 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1"
+        "M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.4-.5 4.8-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2"
+    ),
 }
 
 # Icono por ruta para las listas planas de enlaces (panel de asesores).
@@ -501,6 +517,36 @@ HREF_ICONS = {
 }
 
 BRAND_NAME = "Lázaro Software"
+
+# #60 R26: mostrar u ocultar la contraseña en los inicios de sesión. Se sirve
+# en /admin/static/login.js porque la CSP no admite scripts en línea.
+LOGIN_JS = """// Mostrar u ocultar la contraseña (#60 R26).
+(function () {
+  "use strict";
+  var EYE = %(eye)s;
+  var EYE_OFF = %(eye_off)s;
+  var buttons = document.querySelectorAll("[data-pw-toggle]");
+  Array.prototype.forEach.call(buttons, function (button) {
+    var input = document.getElementById(button.getAttribute("aria-controls"));
+    if (!input) { return; }
+    var path = button.querySelector("path");
+    var set = function (show) {
+      input.type = show ? "text" : "password";
+      button.setAttribute("aria-pressed", show ? "true" : "false");
+      button.setAttribute("aria-label", show ? "Ocultar contraseña" : "Mostrar contraseña");
+      if (path) { path.setAttribute("d", show ? EYE_OFF : EYE); }
+    };
+    button.hidden = false;
+    button.addEventListener("click", function () {
+      set(input.type === "password");
+      input.focus();
+    });
+    if (input.form) {
+      input.form.addEventListener("submit", function () { set(false); });
+    }
+  });
+})();
+""" % {"eye": json.dumps(ICON_PATHS["eye"]), "eye_off": json.dumps(ICON_PATHS["eye_off"])}
 
 
 def _icon(name: str) -> str:
@@ -688,6 +734,7 @@ def render_auth_page(title: str, panel_name: str, body_html: str) -> str:
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n"
         '<link rel="stylesheet" href="/admin/static/admin.css">\n'
+        '<script src="/admin/static/login.js" defer></script>\n'
         "</head>\n"
         '<body class="auth">\n'
         f"{_skip_link()}\n"
@@ -711,9 +758,14 @@ def login_form(action: str, hidden_html: str = "") -> str:
         f'{_icon("user")}<input name="username" autocomplete="username" '
         'placeholder="Ingresa tu usuario" required></span></label>'
         '<label>Contraseña <span class="field">'
-        f'{_icon("lock")}<input type="password" name="password" '
-        'autocomplete="current-password" placeholder="Ingresa tu contraseña" '
-        "required></span></label>"
+        f'{_icon("lock")}<input type="password" name="password" id="campo-password" '
+        'class="has-toggle" autocomplete="current-password" '
+        'placeholder="Ingresa tu contraseña" required>'
+        # R26: el script de login lo muestra; sin JavaScript queda oculto.
+        '<button type="button" class="pw-toggle" data-pw-toggle hidden '
+        'aria-controls="campo-password" aria-pressed="false" '
+        f'aria-label="Mostrar contraseña">{_icon("eye")}</button>'
+        "</span></label>"
         f'<button type="submit">Entrar {_icon("arrow")}</button>'
         "</form>"
     )
