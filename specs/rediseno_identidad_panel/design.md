@@ -113,3 +113,11 @@ ancho completo, editor de textos en una columna.
 - `admin.metrics_body(metrics)` lo usan `render_metrics` y
   `render_supervisor_metrics`: `.stats` con cinco tarjetas y `.split` con dos
   tablas con `thead`.
+
+## Ver contraseña (R26)
+
+Botón `button.pw-toggle[data-pw-toggle][hidden]` dentro de `.field`, con
+`aria-controls`, `aria-pressed` y `aria-label`. `admin.LOGIN_JS` (servido sin
+sesión en `/admin/static/login.js`, con las mismas cabeceras que `admin.css`)
+quita `hidden`, alterna `type` entre `password` y `text`, cambia el icono
+(`eye` / `eye_off`) y vuelve a `password` al enviar el formulario.

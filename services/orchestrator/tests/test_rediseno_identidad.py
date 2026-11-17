@@ -229,7 +229,7 @@ def test_login_fields_keep_names_and_have_icons():
     assert '<input type="hidden" name="t" value="tok">' in html
     assert re.search(r'<span class="field"><svg class="icon"[^>]*>.*?</svg><input name="username" '
                      r'autocomplete="username"[^>]* required>', html)
-    assert re.search(r'<input type="password" name="password" '
+    assert re.search(r'<input type="password" name="password"[^>]* '
                      r'autocomplete="current-password"[^>]* required>', html)
     assert 'class="error" role="alert"' in html
 
@@ -337,3 +337,39 @@ def test_metrics_use_stat_cards(env_factory, panel):
         assert "<th>Asesor</th><th>Conversaciones</th>" in html
         assert "<th>Motivo</th><th>Casos</th>" in html
     assert "<form" not in advisor_html.split('<main id="contenido">')[1]
+
+
+# --- R26: ver contraseña ----------------------------------------------------------
+
+
+def test_login_pages_offer_hidden_password_toggle():
+    """R26: botón con ojo, oculto sin JavaScript, y el script que lo activa."""
+    for html in (
+        admin.render_login(),
+        advisor_panel.render_advisor_login(),
+        identity_page.render_login_form("tok"),
+    ):
+        assert '<script src="/admin/static/login.js" defer></script>' in html
+        assert 'id="campo-password"' in html
+        assert re.search(
+            r'<button type="button" class="pw-toggle" data-pw-toggle hidden '
+            r'aria-controls="campo-password" aria-pressed="false" '
+            r'aria-label="Mostrar contraseña"><svg class="icon"',
+            html,
+        )
+    assert ".pw-toggle[hidden] { display: none; }" in CSS
+
+
+def test_login_script_is_public_with_security_headers(env_factory):
+    """R26: el script se sirve sin sesión, con CSP, nosniff y no-store."""
+    env = env_factory()
+    response = env.client.get("/admin/static/login.js")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+    assert response.headers["content-security-policy"] == admin.CSP
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "no-store"
+    body = response.text
+    assert 'input.type = show ? "text" : "password";' in body
+    assert "button.hidden = false;" in body
+    assert admin.ICON_PATHS["eye_off"] in body
