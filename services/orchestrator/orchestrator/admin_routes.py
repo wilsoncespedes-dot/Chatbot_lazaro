@@ -51,7 +51,6 @@ from .domain import (
     create_saved_reply,
     create_template,
     execute_suppression_from_panel,
-    issue_link_token,
     list_case_tags,
     list_clients_admin,
     list_profiles,
@@ -478,32 +477,6 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 status_code=409,
             )
         return _redirect("/admin/profiles")
-
-    @router.post("/admin/profiles/{profile_id}/link-token")
-    async def create_link_token(profile_id: str, request: Request) -> Response:
-        session = _require_session(request, adapters)
-        form = await _form(request)
-        _require_csrf(session, form)
-        try:
-            issued = issue_link_token(profile_id, settings, adapters)
-        except ProfileNotFound:
-            return _html(
-                admin.render_message(
-                    "Perfil no encontrado", "profile_not_found", session.csrf_token
-                ),
-                status_code=404,
-            )
-        link = None
-        if settings.telegram_bot_username:
-            link = (
-                f"https://t.me/{settings.telegram_bot_username}"
-                f"?start={issued.token}"
-            )
-        return _html(
-            admin.render_link(
-                issued.token, link, issued.expires_at, session.csrf_token
-            )
-        )
 
     @router.get("/admin/events")
     async def events_page(request: Request) -> HTMLResponse:

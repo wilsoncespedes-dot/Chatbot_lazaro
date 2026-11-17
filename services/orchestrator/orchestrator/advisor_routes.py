@@ -66,10 +66,6 @@ ADVISOR_ROLES = frozenset({"asesor", "supervisor"})
 SUPERVISOR_ROLES = frozenset({"supervisor"})
 
 
-class TelegramNotLinked(Exception):
-    """El perfil de la sesión no tiene telegram_user_id vinculado (R9)."""
-
-
 class AdvisorAccessDenied(Exception):
     """La sesión es válida pero su rol no permite la ruta (R22, R25, R26)."""
 
@@ -264,7 +260,6 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
             advisor_panel.render_advisor_home(
                 session.csrf_token,
                 request.query_params.get("ok"),
-                profile.telegram_user_id is not None,
                 _presence_state(profile.id, settings, adapters),
                 profile.role,
             )
@@ -274,10 +269,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
     async def cases_page(request: Request) -> HTMLResponse:
         session = _require_session(request, adapters, ADVISOR_ROLES)
         profile = _current_profile(session, adapters)
-        try:
-            advisor_id = _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        advisor_id = _advisor_id(session, adapters)
         channel = request.query_params.get("canal")
         assignment = request.query_params.get("asignacion")
         tag = request.query_params.get("tag") or None
@@ -307,10 +299,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
     async def case_page(request: Request, case_id: str) -> HTMLResponse:
         session = _require_session(request, adapters, ADVISOR_ROLES)
         profile = _current_profile(session, adapters)
-        try:
-            _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        _advisor_id(session, adapters)
         if not _valid_case_id(case_id):
             return _error_page(422, "validation_error", session.csrf_token)
         reply_id = request.query_params.get("respuesta") or None
@@ -337,10 +326,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
     async def case_memory(request: Request, case_id: str) -> HTMLResponse:
         session = _require_session(request, adapters, ADVISOR_ROLES)
         profile = _current_profile(session, adapters)
-        try:
-            advisor_id = _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        advisor_id = _advisor_id(session, adapters)
         if not _valid_case_id(case_id):
             return _error_page(422, "validation_error", session.csrf_token)
         try:
@@ -510,10 +496,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
         profile = _current_profile(session, adapters)
         form = await _form(request)
         _require_csrf(session, form)
-        try:
-            advisor_id = _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        advisor_id = _advisor_id(session, adapters)
         case_id = form.get("case_id", "")
         text = form.get("text", "")
         template = form.get("template", "")
@@ -567,10 +550,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
         profile = _current_profile(session, adapters)
         form = await _form(request)
         _require_csrf(session, form)
-        try:
-            advisor_id = _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        advisor_id = _advisor_id(session, adapters)
         case_id = form.get("case_id", "")
         if not _valid_case_id(case_id):
             return _error_page(422, "validation_error", session.csrf_token)
@@ -588,10 +568,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
         profile = _current_profile(session, adapters)
         form = await _form(request)
         _require_csrf(session, form)
-        try:
-            advisor_id = _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        advisor_id = _advisor_id(session, adapters)
         case_id = form.get("case_id", "")
         if not _valid_case_id(case_id):
             return _error_page(422, "validation_error", session.csrf_token)
@@ -609,10 +586,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
         profile = _current_profile(session, adapters)
         form = await _form(request)
         _require_csrf(session, form)
-        try:
-            advisor_id = _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        advisor_id = _advisor_id(session, adapters)
         case_id = form.get("case_id", "")
         if not _valid_case_id(case_id):
             return _error_page(422, "validation_error", session.csrf_token)
@@ -630,10 +604,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
         profile = _current_profile(session, adapters)
         form = await _form(request)
         _require_csrf(session, form)
-        try:
-            _advisor_id(session, adapters)
-        except TelegramNotLinked:
-            return _error_page(403, "telegram_not_linked", session.csrf_token)
+        _advisor_id(session, adapters)
         case_id = form.get("case_id", "")
         target_profile_id = form.get("target_profile_id", "")
         if not _valid_case_id(case_id):

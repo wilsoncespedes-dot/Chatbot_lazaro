@@ -28,11 +28,14 @@
 - Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
   sesión se formaliza como feature.
 
-## 2026-11-17 — #64 preguntas_seguimiento (in_progress, rama `lazaro/preguntas-seguimiento`, encima de PR #6)
+## 2026-11-17 — #65 asesores_sin_telegram (in_progress, rama `lazaro/asesores-sin-telegram`, encima de PR #7)
 
-- `_tool_rag`: si el mensaje tiene <= RAG_FOLLOWUP_MAX_WORDS palabras y el
-  contacto hizo otra pregunta en los últimos RAG_FOLLOWUP_WINDOW_MINUTES, se
-  busca con el mensaje y con "pregunta anterior + mensaje" y se combinan los
-  resultados (mejor puntuación, sin duplicados).
-- El prompt recibe `<pregunta_anterior>` (neutralizada) solo como contexto.
-- Funciona también sin sesión iniciada (usa `last_messages` del contacto).
+- Pedido del usuario: el panel de asesores ya no exige Telegram vinculado
+  (el Inicio solo mostraba un aviso) y se quita la generación del enlace en
+  Perfiles y roles (botón, `POST /admin/profiles/{id}/link-token`,
+  `admin.render_link` y columnas de Telegram).
+- Quitados los `except TelegramNotLinked` muertos y el mensaje
+  `telegram_not_linked`.
+- Se conserva la API interna `/profiles/{id}/link-token` y el `/start` de
+  Telegram (feature #20) porque no son del panel; sin enlace nuevo, un asesor
+  no podrá usar `/db_query` desde Telegram.
