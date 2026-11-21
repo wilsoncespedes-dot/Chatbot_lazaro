@@ -44,6 +44,7 @@ from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
 from .advisor_routes import AdvisorAccessDenied, create_advisor_router
 from .config import Settings
 from .domain import (
+    ATTENDED_CHANNELS,
     Adapters,
     DomainError,
     _has_current_consent,
@@ -383,6 +384,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     def post_message(
         body: MessageRequest | NormalizedMessage, background: BackgroundTasks
     ):
+        if isinstance(body, NormalizedMessage) and (
+            body.channel not in ATTENDED_CHANNELS or body.direction != "inbound"
+        ):
+            raise RequestValidationError([])
         if isinstance(body, NormalizedMessage):
             normalized = body
             try:

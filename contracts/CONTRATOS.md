@@ -28,6 +28,9 @@ Excepciones (no piden token):
 - `GET /health` de cada servicio.
 - El webhook de Telegram del `telegram_gateway` (lo llama Telegram, que no conoce
   el token; su protección la fija la feature del gateway).
+- `POST /webhooks/{canal_id}` del `telegram_gateway` (desde #62): lo llama un
+  sistema externo que no conoce el token; se protege con `X-Lazaro-Signature`
+  (ver «Canal genérico (webhook firmado)»).
 
 ### Errores
 
@@ -101,20 +104,44 @@ adaptador falso hasta que exista el proveedor real (#43).
 
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
-| `channel` | `telegram` \| `whatsapp` | sí | canal de origen |
+| `channel` | slug de canal (2–32, `^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`) | sí | `id` del canal en `canales` |
 | `external_user_id` | texto (1–128) | sí | id de usuario del canal |
 | `external_chat_id` | texto (1–128) | sí | chat del canal |
 | `external_message_id` | texto (1–128) | sí | id del mensaje del proveedor; en Telegram es `update_id` |
-| `kind` | `text` \| `button` \| `unsupported` | sí | tipo de contenido |
-| `text` | texto (1–4096) | si `kind = text` | contenido de texto |
+| `kind` | `text` \| `button` \| `unsupported` \| `image` \| `file` \| `audio` | sí | tipo de contenido |
+| `text` | texto (1–4096) | si `kind = text` | contenido de texto; en un tipo multimedia es el pie opcional |
 | `button_id` | texto (1–128) | si `kind = button` | id canónico del botón pulsado |
 | `button_proof` | texto (1–128) | no | prueba HMAC truncada de la versión/hash del aviso que originó el botón (S15) |
-| `received_at` | fecha ISO 8601 con zona | sí | momento de recepción en UTC |
+| `received_at` | fecha ISO 8601 con zona | sí | momento de recepción en UTC; en `outbound`, el momento en que la plataforma generó el mensaje |
+| `direction` | `inbound` \| `outbound` | no | sentido del mensaje; por defecto `inbound` |
+| `attachments` | lista de `Attachment` (máx. 10) | no | metadatos de imagen, archivo o audio; nunca el binario; por defecto `[]` |
+| `metadata` | objeto JSON (≤ 4096 bytes y profundidad 5) | no | datos específicos del canal; por defecto `{}` |
 
 En Telegram, un `callback_query` se normaliza con el id del callback como
 `external_message_id` y con el id canónico del botón (no el texto visible) como
 `button_id`. La prueba `button_proof` viaja junto al botón y permite al
 orquestador descartar clics de avisos obsoletos o manipulados (S15).
+
+Los tipos multimedia (`image`, `file` y `audio`) exigen al menos un adjunto y
+todos sus adjuntos deben tener el mismo `type`; `text`, `button` y `unsupported`
+no llevan adjuntos. Un mensaje `outbound` no puede ser `button` ni
+`unsupported`. Al serializar, `direction`, `attachments` y `metadata` se omiten
+cuando tienen su valor por defecto (`inbound`, `[]` y `{}`), así los payloads
+antiguos conservan sus claves.
+
+### Attachment
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `type` | `image` \| `file` \| `audio` | sí | tipo del adjunto; coincide con `kind` del mensaje |
+| `mime_type` | texto (3–255, `tipo/subtipo` con parámetros opcionales) | sí | tipo MIME del contenido |
+| `name` | texto (1–255) | no | nombre del archivo; no es una ruta ni lleva controles |
+| `size_bytes` | entero (0–2 147 483 648) | no | tamaño en bytes |
+| `url` | URL https (1–2048) | no | enlace externo al contenido |
+
+Los adjuntos llevan metadatos: nunca el binario. `mime_type` es obligatorio
+(el adaptador lo conoce o usa `application/octet-stream`); `name`, `size_bytes`
+y `url` son opcionales.
 
 `client_id` no viaja desde los adaptadores: lo resuelve el flujo de identidad
 posterior. Un campo no declarado se rechaza con `422 validation_error`.
@@ -131,6 +158,7 @@ La respuesta abstracta es una lista no vacía de bloques con discriminador
 | `ListBlock` | `list` | de 4 a 10 opciones |
 | `LinkBlock` | `link` | un texto y una URL; máximo un enlace por respuesta |
 | `TemplateBlock` | `template` | nombre y variables de una plantilla aprobada |
+| `ImageBlock` | `image` | URL https (hasta 2048) y `alt_text` (1–1024); un canal sin `supports_images` la rechaza con `422` hasta que #61 la degrade a enlace |
 
 ### ChannelCapabilities
 
@@ -139,6 +167,19 @@ Fuera de la ventana de 24 horas de WhatsApp (`free_text_allowed = false`,
 `requires_template = true`) solo se envía una plantilla aprobada. Los estados de
 entrega se normalizan al vocabulario `sent`, `delivered`, `read` o `failed`.
 
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `free_text_allowed` | booleano | sí | si el canal admite texto libre ahora |
+| `max_options` | entero (0–3) | sí | máximo de opciones de un `OptionsBlock` |
+| `min_list_options` | entero (0–10) | sí | mínimo de opciones de un `ListBlock` |
+| `max_list_options` | entero (0–10) | sí | máximo de opciones de un `ListBlock` |
+| `supports_links` | booleano | sí | si el canal representa enlaces |
+| `requires_template` | booleano | sí | si exige una plantilla aprobada |
+| `supports_buttons` | booleano | no | botones interactivos; por defecto `true` |
+| `supports_images` | booleano | no | imágenes; por defecto `false` |
+| `supports_files` | booleano | no | archivos; por defecto `false` |
+| `supports_audio` | booleano | no | audio; por defecto `false` |
+
 ### Variante canónica de POST /send
 
 Además del `SendRequest` legacy, `POST /send` acepta `ChannelSendRequest` con
@@ -146,6 +187,146 @@ Además del `SendRequest` legacy, `POST /send` acepta `ChannelSendRequest` con
 elige el adaptador y aplica el control de capacidad antes de enviar. Si el canal
 no puede enviar texto libre responde `422 validation_error`; si el adaptador
 falla o no está configurado, `502 upstream_error`.
+
+Hasta el registry de #61, solo `telegram` y `whatsapp` tienen adaptador: un
+`channel` que no es `telegram` ni `whatsapp` responde `422 validation_error` sin
+enviar nada. Un bloque `image` en un canal sin `supports_images` responde `422
+validation_error` (#61 lo degradará a enlace).
+
+## Canal genérico (webhook firmado)
+
+Cualquier sistema externo o puente —n8n, Zapier, Make, Twilio— conecta un canal
+sin adaptador propio. La ruta y el callback se implementan en #62; hasta
+entonces no existen. El formato por defecto es el `NormalizedMessage` de este
+contrato; si el adaptador del canal define otro formato, lo traduce (#62).
+
+### Firma y ventana anti-repetición
+
+- `X-Lazaro-Timestamp`: segundos Unix (entero decimal, UTC) del envío.
+- `X-Lazaro-Signature`: HMAC-SHA256 con el secreto del canal de
+  `<timestamp>.<cuerpo>`, en 64 caracteres hexadecimales en minúsculas,
+  calculado sobre los bytes exactos del cuerpo (UTF-8, sin reformatear).
+- Ventana: 300 s por defecto (`DEFAULT_SIGNATURE_WINDOW_SECONDS`), configurable
+  en #62; si |ahora − timestamp| la supera, `401`.
+- Firma ausente o incorrecta: `401`. La comparación es en tiempo constante.
+- Cada canal tiene su secreto (#61); nunca viaja en el cuerpo ni en logs.
+- Los ejemplos usan el secreto de ejemplo `secreto-de-ejemplo`.
+
+### POST /webhooks/{canal_id}
+
+- **Expone:** telegram_gateway (desde #62)
+- **Llama:** el sistema externo o puente del canal
+- **Modelos:** `NormalizedMessage` → `MessageResponse`
+
+`{canal_id}` es el `id` del canal en `canales`; el `channel` del cuerpo debe ser
+igual a `{canal_id}` y `direction` debe ser `inbound`. Público: sin
+`X-Service-Token`. Idempotente por `(channel, external_message_id)`.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `X-Lazaro-Timestamp` | segundos Unix | sí | instante del envío |
+| `X-Lazaro-Signature` | hexadecimal (64) | sí | HMAC-SHA256 de `<timestamp>.<cuerpo>` |
+| `Content-Type: application/json` | encabezado | sí | cuerpo JSON |
+
+El cuerpo es un `NormalizedMessage`.
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `accepted` \| `duplicate` | sí | `accepted` si se procesa; `duplicate` si ya se vio |
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | firma ausente o incorrecta, o `X-Lazaro-Timestamp` fuera de la ventana |
+| 404 | not_found | el canal no existe o está inactivo (no se distingue cuál) |
+| 422 | validation_error | el cuerpo no valida, `channel` ≠ `{canal_id}` o `direction` ≠ `inbound` |
+| 500 | internal_error | error inesperado |
+
+#### Ejemplo firmado
+
+```http
+POST /webhooks/canal-externo HTTP/1.1
+Host: lazaro.example.com
+Content-Type: application/json
+X-Lazaro-Timestamp: 1795273200
+X-Lazaro-Signature: 0812c9aa0ad1983b42a1a4a122fdf3741469c299ef746fcbf3a55a858be97acd
+
+{"channel":"canal-externo","external_user_id":"usuario-123","external_chat_id":"usuario-123","external_message_id":"msg-0001","kind":"text","text":"Hola, necesito ayuda con mi pedido","received_at":"2026-11-21T15:00:00Z"}
+```
+
+#### Ejemplo con adjunto
+
+```json
+{
+  "channel": "canal-externo",
+  "external_user_id": "usuario-123",
+  "external_chat_id": "usuario-123",
+  "external_message_id": "msg-0002",
+  "direction": "inbound",
+  "kind": "image",
+  "text": "Foto del producto dañado",
+  "attachments": [
+    {
+      "type": "image",
+      "mime_type": "image/jpeg",
+      "name": "producto.jpg",
+      "size_bytes": 248133,
+      "url": "https://archivos.example.com/m/abc123.jpg"
+    }
+  ],
+  "metadata": {"plataforma": "n8n", "flujo": "soporte-web"},
+  "received_at": "2026-11-21T15:01:00Z"
+}
+```
+
+### Callback saliente
+
+- **Expone:** el sistema externo (`config.callback_url`, https)
+- **Llama:** telegram_gateway (desde #62)
+- **Modelos:** `NormalizedMessage` con `direction` = `outbound`
+
+Cuando la plataforma responde por un canal genérico hace `POST` a
+`config.callback_url` con los mismos encabezados de firma. Una respuesta 2xx es
+entrega y cualquier otra respuesta o un error de red es envío fallido. La
+entrega es al menos una vez: el receptor deduplica por `external_message_id`. En
+`outbound`, `received_at` es el momento en que la plataforma generó el mensaje.
+Se implementa en #62.
+
+#### Ejemplo firmado
+
+```http
+POST /lazaro/callback HTTP/1.1
+Host: puente.example.com
+Content-Type: application/json
+X-Lazaro-Timestamp: 1795273205
+X-Lazaro-Signature: 20dbabb2d55dc0b43c41f73c600c519989ecb737691d17a5b2e77156426d180a
+
+{"channel":"canal-externo","external_user_id":"usuario-123","external_chat_id":"usuario-123","external_message_id":"out-0001","kind":"text","text":"Hola, con gusto te ayudo. Escribe tu numero de pedido.","received_at":"2026-11-21T15:00:05Z","direction":"outbound"}
+```
+
+### Equivalencia con los nombres del encargo
+
+| Nombre del encargo | Campo del contrato | Notas |
+|---|---|---|
+| `canalId` | `channel` | también `{canal_id}` de la ruta; deben coincidir |
+| `idExternoUsuario` | `external_user_id` | |
+| `idExternoMensaje` | `external_message_id` | clave de idempotencia junto con `channel` |
+| `direccion` | `direction` | `entrante` = `inbound`, `saliente` = `outbound` |
+| `tipo` | `kind` | `texto`, `boton`, `no_soportado`, `imagen`, `archivo`, `audio` = `text`, `button`, `unsupported`, `image`, `file`, `audio` |
+| `contenido` | `text` | en `kind` = `button`, el contenido es `button_id` |
+| `adjuntos` | `attachments` | metadatos, nunca el binario |
+| `timestamp` | `received_at` | ISO 8601 con zona; distinto de `X-Lazaro-Timestamp` (segundos Unix de la firma) |
+| `metadata` | `metadata` | objeto JSON ≤ 4096 bytes |
+
+(`external_chat_id` no tiene nombre en el encargo: en canales sin chat separado
+es igual a `external_user_id`.)
 
 ## Rutas
 
@@ -181,7 +362,7 @@ normalizado y respuesta abstracta»). La respuesta y los errores no cambian.
 | HTTP | error | Cuándo |
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
-| 422 | validation_error | el cuerpo no valida contra `MessageRequest` |
+| 422 | validation_error | el cuerpo no valida contra `MessageRequest` ni `NormalizedMessage`; el `channel` del `NormalizedMessage` no es un canal atendido (`telegram`, `whatsapp`) o su `direction` es `outbound` |
 | 500 | internal_error | error inesperado |
 
 ### POST /send
@@ -213,7 +394,7 @@ bloques abstractos), descrita en «Mensaje normalizado y respuesta abstracta».
 | HTTP | error | Cuándo |
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
-| 422 | validation_error | el cuerpo no valida contra `SendRequest` o `ChannelSendRequest`; el canal no puede enviar texto libre |
+| 422 | validation_error | el cuerpo no valida contra `SendRequest` o `ChannelSendRequest`; el canal no puede enviar texto libre; el `channel` no es `telegram` ni `whatsapp`; un bloque `image` en un canal sin `supports_images` |
 | 502 | telegram_error | la API de Telegram falla |
 | 502 | upstream_error | el adaptador del canal falla o no está configurado |
 | 500 | internal_error | error inesperado |
@@ -1037,3 +1218,4 @@ contrato.
 | S14 | `GET /cases` con `scope=mine` (por defecto) lista solo los casos que el asesor puede gestionar según S12: `open` y `timed_out` con `actions` = `reply`, `assign`, `close`; `assigned` al solicitante con `actions` = `reply`, `close`; huérfanos (`assigned` con `advisor_id` nulo o fuera del roster de asesores) con `actions` = `close`. Nunca incluye casos `closed` ni `assigned` a otro perfil asesor registrado. Con `scope=all`, un supervisor registrado recibe todos los casos de cualquier estado y asesor, incluidos `closed`; `actions` contiene solo lo que puede hacer (`reply`, `assign`, `close` o `reassign`) y `advisor_id` indica el asesor asignado o `null`. Otro `advisor_id` con `scope=all` recibe `403 forbidden`. Orden por `created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Límite `CASE_LIST_LIMIT` (default 50, máximo 200) aplicado después de filtrar; sin cursor en v1. Un `advisor_id` que no es un perfil atendedor del roster recibe `200` con la lista vacía en `scope=mine`, sin registrar denegación. | `CASE_LIST_LIMIT = 50` |
 | S15 | Los botones de consentimiento viajan como `OptionsBlock` con `options`, `option_ids` y `option_proofs` alineados. Cada `option_proof` es `HMAC-SHA256(service_token, "<channel>:<external_user_id>:<external_chat_id>:<button_id>:<notice_version>:<notice_sha256>:<nonce>")` truncado a 32 hex. El nonce es aleatorio por presentación y el orquestador conserva en memoria los proofs pendientes por identidad/canal/chat; compara identidad, canal, chat y política vigentes, exige ausencia de consentimiento vigente y consume atómicamente el proof aceptado/rechazado. Repeticiones, pruebas viejas o ajenas se descartan sin registrar consentimiento, borrar contenido ni cambiar estado. El gateway pinta teclado inline con `callback_data = "<button_id>:<option_proof>"` y normaliza `callback_query` a `kind=button`, `button_id` canónico y `button_proof`. La prueba no contiene datos personales en claro, mide 32 caracteres y cabe en el límite de 64 bytes de `callback_data` de Telegram. | — |
 | S16 | Asignación automática por carga (`POST /cases/{id}/auto-assign`). La decide handover: si el caso sigue `open` y sin asesor, elige entre los `candidate_ids` que son asesores atendedores del roster el de menor número de casos `assigned`, con desempate por menor `advisor_id` lexicográfico, y registra la asignación con motivo `auto`. Dos solicitudes simultáneas se serializan y contabilizan la asignación ya confirmada. Sin candidatos válidos responde `queued`; si el caso ya fue asignado, respondido o cerrado por una persona responde `skipped`; un caso inexistente `404 not_found`; uno cerrado `409 case_closed`. El orquestador solo la invoca con el modo `automatica`, sin casos de supresión ni fuera del horario de atención, y no asigna casos que ya estaban en cola cuando un asesor recupera la disponibilidad. | — |
+| S17 | Canal abierto (#60). `channel` es el `id` de un canal de `canales`: de 2 a 32 caracteres, minúsculas, dígitos y separadores `-` o `_` simples (`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`). Límites: como máximo 10 adjuntos por mensaje; `metadata` de hasta 4096 bytes en JSON compacto UTF-8 y profundidad 5; URL https de hasta 2048 caracteres; `alt_text` de hasta 1024; `mime_type` y `name` de hasta 255; `size_bytes` hasta 2 GiB. Los adjuntos llevan metadatos, nunca el binario. Solo texto: el orquestador responde a `image`, `file` y `audio` con el texto fijo `unsupported_reply`, igual que a `unsupported`, sin guardar adjuntos ni `metadata`. Hasta que una feature habilite canales nuevos de punta a punta, gateway y orquestador responden `422` a un `channel` distinto de `telegram` y `whatsapp`, y el gateway responde `422` a un bloque `image` en un canal sin `supports_images` (la degradación a enlace llega en #61). | `MAX_CHANNEL_ID_LENGTH = 32`, `MAX_ATTACHMENTS = 10`, `MAX_METADATA_BYTES = 4096`, `MAX_METADATA_DEPTH = 5`, `MAX_URL_LENGTH = 2048`, `MAX_IMAGE_ALT_LENGTH = 1024`, `DEFAULT_SIGNATURE_WINDOW_SECONDS = 300` |

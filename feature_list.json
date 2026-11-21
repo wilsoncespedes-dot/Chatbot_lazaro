@@ -95,7 +95,7 @@
       ],
       "dependencies": [43],
       "sdd": true,
-      "status": "pending"
+      "status": "done"
     },
     {
       "id": 61,
@@ -126,7 +126,7 @@
         "Valida en tiempo constante el HMAC-SHA256 de `<timestamp>.<cuerpo>` con el secreto del canal; firma ausente o incorrecta responde 401; un `X-Lazaro-Timestamp` fuera de la ventana configurable (300 s por defecto) responde 401 para impedir repeticiones.",
         "Acepta el formato normalizado del contrato o, si el adaptador del canal lo define, convierte el payload con `recibir_mensaje`; un payload inválido responde 422 con `{error, message}`.",
         "Es idempotente por `(canal_id, external_message_id)`: el mismo webhook reenviado responde 200 sin duplicar el mensaje.",
-        "Responde rápido: valida, deduplica y entrega al orquestador sin esperar a que el bot procese (la cola durable llega en #64).",
+        "Responde rápido: valida, deduplica y entrega al orquestador sin esperar a que el bot procese (la cola durable llega en #64). Hasta #65 el orquestador responde 422 a los canales que no son `telegram` ni `whatsapp` (guarda `ATTENDED_CHANNELS` de #60); el gateway lo registra sin reintentar y las pruebas de esta feature lo contemplan.",
         "Cuando la plataforma responde por un canal genérico, hace `POST` a `config.callback_url` con el mensaje normalizado saliente (`direction=outbound`) y los mismos encabezados de firma; una respuesta no 2xx o un error de red cuenta como envío fallido.",
         "La URL de callback debe ser https y no puede resolver a direcciones privadas, loopback, link-local ni de metadatos (anti-SSRF), salvo un ajuste explícito de desarrollo documentado.",
         "Pruebas: firma válida, inválida, ausente y vencida; canal inactivo; formato normalizado y por adaptador; duplicado; callback firmado y verificable con el ejemplo de `CONTRATOS.md`; SSRF bloqueado; `./init.sh` verde y reviewer aprueba."
@@ -145,7 +145,7 @@
         "No hace llamadas de red: las respuestas salientes quedan en un buzón propio consultable, con retención corta configurable.",
         "Hay una página de prueba en el panel (solo admin y supervisor) tipo chat: se elige el canal simulado, se escribe como cliente con un id externo de prueba y se ven las respuestas del bot y del asesor; y `scripts/simular_canal.py` envía mensajes firmados al webhook genérico.",
         "Crear un canal simulado nuevo no requiere código: basta un registro en `canales` (por la ruta interna en esta feature; desde el panel en #66).",
-        "Un canal simulado recorre el flujo completo actual (consentimiento, login, bot, asesor) igual que un canal real.",
+        "Hasta #65 el orquestador rechaza con 422 los canales que no son `telegram` ni `whatsapp` (guarda temporal `ATTENDED_CHANNELS` de #60): en esta feature el gateway entrega el mensaje y el buzón y la página muestran ese rechazo como tal; el recorrido completo del canal simulado (consentimiento, login, bot, asesor) se verifica en #65.",
         "Pruebas: buzón, capacidades configurables, script de envío firmado, permisos de la página y marca SIMULADO visible; `./init.sh` verde y reviewer aprueba."
       ],
       "dependencies": [62],
@@ -181,6 +181,7 @@
         "La ventana de 24 h y el uso de plantillas se deciden por las capacidades que informa el canal (`free_text_allowed`, `requires_template`), no por su nombre; el comportamiento de WhatsApp no cambia.",
         "El modo de consentimiento (frase de texto o botón) es un ajuste por canal en `canales.config`, con `texto` para Telegram (#46) y `boton` para WhatsApp como valores sembrados; un canal nuevo usa `texto` por defecto.",
         "Los contactos y mensajes guardan `canal_id`; los datos existentes de `telegram` y `whatsapp` se migran sin pérdida y con migración idempotente.",
+        "Se retira la guarda temporal `ATTENDED_CHANNELS` de #60: el orquestador acepta cualquier canal que el gateway entregue (el gateway ya validó que el canal existe y está activo).",
         "Un canal nuevo (probado con el canal simulado de #63) recorre consentimiento, login, bot, escalamiento y respuesta del asesor sin cambios en el núcleo, y las respuestas salen por el mismo canal y destino de la conversación.",
         "Pruebas: barrido de nombres de canal, ventana por capacidades, consentimiento por ajuste, migración de datos y flujo completo con canal simulado; toda la batería actual del orquestador sigue verde; `./init.sh` verde y reviewer aprueba."
       ],

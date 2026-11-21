@@ -6,6 +6,10 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 SERVICE_TOKEN_HEADER = "X-Service-Token"
+# #60: firma del webhook genérico (se verifica en #62).
+LAZARO_TIMESTAMP_HEADER = "X-Lazaro-Timestamp"
+LAZARO_SIGNATURE_HEADER = "X-Lazaro-Signature"
+DEFAULT_SIGNATURE_WINDOW_SECONDS = 300
 # S9: límite de sendMessage de Telegram.
 MAX_TEXT_LENGTH = 4096
 # S2: últimos mensajes que viajan en POST /handover.

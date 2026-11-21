@@ -39,6 +39,7 @@ from .domain import (
     DomainError,
     OrchestratorError,
     TelegramError,
+    UnknownChannel,
     WebhookForbidden,
     build_message_request,
     extract_callback,
@@ -417,10 +418,12 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             if status == "failed":
                 raise ChannelSendFailed("El canal informó que el envío falló.")
             return SendResponse(sent=True)
-        if body.channel == "whatsapp":
+        if body.channel == "telegram":
+            adapter = TelegramChannelAdapter(adapters.telegram)
+        elif body.channel == "whatsapp":
             adapter = adapters.whatsapp
         else:
-            adapter = TelegramChannelAdapter(adapters.telegram)
+            raise UnknownChannel("El canal no está disponible en este servicio.")
         if adapter is None:
             raise ChannelNotConfigured(
                 "El canal WhatsApp no está configurado en este servicio."

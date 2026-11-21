@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 from lazaro_contracts import (
     MAX_TEXT_LENGTH,
     DeliveryStatus,
+    ImageBlock,
     MessageRequest,
     NormalizedMessage,
     ResponseBlock,
@@ -58,6 +59,20 @@ class ChannelNotConfigured(DomainError):
 class WebhookForbidden(DomainError):
     code = "forbidden"
     status_code = 403
+
+
+class UnknownChannel(DomainError):
+    """#60: canal sin adaptador en este servicio (hasta el registry de #61)."""
+
+    code = "validation_error"
+    status_code = 422
+
+
+class UnsupportedBlock(DomainError):
+    """#60: bloque que el canal no admite; #61 lo sustituye por degradación."""
+
+    code = "validation_error"
+    status_code = 422
 
 
 class OrchestratorError(Exception):
@@ -297,6 +312,10 @@ def send_response(
         if callable(capabilities_for)
         else adapter.capabilities()
     )
+    if not capabilities.supports_images and any(
+        isinstance(block, ImageBlock) for block in block_list
+    ):
+        raise UnsupportedBlock("Este canal no admite imágenes.")
     has_free_text = any(not isinstance(block, TemplateBlock) for block in block_list)
     if has_free_text and not capabilities.free_text_allowed:
         raise ChannelWindowClosed(

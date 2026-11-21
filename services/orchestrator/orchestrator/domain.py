@@ -3363,6 +3363,10 @@ def reassign_case(
 INBOX_CHANNELS = ("telegram", "whatsapp")
 INBOX_ASSIGNMENTS = ("mias", "sin_asignar")
 
+# #60: canales con adaptador hoy. La retira #65 (nucleo_sin_nombres_canal);
+# hasta entonces un canal nuevo (#62/#63) recibe 422 en POST /messages.
+ATTENDED_CHANNELS: frozenset[str] = frozenset({"telegram", "whatsapp"})
+
 
 def advisor_inbox(
     advisor_id: str,
