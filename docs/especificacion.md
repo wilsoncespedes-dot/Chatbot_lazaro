@@ -384,7 +384,7 @@ validación legal.
 - [ ] Validar con el área legal: orden del consentimiento, texto de la política, plazos de supresión, registro del rechazo y memoria permanente.
 - [x] Elegir proveedor WhatsApp para la feature #43: Cloud API de Meta (2026-11-03).
 - [ ] Calibrar el modelo de embeddings y el umbral con un manual real.
-- [ ] Decidir cómo se protegen los secretos de `canales.config` (#61): recomendado `cryptography` (Apache-2.0/BSD) para cifrarlos; alternativa sin dependencia: secretos de webhook derivados con HMAC de una clave de entorno y credenciales de terceros referenciadas por variable de entorno.
+- [x] Proteger los secretos de `canales.config` (#61): se cifran con `cryptography` (Apache-2.0/BSD) y una clave de entorno; decisión del dueño, 2026-11-21.
 - [ ] Decidir si la importación de clientes acepta Excel (#77): requiere `openpyxl` (MIT) o un lector propio de `.xlsx`; sin decisión, solo CSV.
 
 ### Fuentes
