@@ -19,7 +19,10 @@
 ## 1. Resumen ejecutivo
 
 El proyecto es un chatbot de atención y soporte por Telegram y WhatsApp, con un panel de
-administración y un panel para asesores, hecho con microservicios. Debe
+administración y un panel para asesores, hecho con microservicios. Desde el
+2026-11-21 se amplía a una plataforma multicanal genérica y multiagente
+(cualquier canal, bot que responde primero, asesores que toman el control); ver
+§13.6. Debe
 responder preguntas sobre manuales (RAG), distinguir a qué servicio técnico
 corresponde una consulta, consultar la base de datos en lenguaje natural y
 pasar la conversación a un asesor humano cuando no pueda resolver. El plazo es
@@ -285,3 +288,15 @@ cambio de alcance y prevalecen sobre las descripciones históricas anteriores:
    aceptación se guarda con evidencia `text` ligada al id externo, la versión,
    el hash y el timestamp del mensaje. WhatsApp conserva sus botones
    Acepto/No acepto y la evidencia `button`.
+6. Ampliación multicanal genérica y multiagente (encargo del profesor,
+   aprobada por el dueño el 2026-11-21; features #60–#78, rama
+   `feat/multicanal-generico`): canales abiertos con tabla `canales`,
+   registry y webhook genérico firmado; canal simulado; cola outbox en
+   Postgres; etiqueta de origen del canal en todo el panel (prioridad alta);
+   bandeja unificada con «Tomar conversación»/«Devolver al bot»; respuestas
+   rápidas del bot; términos aceptados una vez por cliente; ID de cliente
+   copiable; MCP de solo lectura; dashboard SVG; puerto `FuenteDeClientes` e
+   importación CSV. **El login sigue obligatorio.** La integración con la API
+   de Lázaro **no se implementa ni se simula**: solo se presenta como
+   posibilidad. Detalle en `docs/especificacion.md`, «Ampliación multicanal
+   genérica y multiagente».

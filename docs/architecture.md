@@ -12,7 +12,8 @@ contracts/                 # Contratos entre servicios (feature 1)
 ├── lazaro_contracts/      # Modelos Pydantic compartidos (request/response)
 └── tests/
 services/
-├── telegram_gateway/      # Canales: Telegram y WhatsApp (Meta Cloud API); recibe y envía mensajes
+├── telegram_gateway/      # Gateway de canales: Telegram, WhatsApp (Meta Cloud API) y, desde
+│                          # #61-#63, cualquier canal registrado (puerto, registry, webhook genérico)
 ├── orchestrator/          # Cerebro: contacto, conversación, decide qué hacer;
 │                          # incluye el módulo de identidad de clientes (#38)
 ├── rag/                   # Manuales: ingesta, fragmentos, búsqueda pgvector
@@ -38,6 +39,35 @@ services/<servicio>/
 
 **No se añaden servicios, carpetas de primer nivel ni capas nuevas** sin que
 una feature de `feature_list.json` lo pida y su `design.md` lo justifique.
+
+### Multicanal genérico (#60–#67, en curso desde 2026-11-21)
+
+Diseño aprobado por el dueño; cada pieza se vuelve regla vigente cuando su
+feature queda `done`. Detalle de producto en `docs/especificacion.md`,
+«Ampliación multicanal genérica y multiagente».
+
+- **Hexagonal en el gateway de canales.** Dentro de
+  `services/telegram_gateway/telegram_gateway/` se añaden `ports/` (puerto
+  `Canal`: `recibir_mensaje`, `enviar_mensaje`, `identificar_usuario`,
+  `capacidades`), `registry.py` (`ChannelRegistry`: `tipo_adaptador` →
+  adaptador, sin `if/else` por canal) y `adapters/channels/` (un módulo por
+  canal: telegram, whatsapp_cloud, generico_webhook, simulado). El servicio
+  conserva su nombre para no romper el despliegue ni el webhook de Telegram.
+- **Tabla `canales`** propiedad del gateway; el orquestador obtiene los
+  metadatos públicos (nombre, ícono, color, activo) por HTTP con
+  `X-Service-Token` y nunca recibe secretos.
+- **El núcleo (orquestador) no conoce canales concretos:** decide con las
+  capacidades que informa el canal (ventana, plantillas, botones, imágenes) y
+  con ajustes por canal en `canales.config`; guarda `canal_id` en contactos y
+  mensajes.
+- **Cola en Postgres (#64):** `POST /messages` guarda y responde 202; los
+  workers `procesar_entrantes` y `enviar_salientes` (misma imagen del
+  orquestador, como `timeouts_worker`) usan `FOR UPDATE SKIP LOCKED`. Toda
+  salida pasa por la tabla `outbox`, escrita en la misma transacción que el
+  mensaje, con reintentos con backoff.
+- **Etiqueta de origen (#67):** un único componente de panel (ícono + nombre +
+  color de `canales`) que reutilizan bandeja, encabezado del chat, cada
+  mensaje, ficha del cliente y dashboard.
 
 ### Panel de asesores multicanal (#41)
 
@@ -135,7 +165,8 @@ PSF). El agente solo instala lo que está en `requirements.txt` y en el
    de un canal. Antes del login, contactos y consentimiento se aíslan por
    `(canal, external_user_id)`; nunca se convierte un ID de WhatsApp en
    `telegram_user_id`. La vinculación entre identidades de canales requiere
-   login verificado.
+   login verificado. `canal` es cualquier canal registrado en `canales`
+   (abierto desde #60), no una lista fija.
 7. **Errores explícitos.** Respuestas de error siempre con forma
    `{"error": "<codigo>", "message": "<texto>"}` y el código HTTP adecuado.
    Nada de stack traces hacia el usuario ni hacia otros servicios.
@@ -144,7 +175,9 @@ PSF). El agente solo instala lo que está en `requirements.txt` y en el
    `GET /health`, la página pública `/acceso` (#38), el webhook de Telegram
    (que valida `TELEGRAM_WEBHOOK_SECRET`) y el webhook de WhatsApp
    `GET/POST /whatsapp/webhook` (que valida `hub.verify_token` y la firma
-   `X-Hub-Signature-256` de Meta Cloud API).
+   `X-Hub-Signature-256` de Meta Cloud API). Desde #62 también el webhook
+   genérico `POST /webhooks/{canal_id}`, que valida la firma HMAC-SHA256 del
+   canal y la ventana anti-repetición.
 9. **Registro de eventos.** Las decisiones importantes (respuesta con RAG,
    rechazo, traspaso, aviso a asesor) se guardan como eventos con fecha,
    contacto y motivo.

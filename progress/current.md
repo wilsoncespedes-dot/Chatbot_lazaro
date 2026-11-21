@@ -27,3 +27,21 @@
 - `./init.sh`: 3622 passed, 1 skipped.
 - Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
   sesión se formaliza como feature.
+
+## 2026-11-21 — Fase 0 de la ampliación multicanal genérica (solo docs)
+
+- **Origen:** revisión del profesor (plataforma multicanal y multiagente de
+  verdad). El dueño aprobó el plan por fases con cambios: login obligatorio,
+  etiqueta de origen en todo el panel como prioridad alta, outbox en Postgres,
+  importación de clientes y API de Lázaro solo como «a futuro».
+- **Rama:** `feat/multicanal-generico` (los push a `feat/lazaro-backlog-complete`
+  se despliegan solos en AWS; esta rama no).
+- **Registrado:** features #60–#78 en `feature_list.json` (todas `pending`;
+  #78 README con `sdd: false`) y `esqueleto_instagram` en `later`.
+- **Docs:** `docs/especificacion.md` (sección «Ampliación multicanal genérica y
+  multiagente», filas de Canales y Multimedia, campo `canal`, puntos abiertos),
+  `docs/architecture.md` (mapa, sección «Multicanal genérico», principios 6 y
+  8) y `docs/proyecto.md` (§1 y §13.6).
+- **Decisiones pendientes del dueño:** protección de secretos de `canales`
+  (antes de #61) y Excel en la importación (antes de #77).
+- **Siguiente:** fase 1, feature #60 `contrato_canal_abierto` → `spec_author`.

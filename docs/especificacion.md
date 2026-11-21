@@ -4,16 +4,22 @@ Nov 3, 2026 · @lazaro
 
 ## Resumen y decisiones
 
-Un solo núcleo con IA atiende Telegram y WhatsApp. El cliente acepta el tratamiento de datos, inicia sesión con credenciales de vigencia limitada y conversa con la IA, que puede pasarlo a un asesor en un panel web propio.
+Un solo núcleo con IA atiende Telegram, WhatsApp y cualquier otro canal conectado por un adaptador o por el webhook genérico. El cliente acepta el tratamiento de datos, inicia sesión con credenciales de vigencia limitada y conversa con la IA, que responde primero; los asesores supervisan desde un panel web propio y toman el control cuando hace falta.
+
+> **Ampliación del 2026-11-21.** La sección «Ampliación multicanal genérica y
+> multiagente» (al final) recoge el encargo del profesor y las decisiones del
+> dueño de ese día. Donde esta especificación dice «Telegram y WhatsApp», la
+> regla se aplica a todo canal registrado en la tabla `canales` a medida que se
+> cierran las features #60–#78.
 
 | Tema | Decisión |
 | --- | --- |
-| Canales | Telegram y WhatsApp con la misma lógica. Nada exclusivo de un canal sin su equivalente en el otro. |
+| Canales | Cualquier canal registrado en la tabla `canales`, con la misma lógica de núcleo. Telegram y WhatsApp son los dos canales reales; los demás se conectan con un adaptador propio o con el webhook genérico firmado. |
 | Proveedor de WhatsApp | Capa de abstracción que soporte Cloud API de Meta, Twilio y 360dialog. La implementación de producción es **Meta Cloud API** (decisión del dueño, 2026-11-03). |
 | Identidad | Usuario y contraseña que entrega la empresa. Una credencial solo puede tener una sesión activa, en un solo chat. |
 | Vigencia | 1 mes. La renueva el administrador cuando el cliente paga. Aviso al cliente 5 días antes. |
 | Credencial vencida | El bot avisa que debe pagar para reactivar el servicio, o que puede hablar con un asesor para borrar sus datos. |
-| Multimedia | Solo texto. Si llega audio, imagen o documento, el bot pide que escriba. |
+| Multimedia | El bot solo lee texto: si llega audio, imagen o documento, pide que escriba. Desde #60 el contrato transporta esos tipos (con metadatos de adjuntos) para que el panel sepa qué llegó, y el bot puede enviar imágenes configuradas (#71). |
 | Tratamiento de datos | Si el cliente no acepta, la conversación se cierra. Si vuelve a escribir, empieza de cero. |
 | Supresión de datos | El cliente la pide después de iniciar sesión, aunque su credencial esté vencida. La ejecuta una persona, nunca el bot. |
 | Consultas de datos | El cliente puede consultar todo lo suyo que haya en la base de datos, y solo lo suyo. |
@@ -51,7 +57,7 @@ Cada proveedor (Cloud API, Twilio, 360dialog) implementa la misma interfaz. Camb
 | Campo | Contenido |
 | --- | --- |
 | `cliente_id` | ID interno del cliente. Vacío hasta que inicie sesión. |
-| `canal` | `telegram` o `whatsapp` |
+| `canal` | Identificador del canal en la tabla `canales` (`telegram`, `whatsapp` u otro registrado; abierto desde #60) |
 | `canal_usuario_id` | ID de Telegram o número de WhatsApp |
 | `conversacion_id` | ID interno de la conversación |
 | `tipo` | `texto`, `boton` o `no_soportado` (audio, imagen, documento, sticker) |
@@ -320,6 +326,55 @@ Siete fases, en este orden. Cada una depende de las anteriores y se entrega en s
 
 Todos los valores de tiempo (1 hora, 1 mes, 5 días, horario) y los textos legales deben ser configurables, porque la validación legal puede cambiarlos.
 
+## Ampliación multicanal genérica y multiagente (2026-11-21)
+
+El profesor revisó el proyecto y pidió una plataforma **multicanal y
+multiagente de verdad**: los mensajes de cualquier canal llegan a una sola
+bandeja, el bot responde primero y los asesores supervisan y entran cuando hace
+falta. El dueño aprobó el plan ese mismo día con los cambios que recoge esta
+sección. Se trabaja en la rama `feat/multicanal-generico`, fase por fase, y
+cada feature pasa por el flujo SDD (#60–#78 en `feature_list.json`).
+
+### Decisiones
+
+| Tema | Decisión |
+| --- | --- |
+| Canales | Ninguna lista fija. Tabla `canales` (`id`, `nombre`, `tipo_adaptador`, `icono`, `color`, `config`, `activo`, `creado_en`) y un `ChannelRegistry` que asocia `tipo_adaptador` con su adaptador, sin `if/else` por canal. |
+| Puerto de canal | Interfaz `Canal` con `recibir_mensaje`, `enviar_mensaje`, `identificar_usuario` y `capacidades`. Si un canal no soporta algo, la respuesta se degrada (botones → lista numerada, imagen → enlace). |
+| Webhook genérico | `POST /webhooks/{canal_id}` con firma HMAC-SHA256 y ventana anti-repetición; las respuestas salen por `POST` a la URL de callback del canal, firmadas igual. Así se conecta cualquier plataforma o puente (n8n, Zapier, Make, Twilio) sin escribir un adaptador. |
+| Canal simulado | Un adaptador SIMULADO configurable ("TikTok (simulado)") con página y script de prueba, marcado como simulado en el código y en la interfaz. |
+| Cola | Tabla de entrada y **outbox en Postgres** procesadas por workers, con reintentos con backoff y envíos fallidos visibles y reintentables. Sin infraestructura nueva (decisión del dueño). |
+| Etiqueta de origen | **Prioridad alta.** Ícono, nombre y color del canal (de `canales`) en cada conversación de la bandeja, en el encabezado del chat, en cada mensaje, en la ficha del cliente y en el dashboard; la bandeja se filtra por canal. |
+| Multiagente | Bandeja con todas las conversaciones y su estado (bot, asesor, pendiente, cerrada); botones «Tomar conversación» y «Devolver al bot»; estrategia de asignación intercambiable (por carga o round-robin); aviso a asesores ante intención de compra. |
+| Respuestas rápidas | Configurables desde el panel, evaluadas antes del RAG, con texto o imagen (por ejemplo, un QR que sube el administrador). |
+| Login | **Se mantiene obligatorio**, como en «Identidad y credenciales». No se vuelve opcional ni se agrega verificación por código en el canal. Que el login sea configurable según la empresa queda solo como posibilidad documentada. |
+| Términos y condiciones | Se aceptan una sola vez **por cliente** (fecha y versión), no por canal: no se vuelven a pedir en otro canal ya vinculado. Un canal nunca vinculado sigue recibiendo el aviso antes de guardar datos, porque no se sabe quién es hasta el login. |
+| ID de cliente | Visible y fácil de copiar en el chat y en el panel, para soporte. Escribirlo en el chat no identifica ni da acceso a datos. |
+| Bienvenida | El primer contacto lista los canales activos marcados como públicos. |
+| IA y MCP | Servidor MCP con herramientas de solo lectura, autorizadas por estado como el resto del harness. Modelo configurable por variables de entorno (Ollama en local u otro proveedor). Para el ejemplo de turismo del profesor se usan datos de **demostración**, marcados como tales. |
+| Gráficos | Dashboard con mensajes por canal, conversaciones por estado y tiempo de respuesta, en SVG generado en el servidor (sin librerías de terceros ni cambios en la CSP). |
+| Clientes | Puerto `FuenteDeClientes` con la implementación local actual, e importación de clientes desde CSV con vista previa, duplicados y resumen. Excel solo si no requiere dependencias nuevas o si el dueño aprueba la dependencia. |
+
+### Lo que no se implementa (solo posibilidad a futuro)
+
+El profesor pidió no presentarlo como implementado ni como compromiso:
+
+- **Integración con la API de Lázaro.** No hay acceso a ella y no se simula. La
+  sección Clientes muestra una tarjeta «a futuro» y la documentación describe
+  cómo sería un adaptador `LazaroClientSource` (buscar por ID, listar y
+  sincronizar), sin ninguna lógica falsa.
+- **Que la IA consulte los datos de los negocios de Lázaro** (hoteles,
+  restaurantes) mediante esa API.
+- **Login configurable según la empresa.**
+
+### Supuestos a confirmar
+
+- La aceptación de términos por cliente se conserva hasta la supresión del
+  cliente (configurable). La evidencia por canal sigue con su retención de 30
+  días. Pendiente de la validación legal general.
+- Las conversaciones atendidas por el bot son visibles para todos los asesores
+  y supervisores (configurable); los casos de supresión siguen restringidos.
+
 ## Puntos abiertos
 
 El proveedor de WhatsApp ya está elegido (Meta Cloud API, feature #43). Quedan
@@ -329,6 +384,8 @@ validación legal.
 - [ ] Validar con el área legal: orden del consentimiento, texto de la política, plazos de supresión, registro del rechazo y memoria permanente.
 - [x] Elegir proveedor WhatsApp para la feature #43: Cloud API de Meta (2026-11-03).
 - [ ] Calibrar el modelo de embeddings y el umbral con un manual real.
+- [ ] Decidir cómo se protegen los secretos de `canales.config` (#61): recomendado `cryptography` (Apache-2.0/BSD) para cifrarlos; alternativa sin dependencia: secretos de webhook derivados con HMAC de una clave de entorno y credenciales de terceros referenciadas por variable de entorno.
+- [ ] Decidir si la importación de clientes acepta Excel (#77): requiere `openpyxl` (MIT) o un lector propio de `.xlsx`; sin decisión, solo CSV.
 
 ### Fuentes
 

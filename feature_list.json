@@ -1,6 +1,6 @@
 {
   "project": "chatbot-lazaro",
-  "description": "Chatbot de atención y soporte por Telegram y WhatsApp con RAG sobre manuales, identidad de clientes y traspaso a asesor en un panel web. Microservicios en Python + FastAPI. Contexto en docs/proyecto.md y docs/especificacion.md.",
+  "description": "Plataforma de atención multicanal (Telegram, WhatsApp y cualquier canal mediante adaptadores o webhook genérico) con RAG sobre manuales, identidad de clientes, bot que responde primero y asesores en un panel web. Microservicios en Python + FastAPI. Contexto en docs/proyecto.md y docs/especificacion.md.",
   "rules": {
     "one_feature_at_a_time": true,
     "require_tests_to_close": true,
@@ -15,7 +15,9 @@
     "sdd_required_when": "feature has \"sdd\": true",
     "done_features": "Las features done se guardan resumidas (id, name, title). Su descripción, acceptance y spec completos están en el tag git archivo-antes-limpieza-2026-11-15."
   },
-  "later": [],
+  "later": [
+    {"name": "esqueleto_instagram", "title": "Esqueleto del adaptador Instagram Messaging, sin credenciales", "note": "Opcional del encargo del profesor (2026-11-21), solo si queda tiempo tras #78. WhatsApp Cloud API ya es un adaptador real (#43), no necesita esqueleto."}
+  ],
   "features": [
     {"id": 1, "name": "contratos_servicios", "title": "Contratos entre servicios", "sdd": true, "status": "done"},
     {"id": 2, "name": "esqueleto_servicios", "title": "Esqueleto de servicios con Docker", "sdd": true, "status": "done"},
@@ -75,6 +77,344 @@
     {"id": 56, "name": "rediseño_visual_paneles", "title": "Rediseño visual moderno de los paneles", "sdd": true, "status": "done"},
     {"id": 57, "name": "retencion_evidencia_y_privacidad_inicial", "title": "Aplicar la retención aprobada a la evidencia de consentimiento", "sdd": true, "status": "done"},
     {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"},
-    {"id": 59, "name": "chat_caso_asesor", "title": "Vista de chat en el detalle del caso del panel de asesores", "sdd": true, "status": "done"}
+    {"id": 59, "name": "chat_caso_asesor", "title": "Vista de chat en el detalle del caso del panel de asesores", "sdd": true, "status": "done"},
+    {
+      "id": 60,
+      "name": "contrato_canal_abierto",
+      "title": "Contrato de canal abierto: cualquier canal, tipos multimedia y webhook genérico",
+      "description": "Fase 1 de la ampliación multicanal genérica (docs/especificacion.md, «Ampliación multicanal genérica y multiagente», 2026-11-21). Hoy `Channel = Literal[\"telegram\", \"whatsapp\"]` obliga a cambiar el contrato para agregar un canal. Cambio de contrato: solo `contracts/`.",
+      "acceptance": [
+        "`canal` deja de ser una lista fija: es un identificador de canal (slug en minúsculas, longitud acotada) que corresponde a `canales.id`; `telegram` y `whatsapp` siguen siendo válidos y todos los payloads y pruebas actuales siguen pasando sin cambios.",
+        "`MessageKind` admite además `image`, `file` y `audio`; el mensaje normalizado añade `attachments` (metadatos: tipo, mime, nombre, tamaño y url externa opcional; nunca el binario) y `metadata` (objeto JSON de tamaño acotado con lo específico del canal).",
+        "El mensaje normalizado tiene `direction` (`inbound`/`outbound`, por defecto `inbound`) para que el callback saliente del canal genérico use el mismo formato.",
+        "`ChannelCapabilities` añade `supports_buttons`, `supports_images`, `supports_files` y `supports_audio`, con valores por defecto que conservan el comportamiento actual de Telegram y WhatsApp.",
+        "Existe un bloque de respuesta `image` (url https y texto alternativo); su degradación en canales sin imágenes se implementa en #61.",
+        "`CONTRATOS.md` documenta con JSON de ejemplo el webhook de entrada `POST /webhooks/{canal_id}`, el callback saliente, los encabezados de firma (`X-Lazaro-Timestamp`, `X-Lazaro-Signature` = HMAC-SHA256 en hex de `<timestamp>.<cuerpo>`), la ventana anti-repetición y la equivalencia con los nombres del encargo (`canalId`, `idExternoUsuario`, `idExternoMensaje`, `direccion`, `tipo`, `contenido`, `adjuntos`, `timestamp`, `metadata`).",
+        "La decisión vigente «solo texto» no cambia: el contrato transporta los tipos multimedia, pero el bot sigue pidiendo que el cliente escriba (lo aplica el núcleo, no el contrato).",
+        "Pruebas en `contracts/tests/` cubren identificadores de canal válidos e inválidos, cada tipo nuevo, adjuntos, límite de metadata, bloque imagen y compatibilidad con payloads antiguos; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [43],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 61,
+      "name": "registro_canales_gateway",
+      "title": "Puerto Canal, ChannelRegistry y tabla canales (Telegram y WhatsApp migrados)",
+      "description": "Fase 2. Arquitectura hexagonal en el gateway de canales: el puerto `Canal`, un registro dinámico de adaptadores y la tabla `canales`. Telegram y WhatsApp Cloud API pasan a ser adaptadores registrados sin perder funcionalidad.",
+      "acceptance": [
+        "En `services/telegram_gateway` existe el puerto `Canal` (`ports/canal.py`) con `recibir_mensaje(payload)` → mensaje normalizado o nada, `enviar_mensaje(destino, bloques)` → estado de entrega, `identificar_usuario(payload)` → id externo del usuario o nada, y `capacidades(destino)`; cada canal vive en `adapters/channels/<canal>.py`.",
+        "`ChannelRegistry` asocia en tiempo de ejecución `tipo_adaptador` → clase mediante registro (decorador o tabla de registro); no hay `if/else` ni enum por canal en el gateway. Un `tipo_adaptador` desconocido o duplicado falla cerrado con un error explícito.",
+        "Tabla `canales` propiedad del gateway: `id`, `nombre`, `tipo_adaptador`, `icono`, `color`, `config` (JSON), `activo`, `creado_en`. Los secretos de `config` no se guardan en claro (mecanismo y dependencia según la decisión del dueño registrada en el design), nunca se escriben en logs y las rutas de listado no los devuelven.",
+        "Al arrancar, si no existen, se crean las filas `telegram` y `whatsapp` a partir de las variables actuales (`TELEGRAM_*`, `WHATSAPP_*`); WhatsApp queda inactivo con `WHATSAPP_ENABLED=false`. La siembra es idempotente y no exige cambios manuales en el servidor.",
+        "Telegram y WhatsApp Cloud API se migran al puerto sin perder funcionalidad: `/telegram/webhook` y `/whatsapp/webhook` responden igual (el webhook ya registrado en Telegram no cambia) y `POST /send` resuelve el adaptador con el registry.",
+        "Degradación pura (sin IO) según capacidades: botones → lista numerada, imagen → enlace, lista → texto numerado; probada por combinación de capacidades.",
+        "El gateway expone rutas internas con `X-Service-Token` para listar canales con metadatos públicos (sin secretos) y para crear, editar, activar, desactivar y regenerar el secreto; las consume el panel en #66 y quedan en `CONTRATOS.md`.",
+        "Pruebas: registry (alta, duplicado, desconocido), degradación, Telegram y WhatsApp a través del puerto, identificar_usuario, protección de secretos, siembra idempotente; toda la batería actual del gateway sigue verde; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [60],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 62,
+      "name": "webhook_generico_firmado",
+      "title": "Webhook genérico de entrada con firma HMAC y callback saliente firmado",
+      "description": "Fase 3. Canal genérico: cualquier sistema externo (o un puente como n8n, Zapier, Make o Twilio) se conecta sin escribir un adaptador nuevo.",
+      "acceptance": [
+        "`POST /webhooks/{canal_id}` es público (sin `X-Service-Token`) y solo acepta canales activos; un canal inexistente o inactivo responde 404 sin revelar cuál de los dos casos es.",
+        "Valida en tiempo constante el HMAC-SHA256 de `<timestamp>.<cuerpo>` con el secreto del canal; firma ausente o incorrecta responde 401; un `X-Lazaro-Timestamp` fuera de la ventana configurable (300 s por defecto) responde 401 para impedir repeticiones.",
+        "Acepta el formato normalizado del contrato o, si el adaptador del canal lo define, convierte el payload con `recibir_mensaje`; un payload inválido responde 422 con `{error, message}`.",
+        "Es idempotente por `(canal_id, external_message_id)`: el mismo webhook reenviado responde 200 sin duplicar el mensaje.",
+        "Responde rápido: valida, deduplica y entrega al orquestador sin esperar a que el bot procese (la cola durable llega en #64).",
+        "Cuando la plataforma responde por un canal genérico, hace `POST` a `config.callback_url` con el mensaje normalizado saliente (`direction=outbound`) y los mismos encabezados de firma; una respuesta no 2xx o un error de red cuenta como envío fallido.",
+        "La URL de callback debe ser https y no puede resolver a direcciones privadas, loopback, link-local ni de metadatos (anti-SSRF), salvo un ajuste explícito de desarrollo documentado.",
+        "Pruebas: firma válida, inválida, ausente y vencida; canal inactivo; formato normalizado y por adaptador; duplicado; callback firmado y verificable con el ejemplo de `CONTRATOS.md`; SSRF bloqueado; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [61],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 63,
+      "name": "canal_simulado",
+      "title": "Adaptador SIMULADO configurable y herramienta de prueba",
+      "description": "Fase 3. Un adaptador que se hace pasar por cualquier canal (por ejemplo «TikTok (simulado)») para demostrar la plataforma sin credenciales. Debe verse claramente como simulado.",
+      "acceptance": [
+        "El adaptador `simulado` (tipo_adaptador `simulado`) toma nombre, ícono, color y capacidades de `config`; la palabra SIMULADO aparece en el nombre de la clase, su docstring, la etiqueta del canal en el panel y la herramienta de prueba.",
+        "No hace llamadas de red: las respuestas salientes quedan en un buzón propio consultable, con retención corta configurable.",
+        "Hay una página de prueba en el panel (solo admin y supervisor) tipo chat: se elige el canal simulado, se escribe como cliente con un id externo de prueba y se ven las respuestas del bot y del asesor; y `scripts/simular_canal.py` envía mensajes firmados al webhook genérico.",
+        "Crear un canal simulado nuevo no requiere código: basta un registro en `canales` (por la ruta interna en esta feature; desde el panel en #66).",
+        "Un canal simulado recorre el flujo completo actual (consentimiento, login, bot, asesor) igual que un canal real.",
+        "Pruebas: buzón, capacidades configurables, script de envío firmado, permisos de la página y marca SIMULADO visible; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [62],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 64,
+      "name": "cola_entrada_outbox",
+      "title": "Cola de entrada y outbox en Postgres con workers y reintentos",
+      "description": "Fase 4. Desacoplar la recepción del procesamiento. Decisión del dueño (2026-11-21): tabla outbox en Postgres, sin infraestructura nueva. Hoy el orquestador procesa con `BackgroundTasks` (se pierde si el proceso se reinicia) y envía sin reintentos.",
+      "acceptance": [
+        "`POST /messages` del orquestador guarda el mensaje en una tabla de entrada en la misma transacción que la deduplicación y responde 202 sin procesarlo; el flujo normal deja de usar `BackgroundTasks`. Las excepciones legales vigentes (aceptación de consentimiento procesada dentro de la petición, #35) se conservan o se justifican en el design.",
+        "El worker `procesar_entrantes` toma mensajes con `FOR UPDATE SKIP LOCKED`, en orden por conversación, y ejecuta el flujo actual (bot, IA, asignación); un fallo deja el mensaje para reintento con un máximo configurable y después lo marca como fallido con el motivo.",
+        "Toda respuesta saliente (bot, asesor y avisos) se escribe en la tabla `outbox` en la misma transacción que el mensaje guardado; el worker `enviar_salientes` la entrega por el gateway con backoff exponencial con jitter y máximo de intentos configurables, y marca `fallido` con el motivo.",
+        "Un rechazo definitivo del canal (422: ventana cerrada, plantilla no aprobada) no se reintenta; los errores transitorios sí.",
+        "Los mensajes salientes a un mismo destino salen en el orden en que se crearon; varias instancias del worker no envían dos veces la misma fila (la entrega es al menos una vez y el design documenta la ventana de duplicado).",
+        "Supervisor y admin ven los envíos fallidos en el panel y pueden reintentarlos; cada reintento queda en auditoría.",
+        "`docker-compose.yml` añade los dos workers con la imagen del orquestador, igual que `timeouts_worker`; las filas procesadas se purgan con la retención vigente y la supresión las elimina.",
+        "Pruebas: sin pérdida ante caída simulada, concurrencia entre workers, backoff, fallido, no reintento de 422, orden por destino, reintento manual y retención; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [61],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 65,
+      "name": "nucleo_sin_nombres_canal",
+      "title": "Núcleo sin nombres de canal: capacidades y canal_id de punta a punta",
+      "description": "Fase 5. El orquestador tiene unas 44 comparaciones con `\"telegram\"`/`\"whatsapp\"` (ventana de 24 h, plantillas, consentimiento por texto o botón, `INBOX_CHANNELS`). El núcleo debe tratar cualquier canal registrado igual.",
+      "acceptance": [
+        "El orquestador no compara con nombres de canal concretos fuera de una capa de compatibilidad legacy documentada (`MessageRequest`/`telegram_user_id`); una prueba lo verifica buscando en el código.",
+        "La ventana de 24 h y el uso de plantillas se deciden por las capacidades que informa el canal (`free_text_allowed`, `requires_template`), no por su nombre; el comportamiento de WhatsApp no cambia.",
+        "El modo de consentimiento (frase de texto o botón) es un ajuste por canal en `canales.config`, con `texto` para Telegram (#46) y `boton` para WhatsApp como valores sembrados; un canal nuevo usa `texto` por defecto.",
+        "Los contactos y mensajes guardan `canal_id`; los datos existentes de `telegram` y `whatsapp` se migran sin pérdida y con migración idempotente.",
+        "Un canal nuevo (probado con el canal simulado de #63) recorre consentimiento, login, bot, escalamiento y respuesta del asesor sin cambios en el núcleo, y las respuestas salen por el mismo canal y destino de la conversación.",
+        "Pruebas: barrido de nombres de canal, ventana por capacidades, consentimiento por ajuste, migración de datos y flujo completo con canal simulado; toda la batería actual del orquestador sigue verde; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [61, 63, 64],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 66,
+      "name": "panel_administracion_canales",
+      "title": "Panel de administración de canales",
+      "description": "Fase 5. Agregar, configurar, activar y desactivar canales desde la interfaz, sin tocar código.",
+      "acceptance": [
+        "Sección `/admin/canales` (solo admin) para listar, crear y editar canales: nombre, ícono, color, tipo de adaptador (solo los registrados), credenciales y URL de callback según el adaptador; activar y desactivar.",
+        "Muestra la URL del webhook de entrada (`<base pública>/webhooks/{canal_id}`) con botón copiar, y el secreto del canal solo tras una acción explícita, con botón copiar; el secreto se puede regenerar (invalida el anterior). Ver y regenerar quedan en auditoría.",
+        "Las credenciales de terceros ingresadas por el admin no se vuelven a mostrar completas después de guardarse (solo los últimos caracteres).",
+        "Desactivar un canal hace que su webhook responda 404 y que no salga nada por él; sus conversaciones siguen visibles en el panel.",
+        "Ícono de una lista cerrada servida desde el mismo origen (o emoji) y color validado (`#RRGGBB`) con contraste suficiente para la etiqueta; sin CDN y sin cambiar la CSP.",
+        "Pruebas: permisos, validaciones, copiar URL, ver y regenerar secreto con auditoría, ocultamiento de credenciales y desactivación; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [61, 65],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 67,
+      "name": "etiqueta_origen_canal",
+      "title": "Etiqueta de origen del canal en todo el panel y filtro por canal",
+      "description": "Fase 5, prioridad alta (es lo que más valora el profesor). La empresa siempre ve por qué canal le escriben.",
+      "acceptance": [
+        "La etiqueta de origen (ícono + nombre + color del canal, tomados de `canales`) aparece en cada conversación de la lista de la bandeja.",
+        "La etiqueta aparece en el encabezado del chat abierto.",
+        "La etiqueta aparece en cada mensaje del chat, porque un mismo cliente puede haber escrito por varios canales.",
+        "La etiqueta aparece en el historial y la ficha del cliente en el panel.",
+        "La bandeja se filtra por cualquier canal registrado (no por una lista fija) y el filtro se combina con los filtros actuales de asignación y etiqueta.",
+        "Las actualizaciones en vivo (#53) pintan la etiqueta igual que la carga inicial.",
+        "Un canal desactivado sigue mostrando su etiqueta en el historial; un canal desconocido muestra una etiqueta neutra «Canal desconocido» en vez de un error.",
+        "La etiqueta no depende solo del color (incluye el nombre como texto) y cumple contraste WCAG AA; es un único componente que reutilizará el dashboard de #75.",
+        "Pruebas por cada ubicación, filtro, vista en vivo, canal inactivo y desconocido y escape de nombre/ícono; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [66],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 68,
+      "name": "bandeja_unificada_tomar_control",
+      "title": "Bandeja unificada con estados y botones Tomar conversación / Devolver al bot",
+      "description": "Fase 6. Hoy la bandeja solo lista conversaciones que ya escalaron a caso. El profesor pide que el bot responda primero y que los asesores supervisen en vivo y entren cuando haga falta.",
+      "acceptance": [
+        "La bandeja lista todas las conversaciones de todos los canales (con o sin caso), cada una con su estado visible: atendida por bot, atendida por asesor, pendiente (escalada sin asesor) o cerrada.",
+        "Un asesor puede abrir cualquier conversación atendida por el bot y leerla en vivo sin intervenir; la lectura queda en auditoría.",
+        "El botón «Tomar conversación» crea el caso si no existe y lo asigna al asesor en una sola operación atómica; desde ese momento el bot deja de responder.",
+        "El botón «Devolver al bot» reutiliza el flujo actual de devolución y el bot retoma la conversación.",
+        "Las conversaciones atendidas por el bot son visibles para asesores y supervisores (supuesto configurable); los casos de supresión siguen restringidos como hoy.",
+        "El login obligatorio y el consentimiento previo (#35) no cambian: antes del consentimiento no se guarda contenido y por tanto no hay nada que mostrar.",
+        "Pruebas: estados, lectura en vivo, tomar (con y sin caso, concurrencia entre dos asesores), devolver, permisos y auditoría; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [67],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 69,
+      "name": "estrategias_asignacion",
+      "title": "Estrategia de asignación intercambiable: por carga y round-robin",
+      "description": "Fase 6. Hoy existe la asignación automática por carga (#52) como única regla. El profesor pide asignación manual y automática con estrategia intercambiable (patrón Strategy).",
+      "acceptance": [
+        "En handover existe la interfaz `EstrategiaAsignacion` con las implementaciones `por_carga` (comportamiento actual de #52) y `round_robin` (turno rotativo entre asesores disponibles, con puntero persistente y actualizado de forma atómica).",
+        "La estrategia se elige en los ajustes operativos del panel sin redeploy; el modo `manual` sigue disponible y el valor por defecto es el actual.",
+        "Agregar una estrategia es escribir una clase y registrarla, sin `if/else` en el flujo de asignación.",
+        "Ambas estrategias respetan las reglas de #52: solo asesores con presencia `available`, sin autoasignar supresiones ni casos fuera de horario, y sin pisar asignaciones hechas por personas.",
+        "Pruebas: reparto round-robin, salto de asesores no disponibles, concurrencia, cambio de estrategia en caliente y regresión de `por_carga`; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [52],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 70,
+      "name": "aviso_intencion_compra",
+      "title": "Detectar intención de compra y avisar a un asesor",
+      "description": "Fase 6. Cuando el cliente muestra interés («me interesa», «quiero reservar»), un asesor debe enterarse para tomar el control si quiere.",
+      "acceptance": [
+        "Las frases de intención de compra son configurables desde el panel (con valores iniciales como «me interesa», «quiero reservar», «quiero comprar») y el router de IA puede además devolver el motivo `purchase_intent`.",
+        "Al detectarla, el bot sigue respondiendo y se avisa a los asesores: la conversación se marca «interés de compra» en la bandeja, sube de prioridad y se emite un evento en vivo; crear el caso automáticamente es un ajuste (apagado por defecto).",
+        "Pedir hablar con un humano sigue escalando como hoy.",
+        "Cada detección queda en eventos con su motivo y no se repite para la misma conversación dentro de un intervalo configurable.",
+        "Pruebas: detección por frase y por router, aviso en bandeja y en vivo, ajuste de crear caso, anti-repetición y que el texto del cliente se trate como dato; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [68],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 71,
+      "name": "respuestas_rapidas_bot",
+      "title": "Respuestas rápidas configurables del bot (incluye imagen o QR)",
+      "description": "Fase 7. Que el bot resuelva solo lo simple, por ejemplo enviar el panel estático o QR con «escanea este código», sin que la respuesta esté escrita en el código. Las respuestas guardadas de asesores (#51) no cambian.",
+      "acceptance": [
+        "Tabla `respuestas_rapidas` administrable desde el panel: disparador (palabras clave o frases con comparación normalizada), respuesta en bloques (texto, opciones, enlace, imagen), activa o inactiva y prioridad.",
+        "Se evalúan antes del RAG y solo en los estados donde el bot responde (nunca durante el consentimiento ni con asesor); si una coincide, el bot responde sin llamar al modelo y queda registrado en eventos.",
+        "La imagen se sube desde el panel (tipo y tamaño validados, servida desde el mismo origen) o se indica una url https; en canales sin imágenes se degrada a enlace.",
+        "Ninguna respuesta rápida está escrita en el código: no se siembra contenido de negocio.",
+        "Pruebas: coincidencia y prioridad, estados excluidos, degradación, validación de la imagen, permisos y que el modelo no se llame; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [65],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 72,
+      "name": "consentimiento_unico_por_cliente",
+      "title": "Términos aceptados una sola vez por cliente en todos sus canales vinculados",
+      "description": "Fase 8. Hoy el consentimiento se guarda por `(canal, id externo)`. Decisión del dueño (2026-11-21): el login sigue obligatorio; los T&C se aceptan una vez por cliente, no por canal.",
+      "acceptance": [
+        "Al iniciar sesión, la aceptación vigente queda registrada por cliente (`cliente_id`, versión, fecha y canal donde se aceptó), además de la evidencia por canal actual.",
+        "MIENTRAS una identidad de canal esté vinculada a un cliente que aceptó la versión vigente, el bot no vuelve a pedir el aviso, aunque escriba por otro canal vinculado o después de cerrar sesión.",
+        "Si cambia la versión del aviso, se pide una sola vez al cliente en el primer canal por el que escriba; al aceptarla queda cubierta en todos sus canales vinculados.",
+        "Una identidad de canal nunca vinculada (primer contacto, aún sin login) sigue recibiendo el aviso antes de guardar datos (#35): no se sabe quién es hasta el login.",
+        "Tabla `identidades_cliente` (`cliente_id`, `canal_id`, `id_externo`, `vinculado_en`) poblada solo al login verificado; el historial del cliente reúne los mensajes de todas sus identidades con su canal.",
+        "El login sigue siendo obligatorio; no se agrega ningún mecanismo alternativo de identificación ni código de verificación por canal.",
+        "Supuesto a confirmar con legal: la aceptación por cliente se conserva hasta la supresión del cliente (configurable); la supresión la borra junto con sus identidades.",
+        "Pruebas: aceptación compartida entre canales vinculados, canal nuevo sin vincular, cambio de versión, supresión y regresión de #35, #37 y #46; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [65],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 73,
+      "name": "id_cliente_y_bienvenida_canales",
+      "title": "ID de cliente visible y copiable, y bienvenida con los canales disponibles",
+      "description": "Fase 8. Para soporte (ejemplo del profesor: el cliente da su ID y el asesor encuentra sus datos), sin cambiar el login obligatorio.",
+      "acceptance": [
+        "Cada cliente tiene un ID corto, único, estable y fácil de copiar (sin caracteres ambiguos), que no es secuencial ni revela datos personales.",
+        "El cliente ve su ID en el chat después del login y cuando lo pide, en un mensaje propio fácil de copiar.",
+        "El panel muestra el ID con botón copiar en la ficha del cliente, la bandeja y el detalle de la conversación, y asesores y admin pueden buscar un cliente por su ID.",
+        "Escribir un ID en el chat no identifica a nadie ni da acceso a datos: solo sirve para que soporte encuentre al cliente.",
+        "La bienvenida del primer contacto lista los canales activos marcados como públicos en `canales` (nombre, ícono y enlace de contacto opcional); los canales simulados no aparecen salvo un ajuste de demostración.",
+        "`docs/especificacion.md` deja documentado que el login podría ser configurable según la empresa, como posibilidad, sin implementarlo.",
+        "Pruebas: formato y unicidad del ID, mensaje en el chat, botón copiar y búsqueda en el panel, que el ID no autentique, y lista de canales; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [66, 72],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 74,
+      "name": "servidor_mcp_lectura",
+      "title": "Servidor MCP de solo lectura conectado a la IA, con modelo configurable",
+      "description": "Fase 9. La IA responde con datos reales consultando herramientas MCP de solo lectura. Hoy existe texto-a-SQL sobre vistas permitidas (#26) sin MCP.",
+      "acceptance": [
+        "Un servidor MCP (SDK oficial `mcp`, licencia MIT, dependencia declarada en el design) expone como herramientas solo endpoints de lectura existentes; ninguna herramienta crea, modifica ni borra.",
+        "El orquestador actúa como cliente MCP: las herramientas se ofrecen al modelo solo en los estados que permite `TOOL_MATRIX` y el `cliente_id` sale de la sesión, nunca de los argumentos del modelo.",
+        "El servidor MCP no se expone a Internet y exige `X-Service-Token`; cada llamada queda auditada (herramienta, hash de argumentos y filas devueltas).",
+        "El modelo se configura con variables de entorno (`LLM_BASE_URL`, `LLM_MODEL`, …); se documenta con Ollama en local (perfil opcional de compose) y con un proveedor remoto.",
+        "Funciona igual sin importar el canal porque trabaja sobre el mensaje normalizado; se prueba con Telegram y con el canal simulado.",
+        "Para el ejemplo del profesor («¿tienes algo para Melgar esta semana?») se usa una tabla o vista de ofertas de DEMOSTRACIÓN, marcada así en los datos y en el panel; nunca se presenta como datos de Lázaro.",
+        "Si el servidor MCP no está disponible, el bot responde como hoy y el fallo queda registrado.",
+        "Pruebas con un MCP falso: solo lectura, autorización por estado, `cliente_id` de la sesión, caída del MCP y auditoría; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [26, 39, 65],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 75,
+      "name": "dashboard_canales_svg",
+      "title": "Dashboard: mensajes por canal, conversaciones por estado y tiempo de respuesta",
+      "description": "Fase 10. Gráficos generados en el servidor como SVG, sin librerías de terceros ni cambios en la CSP.",
+      "acceptance": [
+        "Dashboard en el panel (supervisor y admin) con mensajes por canal (usando la etiqueta de #67), conversaciones por estado y tiempo de respuesta (primera respuesta y respuesta de asesor: mediana y p90) en un rango de fechas.",
+        "Los gráficos son SVG generados en el servidor, sin JavaScript de terceros, sin CDN y sin cambiar la CSP; cada gráfico tiene título, texto alternativo y una tabla de datos accesible.",
+        "Los canales simulados se distinguen y se pueden excluir con un filtro.",
+        "Reutiliza los cálculos de las métricas existentes (`/admin/metricas`, `/asesor/metricas`) sin duplicarlos.",
+        "Pruebas: funciones puras del SVG (escape de nombres, datos vacíos, muchos canales), cálculos de tiempos y permisos; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [67],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 76,
+      "name": "fuente_clientes_y_futuro_lazaro",
+      "title": "Puerto FuenteDeClientes y aviso «a futuro» de la API de Lázaro",
+      "description": "Fase 11. No hay acceso a la API de Lázaro: no se simula. Solo se deja el puerto con la implementación local actual y se presenta la integración como posibilidad.",
+      "acceptance": [
+        "El orquestador define el puerto `FuenteDeClientes` (buscar por ID, listar, crear y actualizar) con la implementación `FuenteClientesLocal` sobre los datos actuales; la creación manual en `/admin/clientes` sigue funcionando igual y pasa por el puerto.",
+        "La sección Clientes muestra una tarjeta visible con el texto: «A futuro, esta sección podría conectarse a la API de Lazaro para traer los clientes automáticamente y mantenerlos sincronizados (evitando clientes creados o eliminados solo en un sistema). El bot podría identificar al cliente por el ID que entrega en el chat y buscarlo en los datos de Lazaro.»",
+        "La documentación describe cómo sería el adaptador `LazaroClientSource` (buscar por ID, listar y sincronizar, con manejo de duplicados y borrados) solo como posibilidad.",
+        "No existe clase, configuración, botón, ruta ni texto que haga creer que la conexión con Lázaro funciona.",
+        "Pruebas: contrato del puerto con la implementación local, regresión de la creación manual y tarjeta visible; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [42],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 77,
+      "name": "importacion_clientes",
+      "title": "Importar clientes desde CSV con vista previa, duplicados y resumen",
+      "description": "Fase 11. Extra real que no depende de Lázaro. Excel (.xlsx) solo si no requiere dependencias nuevas o si el dueño aprueba la dependencia (pendiente de decidir).",
+      "acceptance": [
+        "Botón «Importar clientes» en `/admin/clientes` (solo admin) que acepta CSV UTF-8 (separador coma o punto y coma) con encabezados documentados.",
+        "Antes de importar muestra una vista previa con las filas leídas y los errores de validación por fila y campo (ID, nombre, correo, teléfono…).",
+        "Detecta duplicados por ID, correo o teléfono, tanto contra los clientes existentes como dentro del mismo archivo, y el admin elige actualizar o saltar.",
+        "Al terminar muestra un resumen con creados, actualizados, saltados y fallidos, y el motivo de cada fallo.",
+        "La importación escribe a través de `FuenteDeClientes` (#76), de modo que una fuente futura sea solo otra implementación.",
+        "El archivo nunca trae contraseñas; los clientes importados quedan sin credencial activa hasta que el admin la habilite con el flujo actual (supuesto configurable).",
+        "Límites configurables de tamaño y filas; el archivo no se guarda después de importar; cualquier exportación del resumen se protege contra inyección de fórmulas.",
+        "Correo y teléfono se agregan al cliente si no existen (cambio de esquema aprobado el 2026-11-21) y quedan sujetos a retención y supresión.",
+        "Pruebas: parseo y separadores, validaciones, duplicados en base y en archivo, actualizar y saltar, resumen, límites, permisos y CSRF; `./init.sh` verde y reviewer aprueba."
+      ],
+      "dependencies": [76],
+      "sdd": true,
+      "status": "pending"
+    },
+    {
+      "id": 78,
+      "name": "readme_multicanal",
+      "title": "README de la plataforma multicanal y resumen honesto para el profesor",
+      "description": "Fase 11. Documentación final; no toca código de aplicación.",
+      "acceptance": [
+        "El README incluye un diagrama simple de la arquitectura: núcleo, puertos, adaptadores, cola y workers.",
+        "Explica paso a paso cómo agregar un canal nuevo con un adaptador propio y con el webhook genérico.",
+        "Documenta el formato del webhook de entrada y del callback con JSON de ejemplo y cómo validar la firma.",
+        "Explica cómo configurar la cola, el servidor MCP y el modelo de IA (incluido Ollama).",
+        "Incluye la sección «Posibilidades a futuro»: integración de clientes con la API de Lázaro (`LazaroClientSource`), que la IA consulte los datos de los negocios de Lázaro (hoteles, restaurantes) mediante su API, y login configurable según la empresa; nada de esto se presenta como implementado.",
+        "Incluye un resumen honesto de lo que funciona de verdad, lo que es simulado y lo que es solo propuesta."
+      ],
+      "dependencies": [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77],
+      "sdd": false,
+      "status": "pending"
+    }
   ]
 }
