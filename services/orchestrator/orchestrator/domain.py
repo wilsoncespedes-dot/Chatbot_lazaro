@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ from lazaro_contracts import (
     NormalizedMessage,
     OptionsBlock,
     SearchResult,
+    ResponseBlock,
     TemplateBlock,
     TextBlock,
     PrivacyPurgeResponse,
@@ -109,6 +111,8 @@ from .panel import (
     mask_external_id,
     suppression_priority,
 )
+from .channels import ChannelPolicy
+from .legacy import LEGACY_CHANNEL, is_legacy
 from .states import ConversationEvent, ConversationState, transition_state
 from .db_query import (
     DbQueryCommand,
@@ -127,7 +131,6 @@ from .privacy import (
     PRIVACY_ACCEPT_BUTTON,
     PRIVACY_BUTTON_IDS,
     PRIVACY_REJECT_BUTTON,
-    TEXT_CONSENT_CHANNELS,
     ConsentChallengeStore,
     ConversationTexts,
     consent_button_proof,
@@ -145,6 +148,7 @@ if TYPE_CHECKING:
     from .adapters.llm import LLMClient
     from .adapters.rag import RagClient
     from .adapters.repository import Repository, StoredEvent
+    from .adapters.simulator import SimulatorClient
 
 logger = logging.getLogger(__name__)
 
@@ -585,7 +589,7 @@ class Contact(BaseModel):
     """Contacto identificado por canal e id externo; los campos Telegram son legado."""
 
     id: str
-    channel: str = "telegram"
+    channel: str = LEGACY_CHANNEL
     external_user_id: str = ""
     external_chat_id: str = ""
     telegram_user_id: int | None = None
@@ -788,6 +792,97 @@ def _unavailable_client_data() -> "ClientDataClient":
     return UnavailableClientData()
 
 
+INBOX_PAYLOAD_KINDS = ("legacy", "channel")
+OUTBOX_KINDS = ("bot", "advisor", "notice")
+
+
+@dataclass(frozen=True)
+class DedupKey:
+    """Clave de deduplicación de una entrada; `message` o `update` legacy."""
+
+    kind: Literal["message", "update"]
+    channel: str = ""
+    external_message_id: str = ""
+    update_id: int = 0
+
+
+@dataclass(frozen=True)
+class InboundEntry:
+    conversation_key: str
+    channel: str
+    external_user_id: str
+    payload_kind: str
+    payload: dict
+
+
+@dataclass(frozen=True)
+class InboundQueueRow:
+    id: int
+    conversation_key: str
+    channel: str
+    payload_kind: str
+    payload: dict
+    attempts: int
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class OutboxEntry:
+    contact_id: str | None
+    destination_key: str
+    channel: str
+    destination: str
+    kind: str
+    blocks: list
+
+
+@dataclass(frozen=True)
+class OutboxRow:
+    id: int
+    destination_key: str
+    channel: str
+    destination: str
+    blocks: list
+    attempts: int
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class FailedSend:
+    id: int
+    channel: str
+    destination: str
+    kind: str
+    attempts: int
+    last_error: str | None
+    created_at: datetime
+
+
+def conversation_key(channel: str, external_user_id: str) -> str:
+    return f"{channel}:{external_user_id}"
+
+
+def destination_key(channel: str, destination: str) -> str:
+    return f"{channel}:{destination}"
+
+
+def mask_destination(destination: str) -> str:
+    return "****" + destination[-4:]
+
+
+def compute_backoff(
+    attempts: int,
+    base: float,
+    cap: float,
+    jitter: float,
+    rng: Callable[[], float] = random.random,
+) -> float:
+    """Espera exponencial con jitter: min(cap, base*2^(attempts-1)) * [1±jitter]."""
+    delay = min(cap, base * 2 ** max(0, attempts - 1))
+    factor = 1 + jitter * (2 * rng() - 1)
+    return delay * factor
+
+
 @dataclass
 class Adapters:
     repository: "Repository"
@@ -799,12 +894,32 @@ class Adapters:
     clock: Callable[[], datetime]
     new_id: Callable[[], str]
     client_data: "ClientDataClient" = field(default_factory=_unavailable_client_data)
+    simulator: "SimulatorClient | None" = None
     # R35: memoria de proceso para distinguir el primer mensaje sin persistir estado.
     consent_shown: set[tuple[str, str]] = field(default_factory=set)
     # R39: desafío efímero de un solo uso por presentación del aviso.
     consent_challenges: ConsentChallengeStore = field(
         default_factory=ConsentChallengeStore
     )
+    # #64: el dominio escribe aquí; `gateway` queda solo para el worker de salida.
+    outbound: "GatewayClient | None" = None
+    # #65: metadatos de canal (capacidades y ajustes) leídos del gateway.
+    channels: "ChannelDirectory | None" = None
+
+    def __post_init__(self) -> None:
+        if self.outbound is None:
+            from .adapters.outbox import OutboxGatewayClient
+
+            self.outbound = OutboxGatewayClient(self.repository, self.clock)
+        if self.channels is None:
+            from .adapters.channels import FakeChannelDirectory
+
+            self.channels = FakeChannelDirectory()
+
+
+def channel_policy(adapters: Adapters, channel: str) -> ChannelPolicy:
+    """#65: política del canal (ventana y modo de consentimiento) desde el directorio."""
+    return adapters.channels.policy(channel)
 
 
 @dataclass(frozen=True)
@@ -867,21 +982,39 @@ def build_llm_prompt(
     return system, "\n".join(parts)
 
 
+def _contact_destination(contact: Contact) -> str:
+    """Destino de entrega del contacto por su canal actual."""
+    if is_legacy(contact.channel) and contact.chat_id is not None:
+        return str(contact.chat_id)
+    return contact.external_chat_id
+
+
 def _deliver(contact: Contact, text: str, adapters: Adapters) -> None:
-    """Entrega el texto por el canal del contacto, sin tocar su historial."""
-    if contact.channel == "telegram" and contact.chat_id is not None:
-        adapters.gateway.send(contact.chat_id, text)
+    """Encola el texto por el canal del contacto, sin tocar su historial."""
+    if is_legacy(contact.channel) and contact.chat_id is not None:
+        adapters.outbound.send(contact.chat_id, text)
     else:
-        adapters.gateway.send_channel(contact.channel, contact.external_chat_id, text)
+        adapters.outbound.send_channel(contact.channel, contact.external_chat_id, text)
 
 
 def _send(contact: Contact, text: str, adapters: Adapters) -> bool:
+    """Guarda el mensaje del bot y su salida en la misma transacción (R17)."""
+    destination = _contact_destination(contact)
+    entry = OutboxEntry(
+        contact_id=contact.id,
+        destination_key=destination_key(contact.channel, destination),
+        channel=contact.channel,
+        destination=destination,
+        kind="bot",
+        blocks=[TextBlock(type="text", text=text)],
+    )
     try:
-        _deliver(contact, text, adapters)
+        adapters.repository.add_message_with_outbox(
+            contact.id, "bot", text, adapters.clock(), entry
+        )
     except ServiceUnavailable:
         logger.error("send_failed contact_id=%s", contact.id)
         return False
-    adapters.repository.add_message(contact.id, "bot", text, adapters.clock())
     return True
 
 
@@ -889,16 +1022,7 @@ def _notify_channel(
     channel: str, destination: str, text: str, adapters: Adapters
 ) -> None:
     try:
-        if channel == "telegram":
-            try:
-                chat_id = int(destination)
-            except (TypeError, ValueError):
-                pass
-            else:
-                # Telegram conserva el envío legacy cuando el chat es numérico.
-                adapters.gateway.send(chat_id, text)
-                return
-        adapters.gateway.send_channel(channel, destination, text)
+        adapters.outbound.send_channel(channel, destination, text)
     except ServiceUnavailable:
         logger.error("channel_reply_failed channel=%s", channel)
 
@@ -922,7 +1046,7 @@ def _routing_chat_id(contact: Contact) -> int:
 def _notify_sender(chat_id: int, text: str, adapters: Adapters) -> None:
     """Texto fijo al remitente del comando; nunca se guarda en su historial (R25)."""
     try:
-        adapters.gateway.send(chat_id, text)
+        adapters.outbound.send(chat_id, text)
     except ServiceUnavailable:
         logger.error("advisor_command_reply_failed chat_id=%s", chat_id)
 
@@ -947,12 +1071,10 @@ def _send_identity_blocks(
     blocks: list = [TextBlock(type="text", text=text)]
     if url:
         blocks.append(LinkBlock(type="link", text=link_label, url=url))
-    send_blocks = getattr(adapters.gateway, "send_channel_blocks", None)
     try:
-        if send_blocks is None:
-            _notify_channel(contact.channel, destination, text, adapters)
-        else:
-            send_blocks(contact.channel, destination, blocks)
+        adapters.outbound.send_channel_blocks(
+            contact.channel, destination, blocks
+        )
     except ServiceUnavailable:
         logger.error("channel_reply_failed channel=%s", contact.channel)
 
@@ -1067,7 +1189,7 @@ def end_client_session(
 
 def _link_contact(link) -> Contact:
     chat_id = None
-    if link.channel == "telegram":
+    if is_legacy(link.channel):
         try:
             chat_id = int(link.external_chat_id)
         except (TypeError, ValueError):
@@ -1426,7 +1548,7 @@ def _summarize_session(
             settings.memory_summary_max_chars,
         )
         contact = repo.get_contact(session.contact_id)
-        channel = contact.channel if contact is not None else "telegram"
+        channel = contact.channel if contact is not None else LEGACY_CHANNEL
         repo.upsert_conversation_summary(
             session.id,
             session.profile_id,
@@ -2325,9 +2447,13 @@ def consent_button_pending(message: NormalizedMessage) -> bool:
     )
 
 
-def consent_text_pending(message: NormalizedMessage, settings: Settings) -> bool:
-    """R46 R16: una frase de decisión de Telegram se procesa en la petición."""
-    if message.channel not in TEXT_CONSENT_CHANNELS or message.kind != "text":
+def consent_text_pending(
+    message: NormalizedMessage, settings: Settings, adapters: Adapters
+) -> bool:
+    """R46 R16, #65 R24/R25: la frase de decisión de un canal `texto` se procesa en la petición."""
+    if message.kind != "text":
+        return False
+    if not channel_policy(adapters, message.channel).text_consent:
         return False
     text = message.text or ""
     return matches_consent_phrase(
@@ -2338,13 +2464,13 @@ def consent_text_pending(message: NormalizedMessage, settings: Settings) -> bool
 def _consent_prompt(
     texts: ConversationTexts,
     include_greeting: bool,
-    channel: str,
+    text_consent: bool,
     settings: Settings,
 ) -> str:
     body = texts.notice_text
     if include_greeting and texts.greeting:
         body = f"{texts.greeting}\n\n{body}"
-    if channel in TEXT_CONSENT_CHANNELS:
+    if text_consent:
         instruction = text_consent_instruction(
             settings.privacy_text_consent_instruction,
             settings.consent_accept_phrase,
@@ -2363,11 +2489,12 @@ def _notify_consent_prompt(
     settings: Settings,
     adapters: Adapters,
 ) -> None:
-    """R2, R38, R46 R6-R9: aviso sin botones en Telegram y con opciones en el resto."""
-    prompt = _consent_prompt(texts, include_greeting, channel, settings)
+    """R2, R38, R46 R6-R9, #65 R22/R23: frase en modo `texto`, opciones en modo `boton`."""
+    text_consent = channel_policy(adapters, channel).text_consent
+    prompt = _consent_prompt(texts, include_greeting, text_consent, settings)
     sha = notice_sha256(texts.notice_text)
-    send_blocks = getattr(adapters.gateway, "send_channel_blocks", None)
-    if channel in TEXT_CONSENT_CHANNELS:
+    send_blocks = adapters.outbound.send_channel_blocks
+    if text_consent:
         # R9: el desafío existe aunque el gateway no sepa enviar bloques.
         adapters.consent_challenges.register(
             channel, external_user_id, destination, texts.notice_version, sha
@@ -2505,7 +2632,7 @@ def _handle_pre_consent_text(
         adapters.consent_shown.discard(key)
         adapters.consent_challenges.discard(channel, external_user_id)
         state = transition_state(state, ConversationEvent.RESTART_MESSAGE)
-    if channel in TEXT_CONSENT_CHANNELS:
+    if channel_policy(adapters, channel).text_consent:
         accept = matches_consent_phrase(text, settings.consent_accept_phrase)
         reject = matches_consent_phrase(text, settings.consent_reject_phrase)
         if accept or reject:
@@ -2624,8 +2751,8 @@ def _handle_consent_button(
             button_id,
         )
         return
-    if channel in TEXT_CONSENT_CHANNELS:
-        # R25, R26: un botón antiguo de Telegram no registra nada y reenvía el
+    if channel_policy(adapters, channel).text_consent:
+        # R25, R26: un botón antiguo de un canal en modo `texto` no registra nada y reenvía el
         # aviso de texto vigente.
         logger.info(
             "consent_button_ignored channel=%s reason=text_consent_channel",
@@ -2910,11 +3037,11 @@ def _legacy_consent_gate(
         logger.info("privacy_not_configured")
         return False
     if _has_current_consent(
-        "telegram", str(request.telegram_user_id), settings, adapters
+        LEGACY_CHANNEL, str(request.telegram_user_id), settings, adapters
     ):
         return True
     _handle_pre_consent_text(
-        "telegram",
+        LEGACY_CHANNEL,
         str(request.telegram_user_id),
         str(request.chat_id),
         request.text,
@@ -3034,13 +3161,13 @@ def _record_forbidden(case_id: str, advisor_id: str, adapters: Adapters) -> None
 def _ensure_window_open(
     case_id: str, contact: Contact, settings: Settings, adapters: Adapters
 ) -> None:
-    """R16: solo WhatsApp con la ventana cerrada bloquea el texto libre."""
-    if contact.channel != "whatsapp":
+    """R16, #65 R20/R21: solo un canal con ventana cerrada bloquea el texto libre."""
+    if not channel_policy(adapters, contact.channel).windowed:
         return
     last_user = adapters.repository.last_user_message_at(contact.id)
     if (
         channel_window(
-            contact.channel,
+            channel_policy(adapters, contact.channel),
             last_user,
             adapters.clock(),
             settings.whatsapp_window_hours,
@@ -3077,27 +3204,33 @@ def advisor_send_template(
         raise CaseNotFound("El caso no existe.")
     last_user = repo.last_user_message_at(contact.id)
     window = channel_window(
-        contact.channel, last_user, adapters.clock(), settings.whatsapp_window_hours
+        channel_policy(adapters, contact.channel), last_user, adapters.clock(), settings.whatsapp_window_hours
     )
-    if contact.channel != "whatsapp" or window == "open":
+    if not channel_policy(adapters, contact.channel).windowed or window == "open":
         raise PanelValidationError(
             "Las plantillas solo se usan en WhatsApp con la ventana cerrada."
         )
+    destination = contact.external_chat_id
+    entry = OutboxEntry(
+        contact_id=contact.id,
+        destination_key=destination_key(contact.channel, destination),
+        channel=contact.channel,
+        destination=destination,
+        kind="advisor",
+        blocks=[TemplateBlock(type="template", name=template)],
+    )
     try:
-        adapters.gateway.send_channel_blocks(
-            "whatsapp",
-            contact.external_chat_id,
-            [TemplateBlock(type="template", name=template)],
+        repo.add_message_with_outbox(
+            contact.id,
+            "advisor",
+            f"[plantilla:{template}]",
+            adapters.clock(),
+            entry,
         )
-    except ChannelRejected:
-        raise ChannelWindowClosed(
-            "La ventana de WhatsApp del cliente está cerrada."
-        ) from None
     except ServiceUnavailable:
         logger.error("advisor_template_send_failed case_id=%s", case_id)
         raise UpstreamError("No se pudo enviar la plantilla al cliente.") from None
 
-    repo.add_message(contact.id, "advisor", f"[plantilla:{template}]", adapters.clock())
     repo.add_event(contact.id, "advisor_reply", f"advisor:{advisor_id}", adapters.clock())
     apply_conversation_event(contact.id, ConversationEvent.ESCALATED, adapters)
     try:
@@ -3132,16 +3265,22 @@ def reply_to_case(
     if contact is None:
         raise CaseNotFound("El caso no existe.")
     _ensure_window_open(case_id, contact, settings, adapters)
+    destination = _contact_destination(contact)
+    entry = OutboxEntry(
+        contact_id=contact.id,
+        destination_key=destination_key(contact.channel, destination),
+        channel=contact.channel,
+        destination=destination,
+        kind="advisor",
+        blocks=[TextBlock(type="text", text=req.text)],
+    )
     try:
-        _deliver(contact, req.text, adapters)
-    except ChannelRejected:
-        raise ChannelWindowClosed(
-            "La ventana de WhatsApp del cliente está cerrada."
-        ) from None
+        repo.add_message_with_outbox(
+            contact.id, "advisor", req.text, adapters.clock(), entry
+        )
     except ServiceUnavailable:
         logger.error("advisor_reply_send_failed case_id=%s", case_id)
         raise UpstreamError("No se pudo enviar la respuesta al cliente.") from None
-    repo.add_message(contact.id, "advisor", req.text, adapters.clock())
     repo.add_event(contact.id, "advisor_reply", f"advisor:{req.advisor_id}", adapters.clock())
     apply_conversation_event(contact.id, ConversationEvent.ESCALATED, adapters)
     try:
@@ -3216,12 +3355,12 @@ def _close_with_notice(
     repo = adapters.repository
     last_user = repo.last_user_message_at(case_contact.id)
     window = channel_window(
-        case_contact.channel,
+        channel_policy(adapters, case_contact.channel),
         last_user,
         adapters.clock(),
         settings.whatsapp_window_hours,
     )
-    if case_contact.channel == "whatsapp" and window != "open":
+    if channel_policy(adapters, case_contact.channel).windowed and window != "open":
         repo.add_event(
             case_contact.id, "notice_skipped", "window_closed", adapters.clock()
         )
@@ -3360,12 +3499,17 @@ def reassign_case(
     return result
 
 
-INBOX_CHANNELS = ("telegram", "whatsapp")
 INBOX_ASSIGNMENTS = ("mias", "sin_asignar")
 
-# #60: canales con adaptador hoy. La retira #65 (nucleo_sin_nombres_canal);
-# hasta entonces un canal nuevo (#62/#63) recibe 422 en POST /messages.
-ATTENDED_CHANNELS: frozenset[str] = frozenset({"telegram", "whatsapp"})
+
+def inbox_channel_options(adapters: Adapters) -> list[tuple[str, str]]:
+    """#65 R26: opciones `(id, nombre)` del filtro de canal desde el directorio."""
+    try:
+        policies = adapters.channels.list_policies()
+    except ServiceUnavailable:
+        logger.error("channel_directory_unavailable")
+        raise UpstreamError("No se pudo consultar los canales.") from None
+    return [(policy.id, policy.name) for policy in policies]
 
 
 def advisor_inbox(
@@ -3379,7 +3523,9 @@ def advisor_inbox(
 ) -> list[InboxRow]:
     """R1-R10, R8, R26, R27: bandeja propia o vista global del supervisor."""
     ensure_roster_ready(adapters)
-    if channel is not None and channel not in INBOX_CHANNELS:
+    if channel is not None and channel not in {
+        option for option, _ in inbox_channel_options(adapters)
+    }:
         raise PanelValidationError("El filtro de canal no es válido.")
     if assignment is not None and assignment not in INBOX_ASSIGNMENTS:
         raise PanelValidationError("El filtro de asignación no es válido.")
@@ -3476,7 +3622,7 @@ def advisor_inbox(
                 assignment="mine" if is_mine else "unassigned",
                 wait=case_wait(link.created_at, last_user, last_advisor, now),
                 window=channel_window(
-                    contact.channel,
+                    channel_policy(adapters, contact.channel),
                     window_last_user,
                     now,
                     settings.whatsapp_window_hours,
@@ -3605,7 +3751,7 @@ def advisor_case_view(
     )
     last_user = repo.last_user_message_at(contact.id)
     window = channel_window(
-        contact.channel, last_user, now, settings.whatsapp_window_hours
+        channel_policy(adapters, contact.channel), last_user, now, settings.whatsapp_window_hours
     )
     saved_replies: tuple[SavedReply, ...] = ()
     selected_reply = None
@@ -3779,21 +3925,21 @@ def execute_suppression_from_panel(
     if contact is not None:
         last_user = repo.last_user_message_at(contact.id)
         window = channel_window(
-            contact.channel, last_user, adapters.clock(), settings.whatsapp_window_hours
+            channel_policy(adapters, contact.channel), last_user, adapters.clock(), settings.whatsapp_window_hours
         )
     execution = execute_suppression(request_id, actor.id, settings, adapters)
     notification = "skipped"
     if contact is not None:
         try:
-            if contact.channel == "whatsapp" and window != "open":
+            if channel_policy(adapters, contact.channel).windowed and window != "open":
                 templates = effective_templates_for(
                     "suppression_result", settings, adapters
                 )
                 if not templates:
                     notification = "skipped"
                 else:
-                    adapters.gateway.send_channel_blocks(
-                        "whatsapp",
+                    adapters.outbound.send_channel_blocks(
+                        contact.channel,
                         contact.external_chat_id,
                         [TemplateBlock(type="template", name=templates[0])],
                     )
@@ -4511,9 +4657,9 @@ def send_expiry_notices(
         last_user = repo.last_user_message_at(contact.id)
         method = "text"
         if (
-            contact.channel == "whatsapp"
+            channel_policy(adapters, contact.channel).windowed
             and channel_window(
-                contact.channel, last_user, now, settings.whatsapp_window_hours
+                channel_policy(adapters, contact.channel), last_user, now, settings.whatsapp_window_hours
             )
             != "open"
         ):
@@ -4547,7 +4693,7 @@ def send_expiry_notices(
             continue
         destination = contact.external_chat_id or str(contact.chat_id or "")
         try:
-            adapters.gateway.send_channel_blocks(
+            adapters.outbound.send_channel_blocks(
                 contact.channel, destination, [block]
             )
         except ServiceUnavailable:

@@ -1,9 +1,13 @@
 """Auditoría del panel multicanal (#41)."""
 from __future__ import annotations
 
+from fakes import drain_queues
+
 
 def _post(env, path: str, data: dict):
-    return env.client.post(path, data=data, follow_redirects=False)
+    response = env.client.post(path, data=data, follow_redirects=False)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _actions(env) -> list[tuple[str, str, str | None]]:

@@ -8,6 +8,8 @@ import pytest
 from orchestrator.privacy import notice_sha256
 from orchestrator.states import ConversationState
 
+from fakes import drain_queues
+
 SERVICE_TOKEN = "svc-token"
 HEADERS = {"X-Service-Token": SERVICE_TOKEN}
 RECEIVED_AT = "2026-11-03T16:05:12Z"
@@ -34,11 +36,13 @@ def _canonical(channel: str, message_id: str, **changes):
 
 
 def _post(env, channel: str, message_id: str, **changes):
-    return env.client.post(
+    response = env.client.post(
         "/messages",
         json=_canonical(channel, message_id, **changes),
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _assert_nothing_happened(env, message_id: str) -> None:
@@ -66,13 +70,12 @@ def _consent(env, channel: str, user: str) -> None:
 
 
 @pytest.mark.parametrize("channel", ["canal-externo", "instagram"])
-def test_post_messages_rejects_unattended_channel(env, channel: str):
-    """R43: un canal sin adaptador responde 422 y no procesa ni persiste nada."""
+def test_post_messages_accepts_any_valid_channel(env, channel: str):
+    """R43 adaptado por #65 (R28, R29): cualquier canal válido recibe 202 y se procesa."""
     _consent(env, channel, "57300")
     response = _post(env, channel, "m-1")
-    assert response.status_code == 422
-    assert response.json()["error"] == "validation_error"
-    _assert_nothing_happened(env, "m-1")
+    assert response.status_code == 202
+    assert any(sent[0] == channel for sent in env.gateway.channel_sent)
 
 
 def test_post_messages_rejects_outbound_direction(env):
@@ -113,7 +116,11 @@ def test_media_kinds_get_unsupported_reply_without_persistence(env, channel, kin
             int(chat),
             env.settings.conversation_unsupported_reply,
         )
-        assert env.gateway.channel_sent == []
+        # #64: toda la salida pasa por la outbox y se entrega con bloques del
+        # contrato, también en Telegram; se comprueba una única entrega.
+        assert env.gateway.channel_sent == [
+            ("telegram", chat, env.settings.conversation_unsupported_reply)
+        ]
     else:
         assert env.gateway.channel_sent[-1] == (
             "whatsapp",

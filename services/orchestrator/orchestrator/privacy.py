@@ -15,7 +15,6 @@ PRIVACY_BUTTON_IDS = (PRIVACY_ACCEPT_BUTTON, PRIVACY_REJECT_BUTTON)
 CONSENT_ACCEPT_LABEL = "Acepto"
 CONSENT_REJECT_LABEL = "No acepto"
 
-TEXT_CONSENT_CHANNELS: frozenset[str] = frozenset({"telegram"})
 
 
 @dataclass(frozen=True)

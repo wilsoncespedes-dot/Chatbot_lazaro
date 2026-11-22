@@ -6,7 +6,7 @@ gateway relativas a `services/telegram_gateway/`. Los cuatro tests de
 se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` y
 `python -m pytest services/telegram_gateway` al cerrar cada paso.
 
-- [ ] T1 — **Contratos primero.** `contracts/lazaro_contracts/channels.py`: extraer
+- [x] T1 — **Contratos primero.** `contracts/lazaro_contracts/channels.py`: extraer
   `check_json_object(value, max_bytes, max_depth)` y usarla en `metadata` sin
   cambiar su comportamiento. Crear `contracts/lazaro_contracts/channel_registry.py`
   con las constantes y los siete modelos de design §3 y exportarlos en
@@ -24,7 +24,7 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   `test_canal_abierto_doc.py::test_send_and_messages_document_temporary_rejections`
   conservando literal la de `POST /messages`. Cubre: R1, R2, R3, R4, R55.
 
-- [ ] T2 — **Configuración y dependencias.** `requirements.txt`: añadir
+- [x] T2 — **Configuración y dependencias.** `requirements.txt`: añadir
   `pg8000>=1.31,<2` y `cryptography>=44,<48`. `config.py`: `database_url: str = ""`
   y `channel_secrets_key: SecretStr = SecretStr("")`, sin validación de formato ni
   cambios en `REQUIRED_IN_PRODUCTION`. `.env.example`: en el bloque
@@ -34,7 +34,7 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   lista de 8. Crear `tests/test_canales_despliegue.py` con las pruebas de R52 y R53
   (incluida `Settings` de producción válida sin clave). Cubre: R52, R53, R34, R55.
 
-- [ ] T3 — **Dominio y degradación.** `domain.py`: excepciones de design §3/§4
+- [x] T3 — **Dominio y degradación.** `domain.py`: excepciones de design §3/§4
   (`ChannelInactive`, `ChannelNotFound`, `ChannelAlreadyExists`,
   `ChannelManagedByEnvironment`, `ChannelSecretsUnavailable`,
   `ChannelStoreUnavailable`), `ChannelRecord`, `ChannelSecrets`, `ChannelSeed`,
@@ -48,7 +48,7 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   (entrada intacta, mismo resultado) y matriz de capacidades; `send_response`
   degrada antes de la ventana. Cubre: R11, R16, R17, R18, R19, R20, R21, R55.
 
-- [ ] T4 — **Puerto, registry y adaptadores.** Crear `ports/__init__.py`,
+- [x] T4 — **Puerto, registry y adaptadores.** Crear `ports/__init__.py`,
   `ports/canal.py`, `registry.py` (`ChannelContext`, `ChannelFactory`,
   `DuplicateAdapterType`, `UnknownAdapterType`, `ChannelRegistry`,
   `CHANNEL_REGISTRY`) y `adapters/channels/{__init__,telegram,whatsapp_cloud}.py`
@@ -61,14 +61,14 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   con `FakeTelegramClient` y `FakeWhatsAppAdapter`, capacidades de R11 a través
   del puerto. Cubre: R5, R6, R7, R8, R9, R11, R12, R13, R14.
 
-- [ ] T5 — **Cifrado.** Crear `secret_cipher.py` (`SecretCipher` con Fernet,
+- [x] T5 — **Cifrado.** Crear `secret_cipher.py` (`SecretCipher` con Fernet,
   `status` `ok`/`missing`/`invalid`, `repr` sin clave). Crear
   `tests/test_canales_secretos.py` con clave generada en la prueba: ida y vuelta,
   el token no contiene el texto plano, sin clave/clave inválida/otra clave →
   `ChannelSecretsUnavailable`, `repr` de `SecretCipher` y `ChannelSecrets` sin
   valores. Cubre: R33, R35, R37.
 
-- [ ] T6 — **Repositorio.** Crear `adapters/channel_repository.py`
+- [x] T6 — **Repositorio.** Crear `adapters/channel_repository.py`
   (`ChannelChanges`, `ChannelRepository`, `PostgresChannelRepository`,
   `FakeChannelRepository`) replicando el patrón de handover (design §3, §5). Crear
   `tests/test_canales_repositorio.py` con conexión falsa que registra SQL y
@@ -80,7 +80,7 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   faltantes, resincroniza con la marca, respeta filas sin marca, no duplica).
   Cubre: R27, R28, R29, R30, R31.
 
-- [ ] T7 — **Servicio.** Crear `channel_service.py` (`ChannelService`, design §3 y
+- [x] T7 — **Servicio.** Crear `channel_service.py` (`ChannelService`, design §3 y
   §4). Pruebas unitarias en `tests/test_canales_secretos.py` y
   `tests/test_canales_rutas.py` según corresponda: siembra con WhatsApp
   disponible/no disponible, `resolve` (desconocido, tipo no registrado, no
@@ -92,7 +92,7 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   logs de auditoría sin valor. Cubre: R29, R30, R33, R35, R40, R41, R42, R43, R44,
   R45, R46, R47, R48, R49.
 
-- [ ] T8 — **HTTP.** `main.py`: importar `adapters.channels`; `build_default_adapters`
+- [x] T8 — **HTTP.** `main.py`: importar `adapters.channels`; `build_default_adapters`
   con `PostgresChannelRepository(settings.database_url)`; en `create_app`, servicio,
   WARNING de clave, siembra en `lifespan` tolerante a fallos, Postgres en `/health`,
   `POST /send` por el registry (`LEGACY_SEND_CHANNEL`, sin ramas por canal) y las
@@ -109,13 +109,13 @@ se toca ningún otro test existente. Ejecuta `python -m pytest contracts/tests` 
   R23, R24, R25, R26, R32, R34, R36, R37, R38, R39, R40, R41, R42, R43, R44, R45,
   R46, R47, R48, R49, R50.
 
-- [ ] T9 — **Despliegue.** `docker-compose.yml`: `telegram_gateway.depends_on.postgres`
+- [x] T9 — **Despliegue.** `docker-compose.yml`: `telegram_gateway.depends_on.postgres`
   con `condition: service_healthy` (conserva `redis`). `render.yaml`: en
   `telegram-gateway`, `DATABASE_URL` con `fromDatabase` (`lazaro-postgres`,
   `connectionString`) y `CHANNEL_SECRETS_KEY` con `sync: false`. Añadir sus pruebas a
   `tests/test_canales_despliegue.py`. Cubre: R51, R54.
 
-- [ ] T10 — **Cierre.** Ejecutar `./init.sh` (verde) y escribir
+- [x] T10 — **Cierre.** Ejecutar `./init.sh` (verde) y escribir
   `progress/impl_registro_canales_gateway.md` con el mapa R → test, los cuatro tests
   sustituidos y su motivo (design §7) y la nota para el dueño de design §11.
   Cubre: R55.

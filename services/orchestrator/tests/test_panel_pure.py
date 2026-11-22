@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from fakes import channel_info
+
+from orchestrator.channels import policy_from_info
 from orchestrator.panel import (
     business_deadline,
     business_days_left,
@@ -18,14 +21,16 @@ NOW = datetime(2026, 1, 2, 10, 0, tzinfo=timezone.utc)
 
 
 def test_channel_window_boundaries_and_telegram():
-    """R5: WhatsApp cierra al cumplirse 24 h; Telegram no aplica."""
-    assert channel_window("telegram", NOW, NOW, 24) == "not_applicable"
-    assert channel_window("whatsapp", None, NOW, 24) == "closed"
+    """R5, #65 R19: un canal con ventana cierra al cumplirse 24 h; sin ventana no aplica."""
+    telegram = policy_from_info(channel_info("telegram"))
+    whatsapp = policy_from_info(channel_info("whatsapp", windowed=True))
+    assert channel_window(telegram, NOW, NOW, 24) == "not_applicable"
+    assert channel_window(whatsapp, None, NOW, 24) == "closed"
     assert channel_window(
-        "whatsapp", NOW - timedelta(hours=23, minutes=59), NOW, 24
+        whatsapp, NOW - timedelta(hours=23, minutes=59), NOW, 24
     ) == "open"
     assert channel_window(
-        "whatsapp", NOW - timedelta(hours=24), NOW, 24
+        whatsapp, NOW - timedelta(hours=24), NOW, 24
     ) == "closed"
 
 

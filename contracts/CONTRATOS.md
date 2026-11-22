@@ -47,10 +47,15 @@ Todo error tiene la forma `{"error": "<codigo>", "message": "<texto>"}` (modelo
 | 409  | `case_closed`        | `/cases/{id}/assign`, `/cases/{id}/reply`, `/cases/{id}/reassign`, `/cases/{id}/auto-assign` | el caso está cerrado (S11) |
 | 409  | `case_not_assigned`  | `/cases/{id}/reassign` | el caso no está `assigned` y no se puede reasignar (S12) |
 | 409  | `case_changed`       | `/cases/{id}/reassign` | el caso cambió entre la lectura y la escritura condicional (S12) |
+| 409  | `channel_exists` | `POST /channels` | ya existe el `id` solicitado |
+| 409  | `channel_managed_by_environment` | `/channels/{channel_id}` (secretos) | la operación intenta cambiar secretos de un canal gestionado por el entorno |
 | 415  | `unsupported_format` | `/manuals` | el archivo no es PDF ni DOCX |
 | 422  | `empty_document`     | `/manuals` | archivo vacío o sin texto extraíble |
+| 422  | `channel_inactive` | `/send` | el canal existe, pero está inactivo |
 | 502  | `telegram_error`     | `/send` | la API de Telegram falla |
 | 502  | `upstream_error`     | `/send` (variante canónica), `/cases/{id}/reply` | falla el adaptador del canal o la llamada a `POST /send` del gateway |
+| 503  | `channel_secrets_unavailable` | `/send`, `/channels…` | falta la clave de secretos, es inválida o no permite descifrar un secreto guardado |
+| 503  | `channel_store_unavailable` | `/send`, `/channels…` | el almacén PostgreSQL de canales no está disponible |
 | 503  | `roster_out_of_sync` | `/handover`, `/cases`, `/cases/{id}/authorize`, `/cases/{id}/assign`, `/cases/{id}/auto-assign`, `/cases/{id}/transfer`, `/cases/{id}/reassign`, `/cases/{id}/close` | la generación del roster indicada en `X-Advisor-Roster-Generation` no coincide con la sincronizada (S12) |
 | 503  | `privacy_not_configured` | `/privacy/purge` | falta `PRIVACY_RETENTION_DAYS` (o, en handover, `PRIVACY_ACTIVE_CASE_MAX_DAYS`); no se borra nada |
 | 500  | `internal_error`     | todas | error inesperado; nunca se devuelve el stack trace |
@@ -74,8 +79,8 @@ distintos. El payload Telegram histórico se traduce a `channel = telegram` y
 Los 4 servicios (`telegram_gateway`, `orchestrator`, `rag`, `handover`) exponen
 `GET /health` sin token. La ruta comprueba las dependencias críticas del
 servicio con una operación de solo lectura y un timeout finito
-(`HEALTHCHECK_TIMEOUT_SECONDS`): Redis en `telegram_gateway` y PostgreSQL en
-`orchestrator`, `rag` y `handover`.
+(`HEALTHCHECK_TIMEOUT_SECONDS`): Redis y, desde #61, PostgreSQL en
+`telegram_gateway`; PostgreSQL en `orchestrator`, `rag` y `handover`.
 
 - Saludable: `200` con `{"status": "ok", "service": "<nombre>"}` (modelo
   `HealthResponse`), donde `<nombre>` es el nombre del servicio.
@@ -158,7 +163,7 @@ La respuesta abstracta es una lista no vacía de bloques con discriminador
 | `ListBlock` | `list` | de 4 a 10 opciones |
 | `LinkBlock` | `link` | un texto y una URL; máximo un enlace por respuesta |
 | `TemplateBlock` | `template` | nombre y variables de una plantilla aprobada |
-| `ImageBlock` | `image` | URL https (hasta 2048) y `alt_text` (1–1024); un canal sin `supports_images` la rechaza con `422` hasta que #61 la degrade a enlace |
+| `ImageBlock` | `image` | URL https (hasta 2048) y `alt_text` (1–1024); un canal sin `supports_images` la degrada a enlace o texto (#61) |
 
 ### ChannelCapabilities
 
@@ -184,21 +189,44 @@ entrega se normalizan al vocabulario `sent`, `delivered`, `read` o `failed`.
 
 Además del `SendRequest` legacy, `POST /send` acepta `ChannelSendRequest` con
 `channel`, `destination` y `blocks` (lista de `ResponseBlock`). El `telegram_gateway`
-elige el adaptador y aplica el control de capacidad antes de enviar. Si el canal
-no puede enviar texto libre responde `422 validation_error`; si el adaptador
-falla o no está configurado, `502 upstream_error`.
+busca el canal en PostgreSQL, resuelve su adaptador mediante `ChannelRegistry` y
+degrada los bloques según las capacidades antes de comprobar ventana o plantilla.
+`SendRequest` legacy usa el canal `telegram`. Si no existe una fila, responde
+`422 validation_error`; si está inactivo, `422 channel_inactive`; si el adaptador
+no está disponible, `502 upstream_error`; si PostgreSQL falla,
+`503 channel_store_unavailable`; y si los secretos guardados no se pueden
+descifrar, `503 channel_secrets_unavailable`. Una respuesta que el adaptador no
+puede enviar por ventana o plantilla responde `422 validation_error`; si falla
+el envío, `502 upstream_error`.
 
-Hasta el registry de #61, solo `telegram` y `whatsapp` tienen adaptador: un
-`channel` que no es `telegram` ni `whatsapp` responde `422 validation_error` sin
-enviar nada. Un bloque `image` en un canal sin `supports_images` responde `422
-validation_error` (#61 lo degradará a enlace).
+### Degradación por capacidades
+
+Antes de enviar, `telegram_gateway` conserva el orden de los bloques y los que
+el canal admite. Los bloques que no puede representar se degradan así:
+
+| Bloque | Capacidad ausente o límites incumplidos | Degradación |
+|--------|------------------------------------------|-------------|
+| `OptionsBlock` | `supports_buttons=false` o más de `max_options` | `TextBlock` con opciones numeradas (`1. A`, `2. B`, …) |
+| `ListBlock` | menos de `min_list_options` o más de `max_list_options` | `TextBlock` con opciones numeradas |
+| `ImageBlock` | `supports_images=false` | `LinkBlock` con `text=alt_text`, `url=url` si admite enlaces; si no, `TextBlock` con `<alt_text>: <url>` |
+| `LinkBlock` | `supports_links=false` | `TextBlock` con `<text>: <url>`; si supera 4096 caracteres, dos bloques de texto (texto y URL) |
+
+La degradación es pura: no hace IO ni modifica la lista de entrada. Después de
+degradar, se validan las capacidades de texto libre, la ventana de WhatsApp y
+las plantillas.
 
 ## Canal genérico (webhook firmado)
 
 Cualquier sistema externo o puente —n8n, Zapier, Make, Twilio— conecta un canal
-sin adaptador propio. La ruta y el callback se implementan en #62; hasta
-entonces no existen. El formato por defecto es el `NormalizedMessage` de este
-contrato; si el adaptador del canal define otro formato, lo traduce (#62).
+sin adaptador propio. La ruta y el callback se implementan en #62. El formato por
+defecto es el `NormalizedMessage` de este contrato; si el adaptador del canal
+define otro formato, lo traduce (#62).
+
+El tipo de adaptador es `webhook_generico` (registrado por el gateway, no
+gestionado por el entorno). Su `config` puede incluir `callback_url` (opcional):
+una URL `https` de hasta 2048 caracteres, con host y sin credenciales
+incrustadas. Sin `callback_url` el canal recibe mensajes pero no puede responder
+(ver «Callback saliente»).
 
 ### Firma y ventana anti-repetición
 
@@ -207,8 +235,11 @@ contrato; si el adaptador del canal define otro formato, lo traduce (#62).
   `<timestamp>.<cuerpo>`, en 64 caracteres hexadecimales en minúsculas,
   calculado sobre los bytes exactos del cuerpo (UTF-8, sin reformatear).
 - Ventana: 300 s por defecto (`DEFAULT_SIGNATURE_WINDOW_SECONDS`), configurable
-  en #62; si |ahora − timestamp| la supera, `401`.
+  con `WEBHOOK_SIGNATURE_WINDOW_SECONDS` (entero, 1-3600); si
+  |ahora − timestamp| la supera, `401`.
 - Firma ausente o incorrecta: `401`. La comparación es en tiempo constante.
+- Tamaño máximo del cuerpo: `WEBHOOK_MAX_BODY_BYTES` (entero, 1024-10485760,
+  1 MiB por defecto); por encima, `413 payload_too_large`.
 - Cada canal tiene su secreto (#61); nunca viaja en el cuerpo ni en logs.
 - Los ejemplos usan el secreto de ejemplo `secreto-de-ejemplo`.
 
@@ -221,6 +252,12 @@ contrato; si el adaptador del canal define otro formato, lo traduce (#62).
 `{canal_id}` es el `id` del canal en `canales`; el `channel` del cuerpo debe ser
 igual a `{canal_id}` y `direction` debe ser `inbound`. Público: sin
 `X-Service-Token`. Idempotente por `(channel, external_message_id)`.
+
+Los errores se aplican en este orden: `404` (canal inexistente, inactivo, sin
+secreto o sin adaptador), `413` (cuerpo demasiado grande), `401` (firma o
+ventana) y `422` (cuerpo inválido). Un cuerpo inválido con firma incorrecta
+responde `401`, nunca `422`. Un canal inexistente o inactivo responde el mismo
+`404 not_found` sin revelar cuál de los dos casos es.
 
 #### Request
 
@@ -245,9 +282,12 @@ El cuerpo es un `NormalizedMessage`.
 | HTTP | error | Cuándo |
 |------|-------|--------|
 | 401 | unauthorized | firma ausente o incorrecta, o `X-Lazaro-Timestamp` fuera de la ventana |
-| 404 | not_found | el canal no existe o está inactivo (no se distingue cuál) |
+| 404 | not_found | el canal no existe, está inactivo, no tiene secreto o su adaptador no está disponible (no se distingue cuál) |
+| 413 | payload_too_large | el cuerpo supera `WEBHOOK_MAX_BODY_BYTES` |
 | 422 | validation_error | el cuerpo no valida, `channel` ≠ `{canal_id}` o `direction` ≠ `inbound` |
 | 500 | internal_error | error inesperado |
+| 503 | channel_store_unavailable | no se pudo consultar la tabla `canales` |
+| 503 | channel_secrets_unavailable | no se pudieron descifrar los secretos del canal |
 
 #### Ejemplo firmado
 
@@ -294,10 +334,21 @@ X-Lazaro-Signature: 0812c9aa0ad1983b42a1a4a122fdf3741469c299ef746fcbf3a55a858be9
 
 Cuando la plataforma responde por un canal genérico hace `POST` a
 `config.callback_url` con los mismos encabezados de firma. Una respuesta 2xx es
-entrega y cualquier otra respuesta o un error de red es envío fallido. La
-entrega es al menos una vez: el receptor deduplica por `external_message_id`. En
-`outbound`, `received_at` es el momento en que la plataforma generó el mensaje.
-Se implementa en #62.
+entrega y cualquier otra respuesta (incluidos `3xx`, que no se siguen) o un
+error de red es envío fallido. La entrega es al menos una vez: el receptor
+deduplica por `external_message_id`. En `outbound`, `received_at` es el momento
+en que la plataforma generó el mensaje. Se implementa en #62. Un callback
+fallido o bloqueado hace que `POST /send` responda `502 upstream_error`.
+
+Anti-SSRF: la URL debe ser `https` con host y sin credenciales; antes de enviar
+se resuelve y todas sus direcciones deben ser públicas (se rechazan privadas
+RFC 1918, loopback, link-local y metadatos como `169.254.169.254`, CGNAT
+`100.64.0.0/10`, no especificadas, multicast, reservadas e IPv4 mapeada en IPv6
+que cumpla lo anterior). Se conecta a la dirección ya validada conservando el
+`Host` y el SNI originales y no se siguen redirecciones. Un canal sin
+`callback_url` no puede responder (`502 upstream_error`). Solo en desarrollo,
+`WEBHOOK_ALLOW_PRIVATE_CALLBACKS=true` admite `http` y direcciones bloqueadas;
+en producción el servicio no arranca con ese ajuste.
 
 #### Ejemplo firmado
 
@@ -327,6 +378,544 @@ X-Lazaro-Signature: 20dbabb2d55dc0b43c41f73c600c519989ecb737691d17a5b2e77156426d
 
 (`external_chat_id` no tiene nombre en el encargo: en canales sin chat separado
 es igual a `external_user_id`.)
+
+## Canal simulado
+
+Un canal de **DEMOSTRACIÓN** que se hace pasar por cualquier plataforma (por
+ejemplo «TikTok (simulado)») sin credenciales ni llamadas de red. El tipo de
+adaptador es `simulado`; la palabra `SIMULADO` aparece en su clase, su docstring
+y en la etiqueta que muestra el panel. Sus respuestas salientes no viajan a
+ninguna red: quedan en un buzón propio que el panel y
+`scripts/simular_canal.py` pueden consultar.
+
+El `id` del canal es un slug normal de `canales`; nombre, ícono y color salen de
+las columnas de esa fila (no se duplican en `config`). `config` solo admite la
+clave `capabilities`; cualquier otra clave responde `422 validation_error` y no
+se persiste. `config.capabilities` es un objeto cuyas claves ausentes toman estos
+valores por defecto:
+
+| Clave | Por defecto |
+|---|---|
+| `free_text_allowed` | `true` |
+| `supports_buttons` | `false` |
+| `supports_links` | `false` |
+| `supports_images` | `false` |
+| `supports_files` | `false` |
+| `supports_audio` | `false` |
+| `requires_template` | `false` |
+| `max_options` | `0` |
+| `min_list_options` | `0` |
+| `max_list_options` | `0` |
+
+Dos canales simulados con `capabilities` distintas informan capacidades
+distintas. Los bloques que un canal no admite se degradan como en cualquier
+otro canal (por ejemplo `ImageBlock` con `supports_images=false` pasa a enlace o
+texto). La retención y el tamaño del buzón se ajustan con
+`SIMULATED_MAILBOX_RETENTION_SECONDS` (por defecto 3600, entre 60 y 86400) y
+`SIMULATED_MAILBOX_MAX_ENTRIES` (por defecto 500, entre 10 y 5000). El buzón es
+**solo de pruebas**: no se deben usar datos personales reales.
+
+Desde #65 el orquestador atiende cualquier canal registrado: un mensaje
+simulado recorre el flujo completo (consentimiento, login, bot y asesor) y las
+respuestas vuelven al buzón del mismo canal y destino. Si el orquestador
+rechaza la entrega, el buzón la registra como `rejected` con el motivo y el
+webhook firmado sigue respondiendo `200 accepted`.
+
+### GET /channels/{channel_id}/mailbox
+
+- **Expone:** telegram_gateway (desde #63)
+- **Llama:** el panel del orquestador y `scripts/simular_canal.py`
+- **Modelos:** parámetros de consulta → `MailboxResponse`
+- **Autenticación:** `X-Service-Token`
+
+Ruta interna: exige `X-Service-Token`. Devuelve las entradas del canal con
+`id > after` en orden ascendente, filtradas por `destination` si se indica.
+Acepta `destination` (opcional), `after` (por defecto `0`, entero ≥ 0) y
+`limit` (por defecto `100`, entre 1 y 500). Un canal inexistente o de un tipo
+sin buzón responde el mismo `404 not_found`; un canal simulado inactivo sí se
+puede leer.
+
+#### Request
+
+| Parámetro | Tipo | Obligatorio | Descripción |
+|-----------|------|-------------|-------------|
+| `destination` | texto | no | id externo de prueba a filtrar |
+| `after` | entero ≥ 0 | no | devuelve solo entradas con `id` mayor |
+| `limit` | entero 1-500 | no | máximo de entradas (por defecto 100) |
+
+#### Respuesta
+
+`200 OK`
+
+```json
+{
+  "channel": "tiktok-simulado",
+  "entries": [
+    {
+      "id": 1,
+      "channel": "tiktok-simulado",
+      "destination": "cliente-demo",
+      "kind": "client",
+      "text": "Hola, quiero información",
+      "created_at": "2026-11-21T15:00:00Z"
+    },
+    {
+      "id": 2,
+      "channel": "tiktok-simulado",
+      "destination": "cliente-demo",
+      "kind": "reply",
+      "text": "Plataforma (bot o asesor): Hola, con gusto te ayudo.",
+      "created_at": "2026-11-21T15:00:01Z"
+    }
+  ]
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el canal no existe o su tipo no tiene buzón (no se distingue cuál) |
+| 422 | validation_error | `after` o `limit` fuera de rango |
+| 503 | channel_store_unavailable | no se pudo consultar el almacén de canales o el buzón |
+
+### POST /channels/{channel_id}/simulate
+
+- **Expone:** telegram_gateway (desde #63)
+- **Llama:** el panel del orquestador (página del simulador)
+- **Modelos:** `SimulatedInboundRequest` → `SimulatedInboundResponse`
+- **Autenticación:** `X-Service-Token`
+
+Ruta interna: exige `X-Service-Token`; no exige firma porque el token autentica
+al panel. Construye un `NormalizedMessage` de entrada
+(`external_chat_id` = `external_user_id`, `kind` = `text`,
+`external_message_id` con prefijo `sim-`) y lo entrega por el mismo camino que
+el webhook firmado. El resultado indica si el orquestador lo aceptó. Un canal
+simulado inactivo no recibe mensajes (`422 channel_inactive`).
+
+#### Request
+
+```json
+{"external_user_id": "cliente-demo", "text": "Hola, quiero información"}
+```
+
+#### Respuesta
+
+`200 OK`
+
+```json
+{"status": "accepted", "forwarded": true}
+```
+
+Si el orquestador rechaza o falla, `forwarded` es `false` y `reason` trae el
+motivo (hasta 200 caracteres), por ejemplo:
+
+```json
+{"status": "accepted", "forwarded": false, "reason": "El orquestador respondió 422."}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el canal no existe o su tipo no tiene buzón (no se distingue cuál) |
+| 422 | validation_error | el cuerpo no valida contra `SimulatedInboundRequest` |
+| 422 | channel_inactive | el canal simulado está inactivo |
+| 503 | channel_store_unavailable | no se pudo consultar el almacén de canales o el buzón |
+
+### Ejemplo firmado con scripts/simular_canal.py
+
+El script envía al webhook genérico con los mismos encabezados y la misma firma
+de «Canal genérico (webhook firmado)»: `X-Lazaro-Timestamp` en segundos Unix y
+`X-Lazaro-Signature` = HMAC-SHA256 hexadecimal de `<timestamp>.<cuerpo>`, sobre
+los bytes exactos del cuerpo. El secreto se lee de la variable de entorno
+`LAZARO_CANAL_SECRETO` (o la indicada con `--secreto-env`) y nunca se pasa como
+argumento ni se imprime. La firma se verifica con el ejemplo firmado de la
+sección anterior usando el secreto de ejemplo `secreto-de-ejemplo`.
+
+## Canales (registro del gateway)
+
+`telegram_gateway` es propietario de la tabla `canales`. El `id` es un slug de
+canal; `name`, `adapter_type`, `icon`, `color`, `config`, `active` y `created_at`
+se corresponden con `nombre`, `tipo_adaptador`, `icono`, `color`, `config`,
+`activo` y `creado_en`. `config` solo contiene opciones públicas. `credentials`
+y el secreto de webhook se guardan juntos, cifrados, en `config_secreta` y nunca
+se devuelven en listados, errores ni logs. `has_secrets` solo indica si existe
+un secreto cifrado; `configured` indica si el adaptador registrado está
+disponible en esta instancia.
+
+Las filas `telegram` y `whatsapp` se crean automáticamente a partir de la
+configuración actual. Son `managed_by_environment=true`; sus credenciales siguen
+en variables de entorno y no se copian a la base. Mientras
+`activo_segun_entorno=true`, `active` sigue la disponibilidad del adaptador;
+`PATCH /channels/{channel_id}/active` fija el valor manualmente y desactiva ese
+seguimiento. Solo se pueden crear canales con un `adapter_type` registrado y no
+gestionado por el entorno. Todas las rutas exigen `X-Service-Token`.
+
+| Campo JSON | Columna `canales` |
+|------------|-------------------|
+| `name` | `nombre` |
+| `adapter_type` | `tipo_adaptador` |
+| `icon` | `icono` |
+| `active` | `activo` |
+| `created_at` | `creado_en` |
+| `credentials` y `secret` | `config_secreta` (cifrado) |
+
+### ChannelInfo y ChannelListResponse
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `id` | slug de canal (2–32) | sí | id único del canal |
+| `name` | texto (1–60) | sí | nombre visible, sin controles ni solo espacios |
+| `adapter_type` | slug de canal (2–32) | sí | tipo de adaptador registrado |
+| `icon` | texto (1–32) | sí | identificador visual, sin controles |
+| `color` | `#RRGGBB` | sí | color hexadecimal |
+| `config` | objeto JSON (≤ 4096 bytes, profundidad 5) | sí | configuración pública, nunca credenciales |
+| `active` | booleano | sí | si el canal puede enviar |
+| `configured` | booleano | sí | si el adaptador está disponible en esta instancia |
+| `has_secrets` | booleano | sí | si hay secreto o credenciales cifrados guardados |
+| `managed_by_environment` | booleano | sí | si el canal lo gestiona la configuración del entorno |
+| `created_at` | fecha ISO 8601 con zona | sí | fecha de creación |
+| `capabilities` | `ChannelCapabilities` o `null` | no (por defecto `null`) | capacidades por defecto (sin destino) del tipo de adaptador; `null` si el tipo no está registrado |
+
+Claves reservadas de `config`:
+
+| Clave | Valores | Por defecto | Uso |
+|-------|---------|-------------|-----|
+| `consent_mode` | `texto` \| `boton` | `texto` | cómo pide el orquestador el consentimiento: `texto` con frase de aceptación; `boton` con las opciones `Acepto` y `No acepto` |
+
+`POST /channels` y `PATCH /channels/{id}` responden `422 validation_error` si
+`config.consent_mode` no es `texto` ni `boton`. Al leer, un valor guardado
+inválido o ausente se trata como `texto`. El gateway siembra `telegram` con
+`consent_mode="texto"` y `whatsapp` con `consent_mode="boton"`, y solo completa
+la clave cuando falta (nunca sobrescribe un valor ya guardado).
+
+El orquestador trata como *canal con ventana* (plantilla aprobada fuera de la
+ventana de texto libre) a todo canal cuyas `capabilities` informan
+`free_text_allowed=false` y `requires_template=true`; el resto, o `null`, no
+tiene ventana. Consulta `GET /channels` con `X-Service-Token` y guarda una copia
+durante `CHANNEL_DIRECTORY_TTL_SECONDS` (30 por defecto).
+
+`ChannelListResponse` tiene `channels` (lista de `ChannelInfo`) y
+`adapter_types` (tipos registrados que admiten canales nuevos). La lista se
+ordena por `created_at` y después por `id`.
+
+### POST /channels
+
+- **Expone:** `telegram_gateway`
+- **Llama:** panel de administración (#66) o cliente interno autorizado
+- **Modelos:** `ChannelCreateRequest` → `ChannelCreateResponse`
+
+Crea un canal con un tipo de adaptador registrado no gestionado por el entorno.
+El secreto nuevo solo aparece en esta respuesta y en la ruta explícita para
+revelarlo. Si el `id` ya existe responde `409 channel_exists`; si el adaptador
+no admite creación en esta instancia, `422 validation_error`. Requiere
+`CHANNEL_SECRETS_KEY` válida; si falta o no se puede cifrar responde
+`503 channel_secrets_unavailable` sin guardar nada.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `id` | slug (2–32) | sí | id único del canal |
+| `name` | texto (1–60) | sí | nombre visible |
+| `adapter_type` | slug | sí | tipo registrado y no gestionado por el entorno |
+| `icon` | texto (1–32) | sí | identificador visual |
+| `color` | `#RRGGBB` | sí | color hexadecimal |
+| `config` | objeto JSON ≤ 4096 bytes, profundidad 5 | no | configuración pública; por defecto `{}` |
+| `credentials` | objeto de hasta 20 pares | no | credenciales; se cifran y reemplazan completas; por defecto `{}` |
+| `active` | booleano estricto | no | estado inicial; por defecto `true` |
+
+```json
+{
+  "id": "canal-demo",
+  "name": "Canal de demostración",
+  "adapter_type": "simulado",
+  "icon": "chat",
+  "color": "#1B6FA8",
+  "config": {"modo": "demo"},
+  "credentials": {"api_token": "valor-de-ejemplo"},
+  "active": true
+}
+```
+
+#### Respuesta
+
+`201 Created`, cuerpo `ChannelCreateResponse`:
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `channel` | `ChannelInfo` | sí | metadatos públicos del canal creado |
+| `secret` | texto URL-safe de 43 caracteres | sí | secreto de canal; guárdalo en un lugar seguro |
+
+```json
+{
+  "channel": {
+    "id": "canal-demo",
+    "name": "Canal de demostración",
+    "adapter_type": "simulado",
+    "icon": "chat",
+    "color": "#1B6FA8",
+    "config": {"modo": "demo"},
+    "active": true,
+    "configured": true,
+    "has_secrets": true,
+    "managed_by_environment": false,
+    "created_at": "2026-11-21T12:00:00Z"
+  },
+  "secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 409 | channel_exists | el `id` ya existe |
+| 422 | validation_error | el cuerpo no valida o el tipo no está registrado/no admite creación |
+| 503 | channel_secrets_unavailable | la clave no está disponible para cifrar |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
+
+### GET /channels
+
+- **Expone:** `telegram_gateway`
+- **Llama:** panel de administración (#66) o cliente interno autorizado
+- **Modelos:** sin request body → `ChannelListResponse`
+
+Devuelve metadatos públicos de los canales registrados; no devuelve secretos ni
+credenciales.
+
+#### Request
+
+No lleva cuerpo. Requiere `X-Service-Token`.
+
+#### Respuesta
+
+`200 OK`, cuerpo `ChannelListResponse`:
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `channels` | lista de `ChannelInfo` | sí | canales ordenados por `created_at` e `id` |
+| `adapter_types` | lista de slug | sí | adaptadores registrados que admiten creación |
+
+```json
+{
+  "channels": [
+    {
+      "id": "canal-demo",
+      "name": "Canal de demostración",
+      "adapter_type": "simulado",
+      "icon": "chat",
+      "color": "#1B6FA8",
+      "config": {"modo": "demo"},
+      "active": true,
+      "configured": true,
+      "has_secrets": true,
+      "managed_by_environment": false,
+      "created_at": "2026-11-21T12:00:00Z"
+    }
+  ],
+  "adapter_types": ["simulado"]
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | la petición no valida |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
+
+### PATCH /channels/{channel_id}
+
+- **Expone:** `telegram_gateway`
+- **Llama:** panel de administración (#66) o cliente interno autorizado
+- **Modelos:** `ChannelUpdateRequest` → `ChannelInfo`
+
+Actualiza solo los campos enviados. `config` y `credentials` reemplazan por
+completo sus valores anteriores; el secreto del canal se conserva. No se puede
+enviar `null` como valor. `credentials` se cifra con `CHANNEL_SECRETS_KEY`.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `name` | texto (1–60) | no | nuevo nombre |
+| `icon` | texto (1–32) | no | nuevo identificador visual |
+| `color` | `#RRGGBB` | no | nuevo color |
+| `config` | objeto JSON ≤ 4096 bytes, profundidad 5 | no | reemplaza toda la configuración pública |
+| `credentials` | objeto de hasta 20 pares | no | reemplaza todas las credenciales; se cifra |
+
+Debe enviarse al menos un campo.
+
+```json
+{"name": "Canal actualizado", "credentials": {"api_token": "nuevo-valor"}}
+```
+
+#### Respuesta
+
+`200 OK`, cuerpo `ChannelInfo`:
+
+```json
+{
+  "id": "canal-demo",
+  "name": "Canal actualizado",
+  "adapter_type": "simulado",
+  "icon": "chat",
+  "color": "#1B6FA8",
+  "config": {"modo": "demo"},
+  "active": true,
+  "configured": true,
+  "has_secrets": true,
+  "managed_by_environment": false,
+  "created_at": "2026-11-21T12:00:00Z"
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el canal no existe |
+| 409 | channel_managed_by_environment | se intentan cambiar credenciales de un canal gestionado por el entorno |
+| 422 | validation_error | no se envió ningún campo o algún valor no valida |
+| 503 | channel_secrets_unavailable | no se pueden cifrar o descifrar las credenciales |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
+
+### PATCH /channels/{channel_id}/active
+
+- **Expone:** `telegram_gateway`
+- **Llama:** panel de administración (#66) o cliente interno autorizado
+- **Modelos:** `ChannelActiveRequest` → `ChannelInfo`
+
+Fija el estado activo/inactivo y desactiva el seguimiento de la configuración
+del entorno (`activo_segun_entorno=false`).
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `active` | booleano estricto | sí | nuevo estado del canal |
+
+```json
+{"active": false}
+```
+
+#### Respuesta
+
+`200 OK`, cuerpo `ChannelInfo`:
+
+```json
+{
+  "id": "canal-demo",
+  "name": "Canal de demostración",
+  "adapter_type": "simulado",
+  "icon": "chat",
+  "color": "#1B6FA8",
+  "config": {"modo": "demo"},
+  "active": false,
+  "configured": true,
+  "has_secrets": true,
+  "managed_by_environment": false,
+  "created_at": "2026-11-21T12:00:00Z"
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el canal no existe |
+| 422 | validation_error | `active` no es un booleano |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
+
+### POST /channels/{channel_id}/secret
+
+- **Expone:** `telegram_gateway`
+- **Llama:** panel de administración (#66) o cliente interno autorizado
+- **Modelos:** sin request body → `ChannelSecretResponse`
+
+Genera un secreto nuevo e invalida el anterior; conserva las credenciales. La
+operación registra `channel_secret_regenerated` con el `channel_id`, nunca el
+secreto. Solo se permite después de una acción explícita autorizada.
+
+#### Request
+
+No lleva cuerpo. Requiere `X-Service-Token`.
+
+#### Respuesta
+
+`200 OK`, cuerpo `ChannelSecretResponse`:
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `channel_id` | slug de canal | sí | canal del secreto |
+| `secret` | texto URL-safe de 43 caracteres | sí | secreto nuevo; el anterior deja de ser válido |
+
+```json
+{
+  "channel_id": "canal-demo",
+  "secret": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el canal no existe |
+| 409 | channel_managed_by_environment | el canal lo gestiona el entorno |
+| 422 | validation_error | la petición no valida |
+| 503 | channel_secrets_unavailable | no se puede cifrar o descifrar el secreto |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
+
+### GET /channels/{channel_id}/secret
+
+- **Expone:** `telegram_gateway`
+- **Llama:** panel de administración (#66) o cliente interno autorizado
+- **Modelos:** sin request body → `ChannelSecretResponse`
+
+Revela el secreto vigente solo por esta ruta explícita; registra
+`channel_secret_revealed` con el `channel_id`, nunca el secreto. Las credenciales
+del proveedor no se revelan.
+
+#### Request
+
+No lleva cuerpo. Requiere `X-Service-Token`.
+
+#### Respuesta
+
+`200 OK`, cuerpo `ChannelSecretResponse`:
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `channel_id` | slug de canal | sí | canal del secreto |
+| `secret` | texto URL-safe de 43 caracteres | sí | secreto vigente |
+
+```json
+{
+  "channel_id": "canal-demo",
+  "secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 404 | not_found | el canal o su secreto no existen |
+| 409 | channel_managed_by_environment | el canal lo gestiona el entorno |
+| 422 | validation_error | la petición no valida |
+| 503 | channel_secrets_unavailable | falta la clave o no se puede descifrar el secreto |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
 
 ## Rutas
 
@@ -394,9 +983,12 @@ bloques abstractos), descrita en «Mensaje normalizado y respuesta abstracta».
 | HTTP | error | Cuándo |
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
-| 422 | validation_error | el cuerpo no valida contra `SendRequest` o `ChannelSendRequest`; el canal no puede enviar texto libre; el `channel` no es `telegram` ni `whatsapp`; un bloque `image` en un canal sin `supports_images` |
+| 422 | validation_error | el cuerpo no valida contra `SendRequest` o `ChannelSendRequest`; el canal no tiene fila en `canales`; el canal no puede enviar texto libre o no cumple una plantilla requerida |
+| 422 | channel_inactive | el canal existe, pero está inactivo |
 | 502 | telegram_error | la API de Telegram falla |
-| 502 | upstream_error | el adaptador del canal falla o no está configurado |
+| 502 | upstream_error | el tipo de adaptador no está registrado, el adaptador no está disponible o el envío falla |
+| 503 | channel_secrets_unavailable | faltan secretos cifrados legibles o `CHANNEL_SECRETS_KEY` no está disponible |
+| 503 | channel_store_unavailable | PostgreSQL no está disponible |
 | 500 | internal_error | error inesperado |
 
 ### POST /search
@@ -1218,4 +1810,84 @@ contrato.
 | S14 | `GET /cases` con `scope=mine` (por defecto) lista solo los casos que el asesor puede gestionar según S12: `open` y `timed_out` con `actions` = `reply`, `assign`, `close`; `assigned` al solicitante con `actions` = `reply`, `close`; huérfanos (`assigned` con `advisor_id` nulo o fuera del roster de asesores) con `actions` = `close`. Nunca incluye casos `closed` ni `assigned` a otro perfil asesor registrado. Con `scope=all`, un supervisor registrado recibe todos los casos de cualquier estado y asesor, incluidos `closed`; `actions` contiene solo lo que puede hacer (`reply`, `assign`, `close` o `reassign`) y `advisor_id` indica el asesor asignado o `null`. Otro `advisor_id` con `scope=all` recibe `403 forbidden`. Orden por `created_at` ascendente y, a igual `created_at`, por `case_id` ascendente. Límite `CASE_LIST_LIMIT` (default 50, máximo 200) aplicado después de filtrar; sin cursor en v1. Un `advisor_id` que no es un perfil atendedor del roster recibe `200` con la lista vacía en `scope=mine`, sin registrar denegación. | `CASE_LIST_LIMIT = 50` |
 | S15 | Los botones de consentimiento viajan como `OptionsBlock` con `options`, `option_ids` y `option_proofs` alineados. Cada `option_proof` es `HMAC-SHA256(service_token, "<channel>:<external_user_id>:<external_chat_id>:<button_id>:<notice_version>:<notice_sha256>:<nonce>")` truncado a 32 hex. El nonce es aleatorio por presentación y el orquestador conserva en memoria los proofs pendientes por identidad/canal/chat; compara identidad, canal, chat y política vigentes, exige ausencia de consentimiento vigente y consume atómicamente el proof aceptado/rechazado. Repeticiones, pruebas viejas o ajenas se descartan sin registrar consentimiento, borrar contenido ni cambiar estado. El gateway pinta teclado inline con `callback_data = "<button_id>:<option_proof>"` y normaliza `callback_query` a `kind=button`, `button_id` canónico y `button_proof`. La prueba no contiene datos personales en claro, mide 32 caracteres y cabe en el límite de 64 bytes de `callback_data` de Telegram. | — |
 | S16 | Asignación automática por carga (`POST /cases/{id}/auto-assign`). La decide handover: si el caso sigue `open` y sin asesor, elige entre los `candidate_ids` que son asesores atendedores del roster el de menor número de casos `assigned`, con desempate por menor `advisor_id` lexicográfico, y registra la asignación con motivo `auto`. Dos solicitudes simultáneas se serializan y contabilizan la asignación ya confirmada. Sin candidatos válidos responde `queued`; si el caso ya fue asignado, respondido o cerrado por una persona responde `skipped`; un caso inexistente `404 not_found`; uno cerrado `409 case_closed`. El orquestador solo la invoca con el modo `automatica`, sin casos de supresión ni fuera del horario de atención, y no asigna casos que ya estaban en cola cuando un asesor recupera la disponibilidad. | — |
-| S17 | Canal abierto (#60). `channel` es el `id` de un canal de `canales`: de 2 a 32 caracteres, minúsculas, dígitos y separadores `-` o `_` simples (`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`). Límites: como máximo 10 adjuntos por mensaje; `metadata` de hasta 4096 bytes en JSON compacto UTF-8 y profundidad 5; URL https de hasta 2048 caracteres; `alt_text` de hasta 1024; `mime_type` y `name` de hasta 255; `size_bytes` hasta 2 GiB. Los adjuntos llevan metadatos, nunca el binario. Solo texto: el orquestador responde a `image`, `file` y `audio` con el texto fijo `unsupported_reply`, igual que a `unsupported`, sin guardar adjuntos ni `metadata`. Hasta que una feature habilite canales nuevos de punta a punta, gateway y orquestador responden `422` a un `channel` distinto de `telegram` y `whatsapp`, y el gateway responde `422` a un bloque `image` en un canal sin `supports_images` (la degradación a enlace llega en #61). | `MAX_CHANNEL_ID_LENGTH = 32`, `MAX_ATTACHMENTS = 10`, `MAX_METADATA_BYTES = 4096`, `MAX_METADATA_DEPTH = 5`, `MAX_URL_LENGTH = 2048`, `MAX_IMAGE_ALT_LENGTH = 1024`, `DEFAULT_SIGNATURE_WINDOW_SECONDS = 300` |
+| S17 | Canal abierto (#60–#61). `channel` es el `id` de un canal de `canales`: de 2 a 32 caracteres, minúsculas, dígitos y separadores `-` o `_` simples (`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`). Límites: como máximo 10 adjuntos por mensaje; `metadata` de hasta 4096 bytes en JSON compacto UTF-8 y profundidad 5; URL https de hasta 2048 caracteres; `alt_text` de hasta 1024; `mime_type` y `name` de hasta 255; `size_bytes` hasta 2 GiB. Los adjuntos llevan metadatos, nunca el binario. Solo texto: el orquestador responde a `image`, `file` y `audio` con el texto fijo `unsupported_reply`, igual que a `unsupported`, sin guardar adjuntos ni `metadata`. Desde #65 el orquestador acepta cualquier `channel` válido y solo responde `422` a mensajes que no son `inbound`; decide ventana y consentimiento por `ChannelInfo.capabilities` y `config.consent_mode` (ver `GET /channels`), nunca por el nombre del canal; el gateway resuelve `/send` por las filas y adaptadores registrados, rechaza con `422` un canal sin fila y degrada `ImageBlock` a enlace o texto cuando el canal no admite imágenes. | `MAX_CHANNEL_ID_LENGTH = 32`, `MAX_ATTACHMENTS = 10`, `MAX_METADATA_BYTES = 4096`, `MAX_METADATA_DEPTH = 5`, `MAX_URL_LENGTH = 2048`, `MAX_IMAGE_ALT_LENGTH = 1024`, `DEFAULT_SIGNATURE_WINDOW_SECONDS = 300` |
+
+## Cola de entrada y outbox
+
+Desde #64 el orquestador desacopla la recepción del procesamiento con dos tablas
+en su PostgreSQL: `inbox` (cola de entrada) y `outbox` (cola de salida). No hay
+infraestructura nueva ni broker.
+
+### POST /messages: semántica `202`
+
+`POST /messages` guarda el mensaje en `inbox` y responde `202 Accepted` con
+`{"status": "accepted"}` sin ejecutarlo dentro de la petición. La marca de
+deduplicación y la fila de `inbox` se escriben en la misma transacción. Si la
+marca ya existía, responde `202` con `{"status": "duplicate"}` y no inserta
+fila. Si la escritura falla, revierte ambas y responde `500 internal_error`, de
+modo que el reintento del gateway no se confunda con un duplicado.
+
+La aceptación de consentimiento pendiente (botón o frase de texto, #35) sigue
+procesándose dentro de la petición para que un fallo al guardar la evidencia
+responda `500`; no pasa por `inbox`. Sin consentimiento vigente la fila se
+encola, pero no se persiste la marca de deduplicación (el gateway deduplica con
+TTL).
+
+### Workers
+
+- `procesar_entrantes` toma filas de `inbox` con
+  `ORDER BY id FOR UPDATE SKIP LOCKED` y una concesión (`WORKER_LEASE_SECONDS`).
+  Solo la cabeza de cada conversación (`<canal>:<id externo>`) es elegible, lo
+  que conserva el orden.
+  Un fallo se reintenta con backoff hasta `INBOX_MAX_ATTEMPTS` y después queda
+  `failed` con el nombre de la excepción; la carga JSON se vacía al terminar.
+- `enviar_salientes` toma filas de `outbox` con la misma forma, entrega con
+  `send_channel_blocks` al gateway y marca `sent`. Un error transitorio
+  (`ServiceUnavailable`) vuelve a `pending` con backoff exponencial y jitter
+  hasta `OUTBOX_MAX_ATTEMPTS`; un rechazo definitivo `422` del canal
+  (`ChannelRejected`: ventana cerrada, plantilla no aprobada, canal inactivo)
+  marca `failed` sin reintentar.
+
+### Entrega al menos una vez y ventana de duplicado
+
+La entrega es **al menos una vez**: el worker puede caer entre el envío
+correcto y el `sent`, o expirar la concesión durante un envío lento; otro worker
+reenvía y el cliente puede ver el mensaje dos veces. La ventana de duplicado es
+como máximo `WORKER_LEASE_SECONDS` y es la contrapartida aceptada de no perder
+mensajes. La entrada también es al menos una vez: el flujo hace varias
+escrituras y un reintento puede repetir efectos ya hechos.
+
+### Bloqueo por orden
+
+Una fila no terminal bloquea las posteriores de su misma clave
+(`conversation_key` en la entrada, `destination_key` en la salida) hasta que
+termine, se agote o se reintente. Con los valores por defecto, un mensaje que
+reintenta bloquea los posteriores de su conversación o destino unos minutos como
+máximo.
+
+### Variables de configuración
+
+| Variable | Defecto | Rango |
+|---|---|---|
+| `INBOX_MAX_ATTEMPTS` | 3 | ≥ 1 |
+| `INBOX_BACKOFF_BASE_SECONDS` | 5 | > 0 |
+| `OUTBOX_MAX_ATTEMPTS` | 6 | ≥ 1 |
+| `OUTBOX_BACKOFF_BASE_SECONDS` | 2 | > 0 |
+| `OUTBOX_BACKOFF_MAX_SECONDS` | 300 | > 0 (tope de ambos backoffs) |
+| `OUTBOX_BACKOFF_JITTER` | 0.2 | [0, 1] |
+| `WORKER_POLL_SECONDS` | 1 | > 0 |
+| `WORKER_LEASE_SECONDS` | 120 | > 0 (debe superar el timeout del gateway de 10 s) |
+
+Una variable fuera de rango impide arrancar el servicio y el error nombra la
+variable.
+
+### Panel de envíos fallidos
+
+`GET /admin/envios` (solo `admin` y `supervisor`) lista las filas `failed` más
+recientes primero con id, canal, destino enmascarado (`****` + últimos 4), tipo,
+intentos, motivo y fecha; nunca el texto, los bloques ni el destino completo.
+`POST /admin/envios/{id}/reintentar` exige CSRF, devuelve la fila a `pending`
+con intentos en cero y registra `outbox_retry` en `panel_audit` con el resultado
+`ok`, `not_found`, `not_failed` o `forbidden`. Las filas se purgan con la
+retención vigente y la supresión de un contacto las elimina.
+

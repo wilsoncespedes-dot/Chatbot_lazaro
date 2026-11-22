@@ -4,9 +4,9 @@
 #
 #   ./nocturno.sh [opciones]
 #
-#   --max-sesiones N   máximo de sesiones de Claude Code (por defecto 20)
-#   --max-horas H      parar tras H horas (por defecto 10)
-#   --timeout-min M    máximo de minutos por sesión (por defecto 120)
+#   --max-sesiones N   máximo de sesiones de Claude Code (0 = sin límite)
+#   --max-horas H      parar tras H horas (0 = sin límite)
+#   --timeout-min M    máximo de minutos por sesión (0 = sin límite)
 #   --modelo M         modelo de Claude leader, p. ej. sonnet u opus
 #   --sin-commits      no hacer un commit de git después de cada sesión
 #
@@ -17,12 +17,15 @@
 #
 # Se detiene si:
 #   · no quedan features pending / spec_ready / in_progress
-#   · ./init.sh queda en rojo tras una sesión
-#   · dos sesiones seguidas no cambian nada en feature_list.json
-#   · se alcanza --max-sesiones o --max-horas
+#   · se alcanza un límite explícito (--max-sesiones o --max-horas)
+# Si una sesión no avanza o falla la verificación, reintenta con espera creciente.
 
 set -u
 cd "$(dirname "$0")"
+
+# Claude Code cancela sus tareas en segundo plano tras 10 minutos por defecto.
+# El modo autónomo debe esperar al writer antes de verificar o relanzar la feature.
+export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 # Evita que el ordenador se duerma mientras trabaja (macOS / Linux con systemd).
 if [ -z "${NOCTURNO_DESPIERTO:-}" ]; then
@@ -36,9 +39,9 @@ if [ -z "${NOCTURNO_DESPIERTO:-}" ]; then
   fi
 fi
 
-MAX_SESIONES=20
-MAX_HORAS=10
-TIMEOUT_MIN=120
+MAX_SESIONES=0
+MAX_HORAS=0
+TIMEOUT_MIN=0
 MODELO=""
 COMMIT=1
 
@@ -52,6 +55,13 @@ while [ $# -gt 0 ]; do
     -h|--help)      sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "Opción desconocida: $1 (usa --help)" >&2; exit 2 ;;
   esac
+done
+
+for limite in "$MAX_SESIONES" "$MAX_HORAS" "$TIMEOUT_MIN"; do
+  if ! [[ "$limite" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "[nocturno] Los límites deben ser enteros no negativos (0 = sin límite)." >&2
+    exit 2
+  fi
 done
 
 # ── Requisitos ────────────────────────────────────────────────────────────
@@ -80,14 +90,27 @@ source .claude/hooks/opencode_writer.sh
 MODEL_FLAG=""
 [ -n "$MODELO" ] && MODEL_FLAG="--model $MODELO"
 
-TIMEOUT_CMD=""
-if command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_CMD="gtimeout $((TIMEOUT_MIN * 60))"
-elif command -v timeout >/dev/null 2>&1 && timeout --version 2>&1 | grep -q "GNU coreutils"; then
-  TIMEOUT_CMD="timeout $((TIMEOUT_MIN * 60))"
-else
-  echo "[nocturno] [WARN] No se encontró GNU timeout; las sesiones no tendrán límite automático de duración."
+TIMEOUT_BIN=""
+TIMEOUT_SECONDS=""
+if [ "$TIMEOUT_MIN" -gt 0 ]; then
+  if command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
+    TIMEOUT_SECONDS="$((TIMEOUT_MIN * 60))"
+  elif command -v timeout >/dev/null 2>&1 && timeout --version 2>&1 | grep -q "GNU coreutils"; then
+    TIMEOUT_BIN="timeout"
+    TIMEOUT_SECONDS="$((TIMEOUT_MIN * 60))"
+  else
+    echo "[nocturno] [WARN] No se encontró GNU timeout; las sesiones no tendrán límite automático de duración."
+  fi
 fi
+
+run_claude() {
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" "$TIMEOUT_SECONDS" claude "$@"
+  else
+    claude "$@"
+  fi
+}
 
 USE_GIT=0
 if [ "$COMMIT" = "1" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -104,9 +127,15 @@ next_feature() {
   $PY - <<'PY'
 import json
 fs = json.load(open("feature_list.json", encoding="utf-8"))["features"]
+by_id = {str(f["id"]): f for f in fs}
 for wanted in ("in_progress", "spec_ready", "pending"):
     for f in sorted(fs, key=lambda f: f["id"]):
-        if f["status"] == wanted:
+        deps = f.get("dependencies", [])
+        deps_done = all(
+            str(dep) in by_id and by_id[str(dep)].get("status", "done") == "done"
+            for dep in deps
+        )
+        if f["status"] == wanted and deps_done:
             print(f'{f["id"]}\t{f["name"]}\t{f["status"]}')
             raise SystemExit
 PY
@@ -117,6 +146,47 @@ status_of() {
 import json, sys
 fs = json.load(open("feature_list.json", encoding="utf-8"))["features"]
 print(next((f["status"] for f in fs if str(f["id"]) == sys.argv[1]), "?"))
+PY
+}
+
+reopen_done_feature() {
+  $PY - "$1" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+target = sys.argv[1]
+path = Path("feature_list.json")
+text = path.read_text(encoding="utf-8")
+features = json.loads(text)["features"]
+feature = next((f for f in features if str(f["id"]) == target), None)
+if feature is None or feature["status"] != "done":
+    raise SystemExit(0)
+
+match = re.search(r'"features"\s*:\s*\[', text)
+if match is None:
+    raise SystemExit("No se encuentra el arreglo features en feature_list.json.")
+decoder = json.JSONDecoder()
+cursor = match.end()
+while cursor < len(text):
+    while cursor < len(text) and (text[cursor].isspace() or text[cursor] == ","):
+        cursor += 1
+    if cursor >= len(text) or text[cursor] == "]":
+        break
+    start = cursor
+    item, cursor = decoder.raw_decode(text, cursor)
+    if str(item.get("id")) != target:
+        continue
+    updated, count = re.subn(
+        r'("status"\s*:\s*)"done"', r'\1"in_progress"', text[start:cursor], count=1
+    )
+    if count != 1:
+        raise SystemExit(f"No se pudo reabrir la feature #{target}.")
+    path.write_text(text[:start] + updated + text[cursor:], encoding="utf-8")
+    break
+else:
+    raise SystemExit(f"No se pudo localizar la feature #{target} en feature_list.json.")
 PY
 }
 
@@ -150,7 +220,7 @@ START=$(date +%s)
 {
   echo "# Informe nocturno — $(now)"
   echo
-  echo "Límites: $MAX_SESIONES sesiones, $MAX_HORAS h, $TIMEOUT_MIN min/sesión. Commits: $([ $USE_GIT = 1 ] && echo sí || echo no)."
+  echo "Límites: $MAX_SESIONES sesiones, $MAX_HORAS h, $TIMEOUT_MIN min/sesión (0 = sin límite). Commits: $([ $USE_GIT = 1 ] && echo sí || echo no)."
   echo
   echo "## Sesiones"
   echo
@@ -158,21 +228,21 @@ START=$(date +%s)
 
 echo "[nocturno] Comprobando el entorno con ./init.sh..."
 if ! bash ./init.sh > /dev/null 2>&1; then
-  echo "- $(now) — init.sh en rojo ANTES de empezar. No se hizo nada." >> "$REPORT"
-  echo "[nocturno] init.sh falla antes de empezar. Arréglalo y vuelve a lanzar." >&2
-  exit 1
+  echo "- $(now) — init.sh en rojo antes de la primera sesión; se inicia recuperación sobre la feature accionable." >> "$REPORT"
+  echo "[nocturno] init.sh está en rojo; Claude retomará la feature y corregirá antes de cerrarla." >&2
 fi
 
 # ── Bucle principal ───────────────────────────────────────────────────────
 sesion=0
 sin_cambios=0
+retry_wait=30
 motivo="sin trabajo pendiente"
 
 while :; do
   next=$(next_feature)
   if [ -z "$next" ]; then motivo="no quedan features pendientes"; break; fi
-  if [ "$sesion" -ge "$MAX_SESIONES" ]; then motivo="alcanzado --max-sesiones ($MAX_SESIONES)"; break; fi
-  if [ $(( $(date +%s) - START )) -ge $(( MAX_HORAS * 3600 )) ]; then motivo="alcanzado --max-horas ($MAX_HORAS)"; break; fi
+  if [ "$MAX_SESIONES" -gt 0 ] && [ "$sesion" -ge "$MAX_SESIONES" ]; then motivo="alcanzado --max-sesiones ($MAX_SESIONES)"; break; fi
+  if [ "$MAX_HORAS" -gt 0 ] && [ $(( $(date +%s) - START )) -ge $(( MAX_HORAS * 3600 )) ]; then motivo="alcanzado --max-horas ($MAX_HORAS)"; break; fi
 
   IFS=$'\t' read -r fid fname fstatus <<< "${next//$'\r'/}"
   sesion=$((sesion + 1))
@@ -183,7 +253,7 @@ while :; do
     echo
     echo "════════ $(now) — sesión $sesion — #$fid $fname ($fstatus) ════════"
   } >> "$LOG"
-  $TIMEOUT_CMD claude -p \
+  run_claude -p \
     "MODO NOCTURNO. Procesa la siguiente feature (#$fid $fname) siguiendo .claude/nocturno.md y termina." \
     --append-system-prompt-file .claude/nocturno.md \
     --permission-mode dontAsk $MODEL_FLAG \
@@ -193,6 +263,11 @@ while :; do
   nuevo=$(status_of "$fid" | tr -d '\r')
 
   if bash ./init.sh > /dev/null 2>&1; then init_ok=1; init_txt="verde"; else init_ok=0; init_txt="ROJO"; fi
+  if [ "$init_ok" = "0" ] && [ "$nuevo" = "done" ]; then
+    reopen_done_feature "$fid"
+    nuevo=$(status_of "$fid" | tr -d '\r')
+    after=$(snapshot)
+  fi
   [ "$rc" = "124" ] && extra=" (timeout)" || extra=""
   echo "- $(now) — #$fid \`$fname\`: $fstatus → **$nuevo** · init.sh $init_txt · exit $rc$extra" >> "$REPORT"
   echo "[nocturno]   → $nuevo, init.sh $init_txt"
@@ -201,16 +276,15 @@ while :; do
     git add -A -- . ":(exclude).claude/settings.json" ":(exclude).claude/settings.json.bak" && git commit -q -m "nocturno: #$fid $fname → $nuevo" || true
   fi
 
-  if [ "$init_ok" = "0" ]; then motivo="init.sh quedó en rojo tras la sesión $sesion"; break; fi
-
-  if [ "$before" = "$after" ]; then
+  if [ "$before" = "$after" ] || [ "$init_ok" = "0" ]; then
     sin_cambios=$((sin_cambios + 1))
-    if [ "$sin_cambios" -ge 2 ]; then
-      motivo="dos sesiones seguidas sin avances (¿aceptaste el aviso de confianza de Claude Code en esta carpeta? mira progress/nocturno.log)"
-      break
-    fi
+    echo "[nocturno]   Sin avance verificable; reintento en ${retry_wait}s (intento ${sin_cambios})."
+    sleep "$retry_wait"
+    retry_wait=$((retry_wait * 2))
+    [ "$retry_wait" -gt 1800 ] && retry_wait=1800
   else
     sin_cambios=0
+    retry_wait=30
   fi
 done
 

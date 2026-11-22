@@ -64,11 +64,14 @@ def test_every_application_service_has_http_healthcheck() -> None:
 
 
 def test_startup_dependencies_wait_for_healthy_dependencies() -> None:
-    """R6, R7: el arranque espera a que Redis y PostgreSQL estén saludables."""
+    """R6, R7, #61: el arranque espera a que sus dependencias estén saludables."""
     gateway = _service("telegram_gateway")
-    assert re.search(
-        r"depends_on:\s*\n\s+redis:\s*\n\s+condition:\s*service_healthy", gateway
-    )
+    gateway_dependencies = _block(gateway, "depends_on", 4)
+    for dependency in ("postgres", "redis"):
+        assert re.search(
+            rf"{dependency}:\s*\n\s+condition:\s*service_healthy",
+            gateway_dependencies,
+        )
     orchestrator = _service("orchestrator")
     assert re.search(
         r"depends_on:\s*\n\s+postgres:\s*\n\s+condition:\s*service_healthy"

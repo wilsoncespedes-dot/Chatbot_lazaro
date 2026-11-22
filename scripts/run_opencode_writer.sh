@@ -43,6 +43,8 @@ if ! command -v opencode >/dev/null 2>&1; then
   exit 127
 fi
 
+WRITER_LOCK_FILE=".opencode/writer.lock"
+
 source .claude/hooks/find_python.sh
 if [ -z "${PY:-}" ]; then
   echo "No encuentro Python para validar el estado del arnés." >&2
@@ -87,4 +89,5 @@ if [ -n "$CONTEXT_FILE" ]; then
 fi
 
 echo "[harness] Delegando escritura de ${FEATURE} a OpenCode con ${MODEL}."
-opencode run --agent implementer --model "$MODEL" "$PROMPT"
+"${PY_CMD[@]}" scripts/run_locked_command.py \
+  "$WRITER_LOCK_FILE" "$$" -- opencode run --agent implementer --model "$MODEL" "$PROMPT"

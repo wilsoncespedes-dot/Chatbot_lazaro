@@ -10,6 +10,8 @@ from orchestrator.privacy import (
     notice_sha256,
 )
 
+from fakes import drain_queues
+
 SERVICE_TOKEN = "svc-token"
 HEADERS = {"X-Service-Token": SERVICE_TOKEN}
 RECEIVED_AT = "2026-11-03T16:05:12Z"
@@ -41,11 +43,13 @@ def _canonical(external_user_id: str, external_message_id: str, **changes):
 
 
 def _post(env, external_user_id: str, external_message_id: str, **changes):
-    return env.client.post(
+    response = env.client.post(
         "/messages",
         json=_canonical(external_user_id, external_message_id, **changes),
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _button(
@@ -80,7 +84,9 @@ def _button(
         ),
         **changes,
     )
-    return env.client.post("/messages", json=data, headers=HEADERS)
+    response = env.client.post("/messages", json=data, headers=HEADERS)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def test_contact_lookup_uses_channel_and_external_user_id(env):
@@ -188,6 +194,7 @@ def test_canonical_telegram_before_consent_does_not_persist_message_id(env):
         ),
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert response.json() == {"status": "accepted"}
     assert len(env.gateway.sent) == 1
@@ -205,6 +212,7 @@ def test_canonical_telegram_numeric_before_consent_does_not_persist_message_id(e
         json=_canonical("10", "1", channel="telegram", external_chat_id="100"),
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert response.json() == {"status": "accepted"}
     assert len(env.gateway.sent) == 1

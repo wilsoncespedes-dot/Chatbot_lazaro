@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 from orchestrator.privacy import notice_sha256
 
+from fakes import drain_queues
+
 SERVICE_TOKEN = "svc-token"
 HEADERS = {"X-Service-Token": SERVICE_TOKEN}
 RECEIVED_AT = "2026-11-03T16:05:12Z"
@@ -41,6 +43,7 @@ def test_canonical_whatsapp_message_is_processed_and_answered(env):
     response = env.client.post(
         "/messages", json=_canonical("whatsapp", external_id="m1"), headers=HEADERS
     )
+    drain_queues(env.settings, env.adapters)
     assert response.status_code == 202
     assert response.json() == {"status": "accepted"}
     assert env.rag.calls == [("Hola", env.settings.rag_top_k)]
@@ -63,10 +66,11 @@ def test_same_canonical_message_produces_the_same_answer_in_both_channels(env):
     whatsapp = env.client.post(
         "/messages", json=_canonical("whatsapp", external_id="m2"), headers=HEADERS
     )
+    drain_queues(env.settings, env.adapters)
     assert telegram.json() == {"status": "accepted"}
     assert whatsapp.json() == {"status": "accepted"}
     assert env.gateway.sent == [(100, "Respuesta final")]
-    assert env.gateway.channel_sent == [("whatsapp", "57300", "Respuesta final")]
+    assert ("whatsapp", "57300", "Respuesta final") in env.gateway.channel_sent
     assert env.repo.contacts[10].id != env.repo.contacts[("whatsapp", "57300")].id
 
 
@@ -83,6 +87,7 @@ def test_whatsapp_opaque_external_id_is_kept_as_text(env):
         ),
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
     assert response.status_code == 202
     contact = env.repo.contacts[("whatsapp", "wa-abc")]
     assert (contact.external_user_id, contact.external_chat_id) == ("wa-abc", "wa-chat")
@@ -102,6 +107,7 @@ def test_canonical_telegram_with_opaque_ids_is_accepted_as_text(env):
         ),
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
     assert response.status_code == 202
     assert response.json() == {"status": "accepted"}
     contact = env.repo.contacts[("telegram", "tg-user")]

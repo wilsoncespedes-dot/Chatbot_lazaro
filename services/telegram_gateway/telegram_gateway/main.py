@@ -6,18 +6,33 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from lazaro_contracts import (
+    LAZARO_SIGNATURE_HEADER,
+    LAZARO_TIMESTAMP_HEADER,
     SERVICE_TOKEN_HEADER,
+    ChannelActiveRequest,
+    ChannelCreateRequest,
+    ChannelCreateResponse,
+    ChannelInfo,
+    ChannelListResponse,
+    ChannelSecretResponse,
     ChannelSendRequest,
+    ChannelUpdateRequest,
     ErrorResponse,
     HealthResponse,
+    MailboxResponse,
+    MessageResponse,
+    NormalizedMessage,
     SendRequest,
     SendResponse,
+    SimulatedInboundRequest,
+    SimulatedInboundResponse,
     TextBlock,
 )
 from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
@@ -25,21 +40,29 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import grouping
+from .adapters import channels as registered_channels
+from .adapters.callback import FakeCallbackClient, HttpCallbackClient
+from .adapters.channel_repository import (
+    ChannelRepository,
+    FakeChannelRepository,
+    PostgresChannelRepository,
+)
 from .adapters.dedup import RedisDedupStore
+from .adapters.mailbox import FakeMailboxRepository, PostgresMailboxRepository
 from .adapters.message_buffer import RedisMessageBuffer
 from .adapters.orchestrator import HttpOrchestratorClient
-from .adapters.telegram import HttpTelegramClient, TelegramChannelAdapter
+from .adapters.telegram import HttpTelegramClient
 from .adapters.whatsapp_cloud import WhatsAppCloudAdapter, WhatsAppCloudConfig
 from .adapters.whatsapp_window import RedisWhatsAppWindowStore
 from .config import Settings
+from .channel_service import ChannelService
 from .domain import (
     Adapters,
-    ChannelNotConfigured,
+    ChannelStoreUnavailable,
     ChannelSendFailed,
     DomainError,
     OrchestratorError,
     TelegramError,
-    UnknownChannel,
     WebhookForbidden,
     build_message_request,
     extract_callback,
@@ -47,9 +70,12 @@ from .domain import (
     extract_incoming,
     normalize_callback,
     normalize_incoming,
-    send_response,
+    send_through_channel,
 )
 from .grouping import GroupingWorker
+from .registry import CHANNEL_REGISTRY, ChannelContext, ChannelRegistry
+from .secret_cipher import SecretCipher
+from .webhook_service import WebhookService
 from .whatsapp_cloud import (
     SIGNATURE_HEADER,
     parse_webhook,
@@ -61,6 +87,7 @@ from .whatsapp_cloud import (
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "telegram_gateway"
+LEGACY_SEND_CHANNEL = "telegram"
 WEBHOOK_PATH = "/telegram/webhook"
 WHATSAPP_WEBHOOK_PATH = "/whatsapp/webhook"
 WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
@@ -119,6 +146,16 @@ def build_default_adapters(settings: Settings) -> Adapters:
         buffer=buffer,
         whatsapp=whatsapp,
         whatsapp_window=whatsapp_window,
+        channels=PostgresChannelRepository(settings.database_url),
+        callback=HttpCallbackClient(
+            settings.http_timeout_seconds,
+            settings.webhook_allow_private_callbacks,
+        ),
+        mailbox=PostgresMailboxRepository(
+            settings.database_url,
+            settings.simulated_mailbox_retention_seconds,
+            settings.simulated_mailbox_max_entries,
+        ),
     )
 
 
@@ -130,6 +167,25 @@ def _error(status_code: int, error: str, message: str) -> JSONResponse:
 def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
     settings = settings or Settings()
     adapters = adapters or build_default_adapters(settings)
+    channel_repository: ChannelRepository = adapters.channels or FakeChannelRepository()
+    channel_registry: ChannelRegistry = adapters.channel_registry or CHANNEL_REGISTRY
+    adapters.channels = channel_repository
+    adapters.channel_registry = channel_registry
+    if adapters.callback is None:
+        adapters.callback = FakeCallbackClient()
+    if adapters.mailbox is None:
+        adapters.mailbox = FakeMailboxRepository(
+            settings.simulated_mailbox_retention_seconds,
+            settings.simulated_mailbox_max_entries,
+        )
+    channel_context = ChannelContext(settings=settings, adapters=adapters)
+    cipher = SecretCipher(settings.channel_secrets_key.get_secret_value())
+    channel_service = ChannelService(
+        channel_repository, channel_registry, cipher, channel_context
+    )
+    webhook_service = WebhookService(channel_service, settings, adapters)
+    if not cipher.available:
+        logger.warning("channel_secrets_key_unavailable reason=%s", cipher.status)
     grouping_worker: GroupingWorker | None = None
 
     @asynccontextmanager
@@ -138,6 +194,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         if settings.message_grouping_enabled and adapters.buffer is not None:
             grouping_worker = GroupingWorker(settings, adapters)
             grouping_worker.start()
+        try:
+            channel_service.ensure_seeded()
+        except ChannelStoreUnavailable as exc:
+            logger.warning("channels_seed_deferred code=%s", type(exc).__name__)
         try:
             yield
         finally:
@@ -160,6 +220,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
                 return _error(401, "unauthorized", "Secreto del webhook ausente o no válido.")
             return await call_next(request)
         if request.url.path in PUBLIC_PATHS:
+            return await call_next(request)
+        if request.url.path.startswith("/webhooks/"):
             return await call_next(request)
         token = request.headers.get(SERVICE_TOKEN_HEADER)
         expected = settings.service_token
@@ -196,6 +258,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @app.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
     async def health() -> HealthResponse | JSONResponse:
+        dependencies: dict[str, str] = {}
         try:
             healthy = await run_in_threadpool(
                 adapters.dedup.ping, settings.healthcheck_timeout_seconds
@@ -206,12 +269,24 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             )
             healthy = False
         if not healthy:
+            dependencies["redis"] = "unavailable"
+        try:
+            await run_in_threadpool(
+                channel_repository.health_check,
+                settings.healthcheck_timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 - toda falla es unhealthy
+            logger.warning(
+                "healthcheck_postgres_unavailable code=%s", type(exc).__name__
+            )
+            dependencies["postgres"] = "unavailable"
+        if dependencies:
             return JSONResponse(
                 status_code=503,
                 content=HealthResponse(
                     status="unhealthy",
                     service=SERVICE_NAME,
-                    dependencies={"redis": "unavailable"},
+                    dependencies=dependencies,
                 ).model_dump(exclude_none=True),
             )
         return HealthResponse(status="ok", service=SERVICE_NAME)
@@ -407,28 +482,105 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             logger.exception("Fallo procesando el webhook de WhatsApp")
         return {"ok": True}
 
+    @app.post("/webhooks/{canal_id}", response_model=MessageResponse)
+    async def generic_webhook(canal_id: str, request: Request) -> MessageResponse:
+        body = await request.body()
+        result = await run_in_threadpool(
+            webhook_service.receive,
+            canal_id,
+            request.headers.get(LAZARO_TIMESTAMP_HEADER),
+            request.headers.get(LAZARO_SIGNATURE_HEADER),
+            body,
+        )
+        return MessageResponse(status=result.status)
+
+    @app.get("/channels", response_model=ChannelListResponse)
+    def list_channels() -> ChannelListResponse:
+        return channel_service.list_channels()
+
+    @app.post("/channels", response_model=ChannelCreateResponse, status_code=201)
+    def create_channel(body: ChannelCreateRequest) -> ChannelCreateResponse:
+        return channel_service.create(body)
+
+    @app.patch("/channels/{channel_id}", response_model=ChannelInfo)
+    def update_channel(channel_id: str, body: ChannelUpdateRequest) -> ChannelInfo:
+        return channel_service.update(channel_id, body)
+
+    @app.patch("/channels/{channel_id}/active", response_model=ChannelInfo)
+    def set_channel_active(
+        channel_id: str, body: ChannelActiveRequest
+    ) -> ChannelInfo:
+        return channel_service.set_active(channel_id, body)
+
+    @app.post("/channels/{channel_id}/secret", response_model=ChannelSecretResponse)
+    def regenerate_channel_secret(channel_id: str) -> ChannelSecretResponse:
+        return channel_service.regenerate_secret(channel_id)
+
+    @app.get("/channels/{channel_id}/secret", response_model=ChannelSecretResponse)
+    def reveal_channel_secret(channel_id: str) -> ChannelSecretResponse:
+        return channel_service.reveal_secret(channel_id)
+
+    @app.get("/channels/{channel_id}/mailbox", response_model=MailboxResponse)
+    def read_channel_mailbox(
+        channel_id: str,
+        destination: str | None = None,
+        after: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> MailboxResponse:
+        channel_service.mailbox_channel(channel_id)
+        mailbox = adapters.mailbox
+        if mailbox is None:
+            raise ChannelStoreUnavailable("El buzón no está disponible.")
+        try:
+            entries = mailbox.list(
+                channel_id, destination, after, limit, adapters.clock()
+            )
+        except Exception as exc:  # noqa: BLE001 - R19 responde 503 sin detalles
+            logger.error(
+                "mailbox_list_failed channel_id=%s code=%s",
+                channel_id,
+                type(exc).__name__,
+            )
+            raise ChannelStoreUnavailable("El buzón no está disponible.") from None
+        return MailboxResponse(channel=channel_id, entries=entries)
+
+    @app.post(
+        "/channels/{channel_id}/simulate",
+        response_model=SimulatedInboundResponse,
+        response_model_exclude_none=True,
+    )
+    def simulate_channel(
+        channel_id: str, body: SimulatedInboundRequest
+    ) -> SimulatedInboundResponse:
+        canal = channel_service.active_mailbox_channel(channel_id)
+        message = NormalizedMessage(
+            channel=channel_id,
+            external_user_id=body.external_user_id,
+            external_chat_id=body.external_user_id,
+            external_message_id=f"sim-{uuid4().hex}",
+            kind="text",
+            text=body.text,
+            received_at=adapters.clock(),
+        )
+        result = webhook_service.inject(channel_id, canal, message)
+        return SimulatedInboundResponse(
+            status=result.status,
+            forwarded=result.forwarded,
+            reason=result.reason,
+        )
+
     @app.post("/send", response_model=SendResponse)
     def send(body: SendRequest | ChannelSendRequest) -> SendResponse:
         if isinstance(body, SendRequest):
-            status = send_response(
-                TelegramChannelAdapter(adapters.telegram),
-                str(body.chat_id),
-                [TextBlock(type="text", text=body.text)],
-            )
-            if status == "failed":
-                raise ChannelSendFailed("El canal informó que el envío falló.")
-            return SendResponse(sent=True)
-        if body.channel == "telegram":
-            adapter = TelegramChannelAdapter(adapters.telegram)
-        elif body.channel == "whatsapp":
-            adapter = adapters.whatsapp
+            channel_id = LEGACY_SEND_CHANNEL
+            destination = str(body.chat_id)
+            blocks = [TextBlock(type="text", text=body.text)]
         else:
-            raise UnknownChannel("El canal no está disponible en este servicio.")
-        if adapter is None:
-            raise ChannelNotConfigured(
-                "El canal WhatsApp no está configurado en este servicio."
-            )
-        status = send_response(adapter, body.destination, body.blocks)
+            channel_id = body.channel
+            destination = body.destination
+            blocks = body.blocks
+        channel = channel_service.resolve(channel_id)
+        status = send_through_channel(channel, destination, blocks)
         if status == "failed":
             raise ChannelSendFailed("El canal informó que el envío falló.")
         return SendResponse(sent=True)

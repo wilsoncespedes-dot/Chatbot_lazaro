@@ -20,6 +20,8 @@ from orchestrator.domain import (
 )
 from orchestrator.identity import sign_login_token
 
+from fakes import drain_queues
+
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 BASE = "https://orchestrator.example"
 KEY = "k" * 32
@@ -61,7 +63,9 @@ def _link(env, user: str = "10", chat: str = "100", channel: str = "telegram"):
 
 
 def _login(env, token: str, username: str = "cliente1", password: str = PASSWORD, ip: str = "1.1.1.1"):
-    return login_client(token, username, password, ip, env.settings, env.adapters)
+    outcome = login_client(token, username, password, ip, env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
+    return outcome
 
 
 # --- Éxito y estados de credencial ------------------------------------------------

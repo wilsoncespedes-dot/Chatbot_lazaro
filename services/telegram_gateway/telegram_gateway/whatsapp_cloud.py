@@ -428,4 +428,8 @@ def whatsapp_capabilities(*, window_open: bool) -> dict:
         "max_list_options": MAX_LIST_OPTIONS,
         "supports_links": True,
         "requires_template": not window_open,
+        "supports_buttons": True,
+        "supports_images": False,
+        "supports_files": False,
+        "supports_audio": False,
     }

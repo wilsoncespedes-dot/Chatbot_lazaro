@@ -12,10 +12,14 @@ de spec, una sola feature a la vez. Lo único que cambia es **quién aprueba
 el spec**: en vez del humano, lo hace el `reviewer` en modo «revisión de
 spec». El humano lo revisará por la mañana.
 
-## Alcance de esta sesión: UNA feature y terminas
+## Alcance de esta sesión: UNA feature; el script mantiene el ciclo
 
 El script `nocturno.sh` te lanza una vez por feature (`claude -p`), con
-contexto limpio cada vez. Lanzas los subagentes con la herramienta `Agent`
+contexto limpio cada vez, y sigue lanzando sesiones mientras quede trabajo
+elegible. Por defecto no limita sesiones, horas ni duración de cada sesión.
+Si una sesión no cambia el estado o `./init.sh` falla, el script reintenta con
+espera creciente; no marques una feature `done` si la verificación no está verde.
+Lanzas los subagentes con la herramienta `Agent`
 (`subagent_type: "spec_author"`, `"implementer"`, `"reviewer"` o
 `"Explore"` para investigar). Así que en cada sesión:
 
@@ -74,10 +78,14 @@ continúa desde donde quedó. No le preguntes a nadie.
 
 ### Paso 5 — Bloquear y seguir
 
-Si algo no se puede resolver (spec rechazado 2 veces, código rechazado 3
-veces, una herramienta falla, un requisito es ambiguo, haría falta una
-dependencia que no está instalada, una duda abierta de `docs/proyecto.md` §12
-que no se puede resolver con un supuesto configurable…):
+Si existe una decisión de producto material que no esté resuelta por el
+acceptance, `docs/proyecto.md`, decisiones previas ni un default seguro y
+configurable, bloquea esa feature. Un fallo transitorio de herramienta, un test
+rojo o la falta de avance no son por sí solos motivo para bloquear: documenta el
+fallo y deja la feature accionable para que el script reintente.
+Si el writer devuelve código `75` porque otro writer está activo, deja la feature
+`in_progress`; no bloquees ni intentes una escritura paralela. El runner volverá
+a intentarlo cuando el lock quede libre.
 
 1. Pon `"status": "blocked"` en esa feature de `feature_list.json`.
 2. Escribe el motivo concreto en `progress/blocked_<name>.md`: qué se
@@ -85,7 +93,8 @@ que no se puede resolver con un supuesto configurable…):
 3. Si hubo cambios de código, asegúrate de que `./init.sh` queda verde. Si el código a medias rompe
    los tests, registra el fallo en `progress/impl_<name>.md` y lanza
    `implementer` para que OpenCode corrija solo esa feature.
-4. Termina con `blocked -> <name>`. El script seguirá con la siguiente.
+4. Termina con `blocked -> <name>`. El script seguirá con otra feature cuyas
+   dependencias estén completas; no intentará features que dependan de esta.
 
 ## Dependencias y secretos en modo nocturno
 

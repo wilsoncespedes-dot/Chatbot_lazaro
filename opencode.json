@@ -45,6 +45,7 @@
           ".claude/**": "deny",
           ".opencode/**": "deny",
           "scripts/run_opencode_writer.sh": "deny",
+          "scripts/run_locked_command.py": "deny",
           "scripts/tests/test_opencode_harness.py": "deny"
         },
         "list": "allow",

@@ -11,6 +11,8 @@ from lazaro_contracts import TemplateBlock
 from orchestrator import admin, advisor_panel
 from orchestrator.domain import HistoryItem, SavedReply
 
+from fakes import drain_queues
+
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 R5_TEXT = '<script>alert(1)</script>"><img src=x onerror=1>'
 FORM_CONTROLS = ("form", "input", "textarea", "select", "button")
@@ -428,6 +430,7 @@ def test_reply_from_chat_redirects_back_to_case(env_factory, panel):
         },
         follow_redirects=False,
     )
+    drain_queues(env.settings, env.adapters)
     assert response.status_code == 303
     assert response.headers["location"] == "/asesor/cases/case-1"
     assert (contact.chat_id, "Hola desde el chat") in env.gateway.sent
@@ -446,6 +449,7 @@ def test_reply_from_chat_redirects_back_to_case(env_factory, panel):
         },
         follow_redirects=False,
     )
+    drain_queues(closed.settings, closed.adapters)
     assert template.status_code == 303
     assert template.headers["location"] == "/asesor/cases/case-1"
     [(channel, destination, blocks)] = closed.gateway.blocks_sent

@@ -5,9 +5,13 @@ from datetime import timedelta
 
 import pytest
 
+from fakes import drain_queues
+
 
 def _post(env, path: str, data: dict):
-    return env.client.post(path, data=data, follow_redirects=False)
+    response = env.client.post(path, data=data, follow_redirects=False)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _transfer(env, panel, target_profile_id: str = "target"):

@@ -16,8 +16,19 @@ from orchestrator.adapters.llm import FakeLLM
 from orchestrator.adapters.rag import FakeRagClient
 from orchestrator.adapters.repository import FakeRepository
 from orchestrator.config import Settings
-from orchestrator.domain import Adapters, consent_configured, process_channel_message
+from orchestrator.domain import (
+    Adapters,
+    consent_configured,
+    process_channel_message as _process_channel_message,
+)
 from orchestrator.main import create_app
+
+from fakes import drain_queues
+
+
+def process_channel_message(message, settings, adapters):
+    _process_channel_message(message, settings, adapters)
+    drain_queues(settings, adapters)
 
 SERVICE_TOKEN = "svc-token-centinela"
 PASSWORD = "clave-segura-123"

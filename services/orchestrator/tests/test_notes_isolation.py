@@ -5,6 +5,8 @@ from datetime import timedelta
 
 from orchestrator.domain import ClientSession, end_client_session
 
+from fakes import drain_queues
+
 SENTINEL = "CENTINELA-NOTA-INTERNA-50"
 
 
@@ -84,6 +86,7 @@ def test_note_is_not_in_advisor_reply_text_or_whatsapp_template(env_factory, pan
         data={"csrf_token": panel.CSRF, "case_id": "case-1", "text": "respuesta"},
         follow_redirects=False,
     )
+    drain_queues(env.settings, env.adapters)
     assert reply.status_code == 303
     assert (contact.chat_id, "respuesta") in env.gateway.sent
     assert all(SENTINEL not in text for _chat, text in env.gateway.sent)
@@ -103,6 +106,7 @@ def test_note_is_not_in_advisor_reply_text_or_whatsapp_template(env_factory, pan
         },
         follow_redirects=False,
     )
+    drain_queues(env2.settings, env2.adapters)
     assert template.status_code == 303
     assert all(
         SENTINEL not in str(blocks)

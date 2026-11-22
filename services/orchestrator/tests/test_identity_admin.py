@@ -19,6 +19,8 @@ from orchestrator.domain import (
     revoke_credential,
 )
 
+from fakes import drain_queues
+
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 BASE = "https://orchestrator.example"
 KEY = "k" * 32
@@ -122,6 +124,7 @@ def test_renewal_reactivates_no_access_contact_with_session(env_factory):
     renew_credential(profile.profile_id, env.settings, env.adapters)
 
     assert env.repo.get_conversation_state(contact.id) == ConversationState.ACTIVE
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (
         100,
         env.repo.get_conversation_texts().active_welcome,
@@ -156,6 +159,7 @@ def test_revoke_ends_the_session_and_notifies(env_factory):
     session = next(iter(env.repo.client_sessions.values()))
     assert session.end_reason == "revoked"
     assert env.repo.get_conversation_state(contact.id) == ConversationState.AWAITING_LOGIN
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (
         100,
         env.repo.get_conversation_texts().session_closed_reply,

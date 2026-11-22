@@ -14,9 +14,16 @@ from orchestrator.domain import (
     ConversationState,
     ToolContext,
     execute_tool,
-    process_channel_message,
+    process_channel_message as _process_channel_message,
 )
 from orchestrator.harness import args_sha256
+
+from fakes import drain_queues
+
+
+def process_channel_message(message, settings, adapters):
+    _process_channel_message(message, settings, adapters)
+    drain_queues(settings, adapters)
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 ALLOWLIST = '{"mis_datos.v_datos": ["cliente_id", "nombre"]}'
@@ -141,6 +148,7 @@ def test_r6_denied_router_tool_gets_the_fixed_reply(env):
         env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "denied"
     assert env.gateway.sent[-1] == (100, env.settings.harness_tool_denied_reply)
@@ -345,6 +353,7 @@ def test_r22_client_data_without_session_does_not_call_any_adapter(env):
         "consultar_mis_datos", _ctx(contact, ConversationState.ACTIVE), env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "no_session"
     assert fake.calls == [] and env.llm.calls == []
@@ -361,6 +370,7 @@ def test_r23_client_data_disabled_does_not_call_llm_or_adapter(env):
         "consultar_mis_datos", _ctx(contact, ConversationState.ACTIVE), env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "disabled"
     assert fake.calls == [] and env.llm.calls == []
@@ -397,6 +407,7 @@ def test_r21_r24_r26_r33_r34_client_data_uses_session_id_and_never_returns_rows_
         env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "ok"
     assert fake.calls[0][1] == profile.id
@@ -420,9 +431,12 @@ def test_r25_sql_outside_allowlist_is_rejected_without_running(env):
     )
 
     result = execute_tool(
-        "consultar_mis_datos", _ctx(contact, ConversationState.ACTIVE), env.settings,
+        "consultar_mis_datos",
+        _ctx(contact, ConversationState.ACTIVE),
+        env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "rejected"
     assert fake.calls == []
@@ -437,9 +451,12 @@ def test_r32_unavailable_adapter_returns_unavailable(env):
     env.adapters.llm = ScriptedLLM([json.dumps({"sql": SAFE_SQL})])
 
     result = execute_tool(
-        "consultar_mis_datos", _ctx(contact, ConversationState.ACTIVE), env.settings,
+        "consultar_mis_datos",
+        _ctx(contact, ConversationState.ACTIVE),
+        env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "unavailable"
     assert env.gateway.sent[-1] == (100, env.settings.client_data_unavailable_reply)
@@ -476,6 +493,7 @@ def test_r36_r38_r39_suppression_creates_row_links_case_and_replies(env):
         env.settings,
         env.adapters,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert result == "ok"
     [stored] = env.repo.suppression_requests.values()

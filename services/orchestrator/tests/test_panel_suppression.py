@@ -8,9 +8,13 @@ from lazaro_contracts import TemplateBlock
 
 from orchestrator.adapters.repository import StoredSuppressionRequest
 
+from fakes import drain_queues
+
 
 def _post(env, path: str, data: dict):
-    return env.client.post(path, data=data, follow_redirects=False)
+    response = env.client.post(path, data=data, follow_redirects=False)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _client(env, panel, username: str = "cliente1"):
@@ -149,8 +153,8 @@ def test_execute_whatsapp_open_uses_text_and_closed_uses_template(env_factory, p
     assert isinstance(env2.gateway.blocks_sent[0][2][0], TemplateBlock)
 
 
-def test_notice_failure_and_missing_contact_are_recorded(env_factory, panel):
-    """R69: fallo de aviso -> failed; contacto inexistente -> skipped."""
+def test_notice_failure_is_visible_in_outbox(env_factory, panel):
+    """R69 + R19/R25 (#64): el aviso se encola y su fallo queda visible."""
     env = env_factory()
     panel.login_admin(env)
     client = _client(env, panel)
@@ -158,7 +162,10 @@ def test_notice_failure_and_missing_contact_are_recorded(env_factory, panel):
     _request(env, panel, "req-1", contact, profile_id=client.id)
     env.gateway.fail = True
     _post(env, "/admin/supresiones/req-1/execute", {"csrf_token": panel.CSRF})
-    assert env.repo.suppression_requests["req-1"].notification_result == "failed"
+    request = env.repo.suppression_requests["req-1"]
+    assert request.notification_result == "text"
+    [(row)] = env.repo.outbox.values()
+    assert row["last_error"] == "ServiceUnavailable"
 
     env2 = env_factory()
     panel.login_admin(env2)

@@ -61,6 +61,10 @@ class FakeWhatsAppAdapter:
             max_list_options=MAX_LIST_OPTIONS,
             supports_links=True,
             requires_template=not self.window_open,
+            supports_buttons=True,
+            supports_images=False,
+            supports_files=False,
+            supports_audio=False,
         )
 
     def normalize_incoming(

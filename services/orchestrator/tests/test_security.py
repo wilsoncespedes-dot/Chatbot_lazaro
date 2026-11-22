@@ -18,6 +18,8 @@ from orchestrator.adapters.handover import HttpHandoverClient
 from orchestrator.adapters.llm import FakeLLM, HttpLLMClient, LLMClient
 from orchestrator.domain import Adapters
 from orchestrator.main import create_app
+
+from fakes import drain_queues
 from orchestrator.privacy import notice_sha256
 
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -204,6 +206,7 @@ def test_security_unauthorized_client_responder_reaches_no_other_client(env):
     assert env.client.post(
         "/messages", json=body, headers={"X-Service-Token": "svc-token"}
     ).status_code == 202
+    drain_queues(env.settings, env.adapters)
     assert env.handover.authorized == []
     assert env.handover.closed == []
     assert [m for m in env.repo.messages if m.role == "advisor"] == []

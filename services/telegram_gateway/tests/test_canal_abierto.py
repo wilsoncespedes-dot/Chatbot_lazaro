@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from lazaro_contracts import (
     ChannelCapabilities,
     ImageBlock,
+    LinkBlock,
     NormalizedMessage,
     TextBlock,
 )
@@ -24,7 +25,6 @@ from telegram_gateway.adapters.whatsapp import FakeWhatsAppAdapter
 from telegram_gateway.config import Settings
 from telegram_gateway.domain import (
     Adapters,
-    UnsupportedBlock,
     extract_callback,
     extract_incoming,
     normalize_callback,
@@ -116,15 +116,22 @@ def test_send_unknown_channel_is_422_even_without_whatsapp():
         [{"type": "text", "text": "Mira:"}, IMAGE],
     ],
 )
-def test_send_image_block_is_rejected_on_current_channels(channel, blocks):
-    """R40: los canales actuales rechazan cualquier bloque image sin enviar nada."""
+def test_send_image_block_is_degraded_on_current_channels(channel, blocks):
+    """R18, R21: los canales actuales reciben un enlace en lugar de la imagen."""
     whatsapp = FakeWhatsAppAdapter()
     client, telegram = make_client(whatsapp=whatsapp)
     response = _send(client, channel, blocks)
-    assert response.status_code == 422
-    assert response.json()["error"] == "validation_error"
-    assert telegram.sent == []
-    assert whatsapp.sent == []
+    assert response.status_code == 200
+    if channel == "telegram":
+        assert "Foto del producto: https://x.example.com/a.jpg" in telegram.sent[-1][1]
+    else:
+        sent_blocks = whatsapp.sent[-1][1]
+        assert any(
+            isinstance(block, LinkBlock)
+            and block.text == "Foto del producto"
+            and block.url == "https://x.example.com/a.jpg"
+            for block in sent_blocks
+        )
 
 
 class _ImageCapableAdapter:
@@ -155,8 +162,9 @@ class _NoImageAdapter:
             requires_template=False,
         )
 
-    def send(self, destination, blocks):  # pragma: no cover - no debe llamarse
-        raise AssertionError("no debe enviarse un bloque no admitido")
+    def send(self, destination, blocks):
+        self.sent = (destination, list(blocks))
+        return "sent"
 
 
 def test_send_response_allows_image_when_capability_is_declared():
@@ -171,10 +179,13 @@ def test_send_response_allows_image_when_capability_is_declared():
     assert isinstance(adapter.sent[1][1], ImageBlock)
 
 
-def test_send_response_rejects_image_without_capability():
-    """R40: sin supports_images el núcleo falla cerrado antes de enviar."""
-    with pytest.raises(UnsupportedBlock):
-        send_response(_NoImageAdapter(), "77", [ImageBlock.model_validate(IMAGE)])
+def test_send_response_degrades_image_without_capability():
+    """R18, R21: sin supports_images el núcleo envía un LinkBlock."""
+    adapter = _NoImageAdapter()
+    assert send_response(adapter, "77", [ImageBlock.model_validate(IMAGE)]) == "sent"
+    assert adapter.sent[1] == [
+        LinkBlock(type="link", text="Foto del producto", url="https://x.example.com/a.jpg")
+    ]
 
 
 # ── R41: capacidades de los adaptadores actuales ────────────────────────────

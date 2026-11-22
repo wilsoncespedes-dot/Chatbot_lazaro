@@ -18,6 +18,8 @@ from orchestrator.adapters.llm import FakeLLM
 from orchestrator.adapters.rag import FakeRagClient
 from orchestrator.adapters.repository import FakeRepository
 from orchestrator.accounts import hash_token
+
+from fakes import drain_queues
 from orchestrator.config import Settings
 from orchestrator.domain import (
     Adapters,
@@ -147,7 +149,9 @@ def _csrf(env: Env) -> str:
 
 
 def _post(env: Env, path: str, data: dict):
-    return env.client.post(path, data=data, follow_redirects=False)
+    response = env.client.post(path, data=data, follow_redirects=False)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _session_token(response) -> str:

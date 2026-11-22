@@ -12,9 +12,16 @@ from orchestrator.domain import (
     _active_welcome_text,
     close_case,
     login_client,
-    process_channel_message,
+    process_channel_message as _process_channel_message,
 )
 from orchestrator.identity import sign_login_token
+
+from fakes import drain_queues
+
+
+def process_channel_message(message, settings, adapters):
+    _process_channel_message(message, settings, adapters)
+    drain_queues(settings, adapters)
 
 PASSWORD = "clave-segura-123"
 CSRF = "csrf-token"
@@ -125,6 +132,7 @@ def test_closing_reply_replaces_case_closed_reply(env):
     contact = env.repo.get_or_create_channel_contact("telegram", "10", "100", env.adapters.clock())
     env.repo.link_case("case-1", contact.id, env.adapters.clock())
     close_case("case-1", "700", env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (100, "Cierre configurado desde el panel")
 
 
@@ -157,6 +165,7 @@ def test_topics_list_is_added_to_active_welcome(env):
     )
     env.repo.save_conversation_texts(texts, "admin-1", env.adapters.clock())
     login_client(token, "cliente1", PASSWORD, "ip", env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1][1] == _active_welcome_text(texts)
     assert "Tema A" in env.gateway.sent[-1][1]
 

@@ -338,16 +338,13 @@ def render_advisor_cases(
     selected_assignment: str | None = None,
     selected_tag: str | None = None,
     live_enabled: bool = False,
+    channel_choices: tuple[tuple[str, str], ...] = (),
 ) -> str:
     filters_action = "/asesor/todos" if all_view else "/asesor/cases"
     channel_options = "".join(
         f'<option value="{_esc(value)}"'
         f'{" selected" if selected_channel == value else ""}>{_esc(label)}</option>'
-        for value, label in (
-            ("", "Todos"),
-            ("telegram", "Telegram"),
-            ("whatsapp", "WhatsApp"),
-        )
+        for value, label in (("", "Todos"), *channel_choices)
     )
     assignment_options = "".join(
         f'<option value="{_esc(value)}"'

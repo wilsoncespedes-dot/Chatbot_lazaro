@@ -150,11 +150,17 @@ DeepSeek escribe el código**. El mapa para agentes es [`AGENTS.md`](AGENTS.md).
 ```bash
 ./modo.sh                      # muestra el modo actual
 ./modo.sh supervisado          # por defecto
-./nocturno.sh --max-sesiones 3 # trabajo autónomo; deja informe en progress/nocturno_<fecha>.md
+./nocturno.sh                  # sin topes; reintenta hasta agotar trabajo elegible
+# ./nocturno.sh --max-sesiones 3 --max-horas 2 # límites opcionales
+# ./nocturno.sh --sin-commits   # úsalo si ya tienes cambios locales sin commit
 ```
 
-En modo nocturno el reviewer aprueba los specs en tu lugar; por la mañana
-revisa los que tengan `"auto_approved"` y usa `/revisado`.
+Por defecto, `0` significa sin límite de sesiones, horas ni minutos por sesión.
+Ante sesiones sin avance verificable o fallos de `./init.sh`, reintenta con una
+espera creciente. El ciclo respeta dependencias y termina cuando no queda una
+feature accionable, o cuando indicas un límite o interrumpes el proceso. En modo
+nocturno el reviewer aprueba los specs en tu lugar; por la mañana revisa los que
+tengan `"auto_approved"` y usa `/revisado`.
 
 | | Supervisado | Nocturno |
 |---|---|---|

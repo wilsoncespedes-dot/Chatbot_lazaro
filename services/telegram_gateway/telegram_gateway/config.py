@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from lazaro_contracts import DEFAULT_SIGNATURE_WINDOW_SECONDS
 from lazaro_contracts.production import (
     ProductionConfigError,
     is_valid_webhook_secret,
@@ -29,6 +30,8 @@ class Settings(BaseSettings):
     service_token: str = ""
     telegram_webhook_secret: str = ""
     telegram_bot_token: str = ""
+    database_url: str = ""
+    channel_secrets_key: SecretStr = SecretStr("")
     redis_url: str = "redis://redis:6379/0"
     orchestrator_url: str = "http://orchestrator:8000"
     dedup_ttl_seconds: int = 86400
@@ -58,6 +61,17 @@ class Settings(BaseSettings):
     whatsapp_template_language: str = "es"
     whatsapp_interactive_body_text: str = "Elige una opción:"
     whatsapp_window_hours: int = 24
+
+    # Webhook genérico firmado (#62)
+    webhook_signature_window_seconds: int = Field(
+        DEFAULT_SIGNATURE_WINDOW_SECONDS, ge=1, le=3600
+    )
+    webhook_max_body_bytes: int = Field(1_048_576, ge=1024, le=10_485_760)
+    webhook_allow_private_callbacks: bool = False
+
+    # Buzón del canal simulado (#63): solo pruebas, retención y tope por canal.
+    simulated_mailbox_retention_seconds: int = Field(3600, ge=60, le=86400)
+    simulated_mailbox_max_entries: int = Field(500, ge=10, le=5000)
 
     @field_validator("telegram_answer_callback_timeout_seconds")
     @classmethod
@@ -159,4 +173,10 @@ class Settings(BaseSettings):
             problems.append("TELEGRAM_WEBHOOK_SECRET")
         if problems:
             raise ProductionConfigError(problems)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_webhook_callbacks(self) -> "Settings":
+        if self.app_env == "production" and self.webhook_allow_private_callbacks:
+            raise ProductionConfigError(["WEBHOOK_ALLOW_PRIVATE_CALLBACKS"])
         return self

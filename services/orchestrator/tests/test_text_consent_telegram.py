@@ -12,7 +12,10 @@ from pydantic import ValidationError
 
 from orchestrator.adapters.repository import PostgresRepository
 from orchestrator.config import Settings
-from orchestrator.domain import ConversationState, process_channel_message
+from orchestrator.domain import (
+    ConversationState,
+    process_channel_message as _process_channel_message,
+)
 from orchestrator.privacy import (
     PRIVACY_ACCEPT_BUTTON,
     PRIVACY_REJECT_BUTTON,
@@ -20,6 +23,13 @@ from orchestrator.privacy import (
     matches_consent_phrase,
     notice_sha256,
 )
+
+from fakes import drain_queues
+
+
+def process_channel_message(message, settings, adapters):
+    _process_channel_message(message, settings, adapters)
+    drain_queues(settings, adapters)
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 RECEIVED_AT = "2026-01-02T03:04:00+00:00"
@@ -281,26 +291,12 @@ def test_telegram_notice_registers_challenge_with_version_hash_chat(env):
     assert challenge.external_chat_id == "100"
 
 
-class _TextOnlyGateway:
-    def __init__(self) -> None:
-        self.channel_sent: list[tuple[str, str, str]] = []
-
-    def send(self, chat_id: int, text: str) -> None:
-        self.channel_sent.append(("telegram", str(chat_id), text))
-
-    def send_channel(self, channel: str, destination: str, text: str) -> None:
-        self.channel_sent.append((channel, destination, text))
-
-
-def test_telegram_notice_registers_challenge_without_send_channel_blocks(env):
-    """R9: el desafío existe aunque el gateway no ofrezca bloques."""
-    gateway = _TextOnlyGateway()
-    env.adapters.gateway = gateway  # type: ignore[assignment]
-
+def test_telegram_notice_registers_challenge_and_enqueues_notice(env):
+    """R9: el desafío existe y el aviso se entrega por la cola de salida (#64)."""
     process_channel_message(_message("Hola"), env.settings, env.adapters)
 
     assert env.adapters.consent_challenges.get("telegram", "10") is not None
-    assert env.settings.privacy_notice_text in gateway.channel_sent[-1][2]
+    assert env.settings.privacy_notice_text in env.gateway.channel_sent[-1][2]
 
 
 # --- Aceptación por texto (R10, R12, R14-R17) --------------------------------
@@ -635,6 +631,7 @@ def test_redelivered_accept_message_is_duplicate(env):
     first = env.client.post(
         "/messages", json=body, headers={"X-Service-Token": SERVICE_TOKEN}
     )
+    drain_queues(env.settings, env.adapters)
     second = env.client.post(
         "/messages", json=body, headers={"X-Service-Token": SERVICE_TOKEN}
     )

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +24,20 @@ from orchestrator.domain import Adapters, ClientSession
 from orchestrator.main import create_app
 from orchestrator.privacy import ConversationTexts, consent_button_proof, notice_sha256
 
+_TESTS_DIR = str(Path(__file__).resolve().parent)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
+
+from fakes import default_channel_infos, drain_queues
+from orchestrator.adapters.channels import FakeChannelDirectory
+
 SERVICE_TOKEN = "svc-token"
+
+
+@pytest.fixture(autouse=True)
+def _channel_directory(monkeypatch):
+    """#65: los Adapters de prueba reciben el directorio con telegram/whatsapp/simulado."""
+    monkeypatch.setattr(FakeChannelDirectory, "default_infos", default_channel_infos())
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 RECEIVED_AT = "2026-01-02T03:04:00+00:00"
 
@@ -96,10 +111,12 @@ class Env:
             client = TestClient(
                 self.client.app, raise_server_exceptions=raise_server_exceptions
             )
-        return client.post(
+        response = client.post(
             "/messages", json=body,
             headers={"X-Service-Token": SERVICE_TOKEN} if headers is None else headers,
         )
+        drain_queues(self.settings, self.adapters)
+        return response
 
     def present(
         self,
@@ -117,11 +134,13 @@ class Env:
             "text": "Hola",
             "received_at": RECEIVED_AT,
         }
-        return self.client.post(
+        response = self.client.post(
             "/messages",
             json=body,
             headers={"X-Service-Token": SERVICE_TOKEN},
         )
+        drain_queues(self.settings, self.adapters)
+        return response
 
     def button_proof(
         self,
@@ -173,11 +192,13 @@ class Env:
             ),
             "received_at": RECEIVED_AT,
         }
-        return self.client.post(
+        response = self.client.post(
             "/messages",
             json=body,
             headers={"X-Service-Token": SERVICE_TOKEN},
         )
+        drain_queues(self.settings, self.adapters)
+        return response
 
     def events(self) -> list[tuple[str, str]]:
         return [(e.type, e.reason) for e in self.repo.events]

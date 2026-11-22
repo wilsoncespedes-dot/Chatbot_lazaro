@@ -8,6 +8,8 @@ import pytest
 
 from orchestrator.domain import _handover
 
+from fakes import drain_queues
+
 OUT_OF_HOURS = "Estamos fuera de horario; tu caso quedó en cola."
 
 
@@ -32,6 +34,7 @@ def test_out_of_hours_sends_configured_reply_event_and_keeps_case(env):
     )
     contact = _contact(env)
     assert _handover(contact, "user_request", env.settings, env.adapters) is True
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (100, OUT_OF_HOURS)
     assert ("out_of_hours", "queued") in env.events()
     assert env.repo.case_links
@@ -42,6 +45,7 @@ def test_out_of_hours_without_text_falls_back_to_current_ack(env):
     env.settings.business_hours_enabled = True
     contact = _contact(env)
     _handover(contact, "user_request", env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (100, env.settings.handover_ack_reply)
 
 
@@ -55,10 +59,12 @@ def test_within_business_hours_or_disabled_keeps_current_ack(env):
     )
     contact = _contact(env)
     _handover(contact, "user_request", env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (100, env.settings.handover_ack_reply)
     assert not [event for event in env.repo.events if event.type == "out_of_hours"]
 
     env.settings.business_hours_enabled = False
     _handover(contact, "user_request", env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert env.gateway.sent[-1] == (100, env.settings.handover_ack_reply)
     assert not [event for event in env.repo.events if event.type == "out_of_hours"]

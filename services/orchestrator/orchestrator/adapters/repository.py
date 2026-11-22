@@ -24,12 +24,22 @@ from ..domain import (
     ClientStatus,
     Contact,
     ConversationState,
+    DedupKey,
+    FailedSend,
+    InboundEntry,
+    InboundQueueRow,
+    OutboxEntry,
+    OutboxRow,
     Profile,
     SavedReply,
+    ServiceUnavailable,
     SummaryView,
     TemplateExists,
     UsernameTaken,
+    conversation_key,
+    destination_key,
 )
+from ..legacy import LEGACY_CHANNEL
 from ..memory import in_window, session_window
 from ..privacy import (
     ConversationTexts,
@@ -60,6 +70,50 @@ class Repository(Protocol):
     ) -> Contact: ...
 
     def add_message(self, contact_id: str, role: str, text: str, at: datetime) -> None: ...
+
+    # cola de entrada y outbox (#64)
+    def enqueue_inbound(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> bool: ...
+
+    def claim_inbound(
+        self, now: datetime, lease_seconds: float
+    ) -> InboundQueueRow | None: ...
+
+    def finish_inbound(self, row_id: int, now: datetime) -> None: ...
+
+    def retry_inbound(
+        self, row_id: int, next_attempt_at: datetime, error: str
+    ) -> None: ...
+
+    def fail_inbound(self, row_id: int, now: datetime, error: str) -> None: ...
+
+    def enqueue_outbound(self, entry: OutboxEntry) -> int: ...
+
+    def add_message_with_outbox(
+        self,
+        contact_id: str,
+        role: str,
+        text: str,
+        at: datetime,
+        entry: OutboxEntry,
+    ) -> None: ...
+
+    def claim_outbound(
+        self, now: datetime, lease_seconds: float
+    ) -> OutboxRow | None: ...
+
+    def finish_outbound(self, row_id: int, now: datetime) -> None: ...
+
+    def retry_outbound(
+        self, row_id: int, next_attempt_at: datetime, error: str
+    ) -> None: ...
+
+    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None: ...
+
+    def list_failed_outbound(self, limit: int) -> list[FailedSend]: ...
+
+    def requeue_outbound(self, row_id: int, now: datetime) -> str: ...
 
     def publish_panel_event(self, case_id: str, kind: str, at: datetime) -> None: ...
 
@@ -634,6 +688,7 @@ class StoredMessage:
     role: str
     text: str
     at: datetime
+    canal_id: str | None = None
 
 
 @dataclass
@@ -826,7 +881,7 @@ class PrivacyConsent:
     notice_version: str
     notice_sha256: str
     accepted_at: datetime | None
-    channel: str = "telegram"
+    channel: str = LEGACY_CHANNEL
     external_user_id: str = ""
     telegram_user_id: int | None = None
     result: str = "accepted"
@@ -843,9 +898,22 @@ def _telegram_value(value: str) -> int | None:
         return None
 
 
+def _blocks_json(blocks: Sequence) -> list:
+    """Serializa bloques del contrato a JSON apto para JSONB."""
+    result: list = []
+    for block in blocks:
+        if isinstance(block, dict):
+            result.append(block)
+        else:
+            result.append(block.model_dump(mode="json"))
+    return result
+
+
 class FakeRepository:
     def __init__(self) -> None:
         self.contacts: dict[object, Contact] = {}
+        # #65 R31: `canal_id` guardado al crear cada contacto.
+        self.contact_canal_ids: dict[str, str] = {}
         self.messages: list[StoredMessage] = []
         self.events: list[StoredEvent] = []
         self.processed: set[int] = set()
@@ -907,6 +975,14 @@ class FakeRepository:
         self.health_error: BaseException | None = None
         self.advisor_roster_generation = 0
         self.advisor_roster_status = "synced"
+        # cola de entrada y outbox (#64)
+        self.inbox: dict[int, dict[str, Any]] = {}
+        self.outbox: dict[int, dict[str, Any]] = {}
+        self._inbox_seq = 0
+        self._outbox_seq = 0
+        self._queue_lock = threading.Lock()
+        self.fail_inbox_insert = False
+        self.fail_outbox_insert = False
 
     def get_advisor_roster_state(self) -> tuple[int, str]:
         return self.advisor_roster_generation, self.advisor_roster_status
@@ -934,7 +1010,7 @@ class FakeRepository:
         """R5, R6: la clave es (canal, mensaje externo), no el id aislado."""
         with self._processed_lock:
             legacy_id: int | None = None
-            if channel == "telegram":
+            if channel == LEGACY_CHANNEL:
                 try:
                     legacy_id = int(external_message_id)
                 except ValueError:
@@ -951,14 +1027,328 @@ class FakeRepository:
         with self._processed_lock:
             if update_id in self.processed:
                 return False
-            if ("telegram", str(update_id)) in self.processed_messages:
+            if (LEGACY_CHANNEL, str(update_id)) in self.processed_messages:
                 return False
             self.processed.add(update_id)
             return True
 
+    # --- cola de entrada y outbox (#64) ----------------------------------
+    def _dedup_exists_locked(self, dedup: DedupKey) -> bool:
+        if dedup.kind == "message":
+            if (dedup.channel, dedup.external_message_id) in self.processed_messages:
+                return True
+            if dedup.channel == LEGACY_CHANNEL:
+                legacy = _telegram_value(dedup.external_message_id)
+                if legacy is not None and legacy in self.processed:
+                    return True
+            return False
+        if dedup.update_id in self.processed:
+            return True
+        return (LEGACY_CHANNEL, str(dedup.update_id)) in self.processed_messages
+
+    def _add_dedup_locked(self, dedup: DedupKey) -> None:
+        if dedup.kind == "message":
+            self.processed_messages.add((dedup.channel, dedup.external_message_id))
+        else:
+            self.processed.add(dedup.update_id)
+
+    def _remove_dedup_locked(self, dedup: DedupKey) -> None:
+        if dedup.kind == "message":
+            self.processed_messages.discard(
+                (dedup.channel, dedup.external_message_id)
+            )
+        else:
+            self.processed.discard(dedup.update_id)
+
+    def _insert_inbox_locked(self, entry: InboundEntry) -> int:
+        self._inbox_seq += 1
+        row_id = self._inbox_seq
+        self.inbox[row_id] = {
+            "id": row_id,
+            "conversation_key": entry.conversation_key,
+            "channel": entry.channel,
+            "external_user_id": entry.external_user_id,
+            "payload_kind": entry.payload_kind,
+            "payload": dict(entry.payload),
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": datetime.min.replace(tzinfo=timezone.utc),
+            "locked_until": None,
+            "last_error": None,
+            "created_at": datetime.now(timezone.utc),
+            "finished_at": None,
+        }
+        return row_id
+
+    def enqueue_inbound(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> bool:
+        """R1, R4, R5, R7: dedup + INSERT atómicos (o solo INSERT sin dedup)."""
+        with self._queue_lock:
+            added: DedupKey | None = None
+            if dedup is not None:
+                with self._processed_lock:
+                    if self._dedup_exists_locked(dedup):
+                        return False
+                    self._add_dedup_locked(dedup)
+                    added = dedup
+            if self.fail_inbox_insert:
+                if added is not None:
+                    with self._processed_lock:
+                        self._remove_dedup_locked(added)
+                raise ServiceUnavailable("inbox no disponible")
+            self._insert_inbox_locked(entry)
+            return True
+
+    def _claim_locked(
+        self,
+        rows: dict[int, dict[str, Any]],
+        key: str,
+        now: datetime,
+        lease_seconds: float,
+        pending: str,
+        active: str,
+        active_statuses: tuple[str, str],
+    ) -> dict[str, Any] | None:
+        eligible = [
+            row
+            for row in rows.values()
+            if (
+                row["status"] == pending
+                and row["next_attempt_at"] <= now
+            )
+            or (
+                row["status"] == active
+                and row["locked_until"] is not None
+                and row["locked_until"] < now
+            )
+        ]
+        eligible.sort(key=lambda row: row["id"])
+        for row in eligible:
+            if any(
+                other["id"] < row["id"]
+                and other[key] == row[key]
+                and other["status"] in active_statuses
+                for other in rows.values()
+            ):
+                continue
+            row["status"] = active
+            row["attempts"] += 1
+            row["locked_until"] = now + timedelta(seconds=lease_seconds)
+            return dict(row)
+        return None
+
+    def claim_inbound(
+        self, now: datetime, lease_seconds: float
+    ) -> InboundQueueRow | None:
+        with self._queue_lock:
+            row = self._claim_locked(
+                self.inbox,
+                "conversation_key",
+                now,
+                lease_seconds,
+                "pending",
+                "processing",
+                ("pending", "processing"),
+            )
+            if row is None:
+                return None
+            return InboundQueueRow(
+                id=row["id"],
+                conversation_key=row["conversation_key"],
+                channel=row["channel"],
+                payload_kind=row["payload_kind"],
+                payload=dict(row["payload"]),
+                attempts=row["attempts"],
+                created_at=row["created_at"],
+            )
+
+    def finish_inbound(self, row_id: int, now: datetime) -> None:
+        with self._queue_lock:
+            row = self.inbox.get(row_id)
+            if row is None:
+                return
+            row["status"] = "done"
+            row["payload"] = {}
+            row["finished_at"] = now
+            row["locked_until"] = None
+
+    def retry_inbound(
+        self, row_id: int, next_attempt_at: datetime, error: str
+    ) -> None:
+        with self._queue_lock:
+            row = self.inbox.get(row_id)
+            if row is None:
+                return
+            row["status"] = "pending"
+            row["next_attempt_at"] = next_attempt_at
+            row["last_error"] = error
+            row["locked_until"] = None
+
+    def fail_inbound(self, row_id: int, now: datetime, error: str) -> None:
+        with self._queue_lock:
+            row = self.inbox.get(row_id)
+            if row is None:
+                return
+            row["status"] = "failed"
+            row["payload"] = {}
+            row["last_error"] = error
+            row["finished_at"] = now
+            row["locked_until"] = None
+
+    def _insert_outbox_locked(self, entry: OutboxEntry) -> int:
+        self._outbox_seq += 1
+        row_id = self._outbox_seq
+        now = datetime.now(timezone.utc)
+        self.outbox[row_id] = {
+            "id": row_id,
+            "contact_id": entry.contact_id,
+            "destination_key": entry.destination_key,
+            "channel": entry.channel,
+            "destination": entry.destination,
+            "kind": entry.kind,
+            "blocks": _blocks_json(entry.blocks),
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": datetime.min.replace(tzinfo=timezone.utc),
+            "locked_until": None,
+            "last_error": None,
+            "created_at": now,
+            "finished_at": None,
+        }
+        return row_id
+
+    def enqueue_outbound(self, entry: OutboxEntry) -> int:
+        with self._queue_lock:
+            if self.fail_outbox_insert:
+                raise ServiceUnavailable("outbox no disponible")
+            return self._insert_outbox_locked(entry)
+
+    def add_message_with_outbox(
+        self,
+        contact_id: str,
+        role: str,
+        text: str,
+        at: datetime,
+        entry: OutboxEntry,
+    ) -> None:
+        """R17, R18, R20: mensaje y salida en una sola transacción."""
+        with self._queue_lock:
+            if self.fail_outbox_insert:
+                raise ServiceUnavailable("outbox no disponible")
+            self.messages.append(
+                StoredMessage(contact_id, role, text, at, self._canal_id_of(contact_id))
+            )
+            try:
+                self._insert_outbox_locked(entry)
+            except Exception:
+                self.messages.pop()
+                raise
+            case_id = (
+                self.latest_case_for_contact(contact_id)
+                if role in PANEL_MESSAGE_ROLES
+                else None
+            )
+        if case_id is None:
+            return
+        try:
+            self.publish_panel_event(case_id, "message", at)
+        except Exception:
+            return
+
+    def claim_outbound(
+        self, now: datetime, lease_seconds: float
+    ) -> OutboxRow | None:
+        with self._queue_lock:
+            row = self._claim_locked(
+                self.outbox,
+                "destination_key",
+                now,
+                lease_seconds,
+                "pending",
+                "sending",
+                ("pending", "sending"),
+            )
+            if row is None:
+                return None
+            return OutboxRow(
+                id=row["id"],
+                destination_key=row["destination_key"],
+                channel=row["channel"],
+                destination=row["destination"],
+                blocks=list(row["blocks"]),
+                attempts=row["attempts"],
+                created_at=row["created_at"],
+            )
+
+    def finish_outbound(self, row_id: int, now: datetime) -> None:
+        with self._queue_lock:
+            row = self.outbox.get(row_id)
+            if row is None:
+                return
+            row["status"] = "sent"
+            row["blocks"] = []
+            row["finished_at"] = now
+            row["locked_until"] = None
+
+    def retry_outbound(
+        self, row_id: int, next_attempt_at: datetime, error: str
+    ) -> None:
+        with self._queue_lock:
+            row = self.outbox.get(row_id)
+            if row is None:
+                return
+            row["status"] = "pending"
+            row["next_attempt_at"] = next_attempt_at
+            row["last_error"] = error
+            row["locked_until"] = None
+
+    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None:
+        with self._queue_lock:
+            row = self.outbox.get(row_id)
+            if row is None:
+                return
+            row["status"] = "failed"
+            row["last_error"] = error
+            row["finished_at"] = now
+            row["locked_until"] = None
+
+    def list_failed_outbound(self, limit: int) -> list[FailedSend]:
+        rows = [
+            row for row in self.outbox.values() if row["status"] == "failed"
+        ]
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        return [
+            FailedSend(
+                id=row["id"],
+                channel=row["channel"],
+                destination=row["destination"],
+                kind=row["kind"],
+                attempts=row["attempts"],
+                last_error=row["last_error"],
+                created_at=row["created_at"],
+            )
+            for row in rows[:limit]
+        ]
+
+    def requeue_outbound(self, row_id: int, now: datetime) -> str:
+        with self._queue_lock:
+            row = self.outbox.get(row_id)
+            if row is None:
+                return "not_found"
+            if row["status"] != "failed":
+                return "not_failed"
+            row["status"] = "pending"
+            row["attempts"] = 0
+            row["next_attempt_at"] = now
+            row["last_error"] = None
+            row["locked_until"] = None
+            row["finished_at"] = None
+            return "ok"
+
     def _contact_key(self, channel: str, external_user_id: str) -> object:
         """Clave interna de `contacts`; Telegram conserva la clave entera histórica."""
-        if channel == "telegram":
+        if channel == LEGACY_CHANNEL:
             legacy = _telegram_value(external_user_id)
             if legacy is not None:
                 return legacy
@@ -966,7 +1356,7 @@ class FakeRepository:
 
     def get_or_create_contact(self, telegram_user_id: int, chat_id: int, now: datetime) -> Contact:
         return self.get_or_create_channel_contact(
-            "telegram", str(telegram_user_id), str(chat_id), now
+            LEGACY_CHANNEL, str(telegram_user_id), str(chat_id), now
         )
 
     def get_or_create_channel_contact(
@@ -976,10 +1366,10 @@ class FakeRepository:
         contact = self.contacts.get(key)
         if contact is None:
             telegram_user_id = (
-                _telegram_value(external_user_id) if channel == "telegram" else None
+                _telegram_value(external_user_id) if channel == LEGACY_CHANNEL else None
             )
             chat_id = (
-                _telegram_value(external_chat_id) if channel == "telegram" else None
+                _telegram_value(external_chat_id) if channel == LEGACY_CHANNEL else None
             )
             contact = Contact(
                 id=f"c{len(self.contacts) + 1}",
@@ -991,10 +1381,22 @@ class FakeRepository:
             )
             self.contacts[key] = contact
             self.contact_created_at[contact.id] = now
+            self.contact_canal_ids[contact.id] = channel
         return contact
 
+    def _canal_id_of(self, contact_id: str) -> str | None:
+        """#65 R32: `canal_id` del mensaje = canal de su contacto."""
+        if contact_id in self.contact_canal_ids:
+            return self.contact_canal_ids[contact_id]
+        for contact in self.contacts.values():
+            if contact.id == contact_id:
+                return contact.channel
+        return None
+
     def add_message(self, contact_id: str, role: str, text: str, at: datetime) -> None:
-        self.messages.append(StoredMessage(contact_id, role, text, at))
+        self.messages.append(
+            StoredMessage(contact_id, role, text, at, self._canal_id_of(contact_id))
+        )
         if role not in PANEL_MESSAGE_ROLES:
             return
         case_id = self.latest_case_for_contact(contact_id)
@@ -1727,7 +2129,7 @@ class FakeRepository:
 
     def has_privacy_consent(self, telegram_user_id: int, notice_version: str) -> bool:
         return self.has_channel_privacy_consent(
-            "telegram", str(telegram_user_id), notice_version
+            LEGACY_CHANNEL, str(telegram_user_id), notice_version
         )
 
     def has_channel_privacy_consent(
@@ -1751,7 +2153,7 @@ class FakeRepository:
         accepted_at: datetime,
     ) -> None:
         self.add_channel_privacy_consent(
-            "telegram",
+            LEGACY_CHANNEL,
             str(telegram_user_id),
             notice_version,
             notice_sha256,
@@ -1769,7 +2171,7 @@ class FakeRepository:
         if self.fail_privacy_consent:
             raise RuntimeError("consentimiento no disponible")
         telegram_user_id = (
-            _telegram_value(external_user_id) if channel == "telegram" else None
+            _telegram_value(external_user_id) if channel == LEGACY_CHANNEL else None
         )
         self.privacy_consents.append(
             PrivacyConsent(
@@ -1800,7 +2202,7 @@ class FakeRepository:
         if self.fail_privacy_consent:
             raise RuntimeError("consentimiento no disponible")
         telegram_user_id = (
-            _telegram_value(external_user_id) if channel == "telegram" else None
+            _telegram_value(external_user_id) if channel == LEGACY_CHANNEL else None
         )
         self.privacy_consents.append(
             PrivacyConsent(
@@ -1845,6 +2247,22 @@ class FakeRepository:
         self.messages = [
             message for message in self.messages if message.contact_id != contact_id
         ]
+        # R39: borra las colas del contacto por conversación, contact_id y destino.
+        key = conversation_key(channel, external_user_id)
+        destinations = {destination_key(channel, contact.external_chat_id)}
+        if contact.chat_id is not None:
+            destinations.add(destination_key(channel, str(contact.chat_id)))
+        self.inbox = {
+            row_id: row
+            for row_id, row in self.inbox.items()
+            if row["conversation_key"] != key
+        }
+        self.outbox = {
+            row_id: row
+            for row_id, row in self.outbox.items()
+            if row["contact_id"] != contact_id
+            and row["destination_key"] not in destinations
+        }
         self.events = [
             event for event in self.events if event.contact_id != contact_id
         ]
@@ -2035,6 +2453,22 @@ class FakeRepository:
         deleted_consents = len(self.privacy_consents) - len(kept_consents)
         self.privacy_consents = kept_consents
 
+        kept_inbox = {
+            row_id: row
+            for row_id, row in self.inbox.items()
+            if row["created_at"] >= cutoff
+        }
+        deleted_inbox = len(self.inbox) - len(kept_inbox)
+        self.inbox = kept_inbox
+
+        kept_outbox = {
+            row_id: row
+            for row_id, row in self.outbox.items()
+            if row["created_at"] >= cutoff
+        }
+        deleted_outbox = len(self.outbox) - len(kept_outbox)
+        self.outbox = kept_outbox
+
         counts = {
             "messages": deleted_messages,
             "events": deleted_events,
@@ -2046,6 +2480,8 @@ class FakeRepository:
             "conversation_summaries": len(expired_summaries),
             "case_notes": len(expired_notes),
             "privacy_consents": deleted_consents,
+            "inbox": deleted_inbox,
+            "outbox": deleted_outbox,
         }
         self.privacy_purge_runs.append(
             {"ran_at": ran_at, "cutoff": cutoff, "counts": dict(counts)}
@@ -3085,6 +3521,21 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS panel_events ("
     "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, "
     "created_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS inbox ("
+    "id BIGSERIAL PRIMARY KEY, conversation_key TEXT NOT NULL, "
+    "channel TEXT NOT NULL, external_user_id TEXT NOT NULL, "
+    "payload_kind TEXT NOT NULL, payload JSONB NOT NULL, "
+    "status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
+    "next_attempt_at TIMESTAMPTZ NOT NULL, locked_until TIMESTAMPTZ NULL, "
+    "last_error TEXT NULL, created_at TIMESTAMPTZ NOT NULL, "
+    "finished_at TIMESTAMPTZ NULL)",
+    "CREATE TABLE IF NOT EXISTS outbox ("
+    "id BIGSERIAL PRIMARY KEY, contact_id TEXT NULL, destination_key TEXT NOT NULL, "
+    "channel TEXT NOT NULL, destination TEXT NOT NULL, kind TEXT NOT NULL, "
+    "blocks JSONB NOT NULL, status TEXT NOT NULL, "
+    "attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL, "
+    "locked_until TIMESTAMPTZ NULL, last_error TEXT NULL, "
+    "created_at TIMESTAMPTZ NOT NULL, finished_at TIMESTAMPTZ NULL)",
 )
 
 _INDEXES = (
@@ -3129,6 +3580,10 @@ _INDEXES = (
     "ON panel_events (created_at)",
     "CREATE INDEX IF NOT EXISTS staff_recovery_codes_profile "
     "ON staff_recovery_codes (profile_id)",
+    "CREATE INDEX IF NOT EXISTS inbox_conversation ON inbox (conversation_key, id)",
+    "CREATE INDEX IF NOT EXISTS inbox_created ON inbox (created_at)",
+    "CREATE INDEX IF NOT EXISTS outbox_destination ON outbox (destination_key, id)",
+    "CREATE INDEX IF NOT EXISTS outbox_status ON outbox (status, created_at)",
 )
 
 # Migración aditiva e idempotente para instalaciones anteriores a #36. Se ejecuta
@@ -3139,7 +3594,7 @@ _MIGRATIONS = (
     "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS external_chat_id TEXT",
     "ALTER TABLE contacts ALTER COLUMN telegram_user_id DROP NOT NULL",
     "ALTER TABLE contacts ALTER COLUMN chat_id DROP NOT NULL",
-    "UPDATE contacts SET channel = 'telegram' WHERE channel IS NULL",
+    f"UPDATE contacts SET channel = '{LEGACY_CHANNEL}' WHERE channel IS NULL",
     "UPDATE contacts SET external_user_id = CAST(telegram_user_id AS TEXT) "
     "WHERE external_user_id IS NULL AND telegram_user_id IS NOT NULL",
     "UPDATE contacts SET external_chat_id = CAST(chat_id AS TEXT) "
@@ -3149,7 +3604,7 @@ _MIGRATIONS = (
     "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS channel TEXT",
     "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS external_user_id TEXT",
     "ALTER TABLE privacy_consents ALTER COLUMN telegram_user_id DROP NOT NULL",
-    "UPDATE privacy_consents SET channel = 'telegram' WHERE channel IS NULL",
+    f"UPDATE privacy_consents SET channel = '{LEGACY_CHANNEL}' WHERE channel IS NULL",
     "UPDATE privacy_consents SET external_user_id = CAST(telegram_user_id AS TEXT) "
     "WHERE external_user_id IS NULL AND telegram_user_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS privacy_consents_channel_user_version "
@@ -3175,6 +3630,14 @@ _MIGRATIONS = (
     # segundo factor del panel (#54)
     "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS enroll_only "
     "BOOLEAN NOT NULL DEFAULT FALSE",
+    # #65: id de canal explícito en contactos y mensajes; se escribe en paralelo a
+    # `contacts.channel` (que sigue siendo la fuente de lectura). Idempotente.
+    "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS canal_id TEXT",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS canal_id TEXT",
+    "UPDATE contacts SET canal_id = channel WHERE canal_id IS NULL",
+    "UPDATE messages SET canal_id = c.channel FROM contacts c "
+    "WHERE messages.contact_id = c.id AND messages.canal_id IS NULL",
+    "CREATE INDEX IF NOT EXISTS messages_canal_id ON messages (canal_id)",
 )
 
 
@@ -3349,7 +3812,7 @@ class PostgresRepository:
         añaden consultas a operaciones no relacionadas.
         """
         legacy_update_id: int | None = None
-        if channel == "telegram":
+        if channel == LEGACY_CHANNEL:
             try:
                 legacy_update_id = int(external_message_id)
             except ValueError:
@@ -3381,9 +3844,307 @@ class PostgresRepository:
             "WHERE channel = %s AND external_message_id = %s"
             ") ON CONFLICT DO NOTHING RETURNING update_id"
         )
-        params = (update_id, "telegram", str(update_id))
+        params = (update_id, LEGACY_CHANNEL, str(update_id))
         rows = self._run(sql, params, fetch=True)
         return bool(rows)
+
+    # --- cola de entrada y outbox (#64) ----------------------------------
+    def _mark_dedup_cursor(self, cur: Any, dedup: DedupKey) -> bool:
+        if dedup.kind == "message":
+            legacy_update_id = (
+                _telegram_value(dedup.external_message_id)
+                if dedup.channel == LEGACY_CHANNEL
+                else None
+            )
+            if legacy_update_id is None:
+                cur.execute(
+                    "INSERT INTO processed_messages "
+                    "(channel, external_message_id) VALUES (%s, %s) "
+                    "ON CONFLICT DO NOTHING RETURNING external_message_id",
+                    (dedup.channel, dedup.external_message_id),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO processed_messages (channel, external_message_id) "
+                    "SELECT %s, %s WHERE NOT EXISTS ("
+                    "SELECT 1 FROM processed_updates WHERE update_id = %s"
+                    ") ON CONFLICT DO NOTHING RETURNING external_message_id",
+                    (dedup.channel, dedup.external_message_id, legacy_update_id),
+                )
+            return bool(cur.fetchall())
+        cur.execute(
+            "INSERT INTO processed_updates (update_id) "
+            "SELECT %s WHERE NOT EXISTS ("
+            "SELECT 1 FROM processed_messages "
+            "WHERE channel = %s AND external_message_id = %s"
+            ") ON CONFLICT DO NOTHING RETURNING update_id",
+            (dedup.update_id, LEGACY_CHANNEL, str(dedup.update_id)),
+        )
+        return bool(cur.fetchall())
+
+    def enqueue_inbound(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> bool:
+        """R1, R4, R5, R7: marca de dedup e INSERT de inbox en una transacción."""
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                if dedup is not None and not self._mark_dedup_cursor(cur, dedup):
+                    conn.rollback()
+                    return False
+                cur.execute(
+                    "INSERT INTO inbox (conversation_key, channel, "
+                    "external_user_id, payload_kind, payload, status, attempts, "
+                    "next_attempt_at, created_at) "
+                    "VALUES (%s, %s, %s, %s, CAST(%s AS JSONB), 'pending', 0, "
+                    "%s, %s)",
+                    (
+                        entry.conversation_key,
+                        entry.channel,
+                        entry.external_user_id,
+                        entry.payload_kind,
+                        json.dumps(entry.payload),
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                return True
+            except Exception as exc:
+                conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def claim_inbound(
+        self, now: datetime, lease_seconds: float
+    ) -> InboundQueueRow | None:
+        locked_until = now + timedelta(seconds=lease_seconds)
+        sql = (
+            "UPDATE inbox SET status = 'processing', attempts = attempts + 1, "
+            "locked_until = %s WHERE id = ("
+            "SELECT i.id FROM inbox i WHERE (("
+            "i.status = 'pending' AND i.next_attempt_at <= %s) OR ("
+            "i.status = 'processing' AND i.locked_until < %s)) "
+            "AND NOT EXISTS (SELECT 1 FROM inbox e "
+            "WHERE e.conversation_key = i.conversation_key AND e.id < i.id "
+            "AND e.status IN ('pending', 'processing')) "
+            "ORDER BY i.id FOR UPDATE SKIP LOCKED LIMIT 1) "
+            "RETURNING id, conversation_key, channel, payload_kind, payload, "
+            "attempts, created_at"
+        )
+        rows = self._run(sql, (locked_until, now, now), fetch=True)
+        if not rows:
+            return None
+        row = rows[0]
+        payload = row[4]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return InboundQueueRow(
+            id=row[0],
+            conversation_key=row[1],
+            channel=row[2],
+            payload_kind=row[3],
+            payload=payload or {},
+            attempts=row[5],
+            created_at=row[6],
+        )
+
+    def finish_inbound(self, row_id: int, now: datetime) -> None:
+        self._run(
+            "UPDATE inbox SET status = 'done', payload = '{}'::jsonb, "
+            "finished_at = %s, locked_until = NULL, last_error = NULL "
+            "WHERE id = %s",
+            (now, row_id),
+        )
+
+    def retry_inbound(
+        self, row_id: int, next_attempt_at: datetime, error: str
+    ) -> None:
+        self._run(
+            "UPDATE inbox SET status = 'pending', next_attempt_at = %s, "
+            "last_error = %s, locked_until = NULL WHERE id = %s",
+            (next_attempt_at, error, row_id),
+        )
+
+    def fail_inbound(self, row_id: int, now: datetime, error: str) -> None:
+        self._run(
+            "UPDATE inbox SET status = 'failed', payload = '{}'::jsonb, "
+            "last_error = %s, finished_at = %s, locked_until = NULL WHERE id = %s",
+            (error, now, row_id),
+        )
+
+    def _insert_outbox_cursor(self, cur: Any, entry: OutboxEntry, at: datetime) -> int:
+        cur.execute(
+            "INSERT INTO outbox (contact_id, destination_key, channel, "
+            "destination, kind, blocks, status, attempts, next_attempt_at, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, CAST(%s AS JSONB), "
+            "'pending', 0, %s, %s) RETURNING id",
+            (
+                entry.contact_id,
+                entry.destination_key,
+                entry.channel,
+                entry.destination,
+                entry.kind,
+                json.dumps(_blocks_json(entry.blocks)),
+                at,
+                at,
+            ),
+        )
+        return cur.fetchall()[0][0]
+
+    def enqueue_outbound(self, entry: OutboxEntry) -> int:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                row_id = self._insert_outbox_cursor(cur, entry, now)
+                conn.commit()
+                return row_id
+            except Exception as exc:
+                conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def add_message_with_outbox(
+        self,
+        contact_id: str,
+        role: str,
+        text: str,
+        at: datetime,
+        entry: OutboxEntry,
+    ) -> None:
+        """R17, R18, R20: mensaje y salida en la misma transacción."""
+        message_sql = (
+            "INSERT INTO messages (contact_id, role, text, at, canal_id) "
+            "VALUES (%s, %s, %s, %s, (SELECT channel FROM contacts WHERE id = %s))"
+        )
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(message_sql, (contact_id, role, text, at, contact_id))
+                self._insert_outbox_cursor(cur, entry, at)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+        if role not in PANEL_MESSAGE_ROLES:
+            return
+        try:
+            self._run(
+                "INSERT INTO panel_events (case_id, kind, created_at) "
+                "SELECT case_id, %s, %s FROM case_links "
+                "WHERE contact_id = %s ORDER BY created_at DESC, case_id DESC LIMIT 1",
+                ("message", at, contact_id),
+            )
+            self.delete_panel_events_before(
+                at - timedelta(hours=self._panel_events_retention_hours)
+            )
+        except Exception:
+            logger.error("panel_event_publish_failed kind=message")
+
+    def claim_outbound(
+        self, now: datetime, lease_seconds: float
+    ) -> OutboxRow | None:
+        locked_until = now + timedelta(seconds=lease_seconds)
+        sql = (
+            "UPDATE outbox SET status = 'sending', attempts = attempts + 1, "
+            "locked_until = %s WHERE id = ("
+            "SELECT o.id FROM outbox o WHERE (("
+            "o.status = 'pending' AND o.next_attempt_at <= %s) OR ("
+            "o.status = 'sending' AND o.locked_until < %s)) "
+            "AND NOT EXISTS (SELECT 1 FROM outbox e "
+            "WHERE e.destination_key = o.destination_key AND e.id < o.id "
+            "AND e.status IN ('pending', 'sending')) "
+            "ORDER BY o.id FOR UPDATE SKIP LOCKED LIMIT 1) "
+            "RETURNING id, destination_key, channel, destination, blocks, "
+            "attempts, created_at"
+        )
+        rows = self._run(sql, (locked_until, now, now), fetch=True)
+        if not rows:
+            return None
+        row = rows[0]
+        blocks = row[4]
+        if isinstance(blocks, str):
+            blocks = json.loads(blocks)
+        return OutboxRow(
+            id=row[0],
+            destination_key=row[1],
+            channel=row[2],
+            destination=row[3],
+            blocks=blocks or [],
+            attempts=row[5],
+            created_at=row[6],
+        )
+
+    def finish_outbound(self, row_id: int, now: datetime) -> None:
+        self._run(
+            "UPDATE outbox SET status = 'sent', blocks = '[]'::jsonb, "
+            "finished_at = %s, locked_until = NULL WHERE id = %s",
+            (now, row_id),
+        )
+
+    def retry_outbound(
+        self, row_id: int, next_attempt_at: datetime, error: str
+    ) -> None:
+        self._run(
+            "UPDATE outbox SET status = 'pending', next_attempt_at = %s, "
+            "last_error = %s, locked_until = NULL WHERE id = %s",
+            (next_attempt_at, error, row_id),
+        )
+
+    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None:
+        self._run(
+            "UPDATE outbox SET status = 'failed', last_error = %s, "
+            "finished_at = %s, locked_until = NULL WHERE id = %s",
+            (error, now, row_id),
+        )
+
+    def list_failed_outbound(self, limit: int) -> list[FailedSend]:
+        rows = self._run(
+            "SELECT id, channel, destination, kind, attempts, last_error, "
+            "created_at FROM outbox WHERE status = 'failed' "
+            "ORDER BY created_at DESC, id DESC LIMIT %s",
+            (limit,),
+            fetch=True,
+        )
+        return [
+            FailedSend(
+                id=row[0],
+                channel=row[1],
+                destination=row[2],
+                kind=row[3],
+                attempts=row[4],
+                last_error=row[5],
+                created_at=row[6],
+            )
+            for row in rows
+        ]
+
+    def requeue_outbound(self, row_id: int, now: datetime) -> str:
+        rows = self._run(
+            "SELECT status FROM outbox WHERE id = %s", (row_id,), fetch=True
+        )
+        if not rows:
+            return "not_found"
+        if rows[0][0] != "failed":
+            return "not_failed"
+        updated = self._run(
+            "UPDATE outbox SET status = 'pending', attempts = 0, "
+            "next_attempt_at = %s, last_error = NULL, locked_until = NULL, "
+            "finished_at = NULL WHERE id = %s AND status = 'failed' "
+            "RETURNING id",
+            (now, row_id),
+            fetch=True,
+        )
+        return "ok" if updated else "not_failed"
 
     def get_or_create_contact(
         self, telegram_user_id: int, chat_id: int, now: datetime
@@ -3391,17 +4152,18 @@ class PostgresRepository:
         self._run(
             "INSERT INTO contacts "
             "(id, channel, external_user_id, external_chat_id, telegram_user_id, "
-            "chat_id, created_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "chat_id, created_at, canal_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (telegram_user_id) DO NOTHING",
             (
                 self._new_id(),
-                "telegram",
+                LEGACY_CHANNEL,
                 str(telegram_user_id),
                 str(chat_id),
                 telegram_user_id,
                 chat_id,
                 now,
+                LEGACY_CHANNEL,
             ),
         )
         rows = self._run(
@@ -3413,7 +4175,7 @@ class PostgresRepository:
         row = rows[0]
         return Contact(
             id=row[0],
-            channel="telegram",
+            channel=LEGACY_CHANNEL,
             external_user_id=str(row[1]),
             external_chat_id=str(row[2]),
             telegram_user_id=row[1],
@@ -3428,16 +4190,16 @@ class PostgresRepository:
         now: datetime,
     ) -> Contact:
         telegram_user_id = (
-            _telegram_value(external_user_id) if channel == "telegram" else None
+            _telegram_value(external_user_id) if channel == LEGACY_CHANNEL else None
         )
         chat_id = (
-            _telegram_value(external_chat_id) if channel == "telegram" else None
+            _telegram_value(external_chat_id) if channel == LEGACY_CHANNEL else None
         )
         self._run(
             "INSERT INTO contacts "
             "(id, channel, external_user_id, external_chat_id, telegram_user_id, "
-            "chat_id, created_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "chat_id, created_at, canal_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (channel, external_user_id) DO NOTHING",
             (
                 self._new_id(),
@@ -3447,6 +4209,7 @@ class PostgresRepository:
                 telegram_user_id,
                 chat_id,
                 now,
+                channel,
             ),
         )
         rows = self._run(
@@ -3470,14 +4233,14 @@ class PostgresRepository:
         params = (contact_id, role, text, at)
         if role not in PANEL_MESSAGE_ROLES:
             self._run(
-                "INSERT INTO messages (contact_id, role, text, at) "
-                "VALUES (%s, %s, %s, %s)",
-                params,
+                "INSERT INTO messages (contact_id, role, text, at, canal_id) "
+                "VALUES (%s, %s, %s, %s, (SELECT channel FROM contacts WHERE id = %s))",
+                params + (contact_id,),
             )
             return
         message_sql = (
-            "INSERT INTO messages (contact_id, role, text, at) "
-            "VALUES (%s, %s, %s, %s)"
+            "INSERT INTO messages (contact_id, role, text, at, canal_id) "
+            "VALUES (%s, %s, %s, %s, (SELECT channel FROM contacts WHERE id = %s))"
         )
         event_sql = (
             "INSERT INTO panel_events (case_id, kind, created_at) "
@@ -3490,7 +4253,7 @@ class PostgresRepository:
             conn = self._connection()
             cur = conn.cursor()
             try:
-                cur.execute(message_sql, params)
+                cur.execute(message_sql, params + (contact_id,))
                 cur.execute(event_sql, ("message", at, contact_id))
                 cur.execute(purge_sql, (retention_at,))
                 conn.commit()
@@ -4461,7 +5224,7 @@ class PostgresRepository:
 
     def has_privacy_consent(self, telegram_user_id: int, notice_version: str) -> bool:
         return self.has_channel_privacy_consent(
-            "telegram", str(telegram_user_id), notice_version
+            LEGACY_CHANNEL, str(telegram_user_id), notice_version
         )
 
     def has_channel_privacy_consent(
@@ -4485,7 +5248,7 @@ class PostgresRepository:
         accepted_at: datetime,
     ) -> None:
         self.add_channel_privacy_consent(
-            "telegram",
+            LEGACY_CHANNEL,
             str(telegram_user_id),
             notice_version,
             notice_sha256,
@@ -4524,7 +5287,7 @@ class PostgresRepository:
         evidence_type: str = "button",
     ) -> None:
         telegram_user_id = (
-            _telegram_value(external_user_id) if channel == "telegram" else None
+            _telegram_value(external_user_id) if channel == LEGACY_CHANNEL else None
         )
         self._run(
             "INSERT INTO privacy_consents "
@@ -4590,14 +5353,30 @@ class PostgresRepository:
             cur = conn.cursor()
             try:
                 cur.execute(
-                    "SELECT id FROM contacts WHERE channel = %s AND external_user_id = %s",
+                    "SELECT id, external_chat_id, chat_id FROM contacts "
+                    "WHERE channel = %s AND external_user_id = %s",
                     (channel, external_user_id),
                 )
                 rows = list(cur.fetchall())
                 if not rows:
                     conn.commit()
                     return
-                contact_id = rows[0][0]
+                contact_id, external_chat_id, chat_id = rows[0]
+                # R39: borra las colas del contacto por conversación, id y destino.
+                cur.execute(
+                    "DELETE FROM inbox WHERE conversation_key = %s",
+                    (conversation_key(channel, external_user_id),),
+                )
+                destinations = {
+                    destination_key(channel, str(external_chat_id or ""))
+                }
+                if chat_id is not None:
+                    destinations.add(destination_key(channel, str(chat_id)))
+                cur.execute(
+                    "DELETE FROM outbox WHERE contact_id = %s "
+                    "OR destination_key = ANY(%s)",
+                    (contact_id, list(destinations)),
+                )
                 cur.execute("DELETE FROM messages WHERE contact_id = %s", (contact_id,))
                 cur.execute("DELETE FROM events WHERE contact_id = %s", (contact_id,))
                 cur.execute(
@@ -5319,6 +6098,17 @@ class PostgresRepository:
                 )
                 deleted_consents = len(cur.fetchall())
 
+                cur.execute(
+                    "DELETE FROM inbox WHERE created_at < %s RETURNING id",
+                    (cutoff,),
+                )
+                deleted_inbox = len(cur.fetchall())
+                cur.execute(
+                    "DELETE FROM outbox WHERE created_at < %s RETURNING id",
+                    (cutoff,),
+                )
+                deleted_outbox = len(cur.fetchall())
+
                 counts = {
                     "messages": deleted_messages,
                     "events": deleted_events,
@@ -5330,6 +6120,8 @@ class PostgresRepository:
                     "conversation_summaries": deleted_summaries,
                     "case_notes": deleted_notes,
                     "privacy_consents": deleted_consents,
+                    "inbox": deleted_inbox,
+                    "outbox": deleted_outbox,
                 }
                 cur.execute(
                     "INSERT INTO privacy_purge_runs (ran_at, cutoff, counts) "

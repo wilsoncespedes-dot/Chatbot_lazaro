@@ -10,7 +10,7 @@ from lazaro_contracts.production import (
     parse_app_env,
     production_problems,
 )
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .privacy import normalize_privacy_text
@@ -267,7 +267,11 @@ class Settings(BaseSettings):
     identity_logout_commands: str = "/salir,cerrar sesion,cerrar sesión"
     password_scrypt_n: int = Field(default=32768, ge=16384)
     # panel de asesores multicanal (#41)
+    # Horas de ventana de texto libre de los canales con ventana (#65); conserva
+    # el nombre histórico para no tocar los .env desplegados.
     whatsapp_window_hours: int = Field(default=24, ge=1, le=24)
+    # #65: segundos que se reutiliza la copia de GET /channels del gateway.
+    channel_directory_ttl_seconds: float = Field(default=30, ge=1, le=3600)
     advisor_whatsapp_templates: str = "respuesta_asesor"
     advisor_return_reply: str = Field(
         default=(
@@ -319,6 +323,15 @@ class Settings(BaseSettings):
     saved_reply_title_max_chars: int = Field(default=80, ge=1, le=200)
     saved_reply_text_max_chars: int = Field(default=1000, ge=1, le=4096)
     saved_replies_max: int = Field(default=100, ge=1, le=500)
+    # cola de entrada y outbox (#64)
+    inbox_max_attempts: int = 3
+    inbox_backoff_base_seconds: float = 5
+    outbox_max_attempts: int = 6
+    outbox_backoff_base_seconds: float = 2
+    outbox_backoff_max_seconds: float = 300
+    outbox_backoff_jitter: float = 0.2
+    worker_poll_seconds: float = 1
+    worker_lease_seconds: float = 120
 
     @field_validator("business_hours_start", "business_hours_end")
     @classmethod
@@ -369,6 +382,33 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AUTO_HANDOVER_FAILURE_THRESHOLD debe ser un entero >= 1"
             )
+        return value
+
+    @field_validator("inbox_max_attempts", "outbox_max_attempts")
+    @classmethod
+    def _validate_worker_attempts(cls, value: int, info: ValidationInfo) -> int:
+        if value < 1:
+            raise ValueError(f"{info.field_name.upper()} debe ser un entero >= 1")
+        return value
+
+    @field_validator(
+        "inbox_backoff_base_seconds",
+        "outbox_backoff_base_seconds",
+        "outbox_backoff_max_seconds",
+        "worker_poll_seconds",
+        "worker_lease_seconds",
+    )
+    @classmethod
+    def _validate_worker_seconds(cls, value: float, info: ValidationInfo) -> float:
+        if value <= 0:
+            raise ValueError(f"{info.field_name.upper()} debe ser mayor que 0")
+        return value
+
+    @field_validator("outbox_backoff_jitter")
+    @classmethod
+    def _validate_worker_jitter(cls, value: float) -> float:
+        if value < 0 or value > 1:
+            raise ValueError("OUTBOX_BACKOFF_JITTER debe estar entre 0 y 1")
         return value
 
     @field_validator("auto_handover_failure_reasons")

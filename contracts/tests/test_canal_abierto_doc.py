@@ -248,22 +248,30 @@ def test_authentication_lists_generic_webhook():
     assert "`X-Lazaro-Signature`" in section
 
 
-def test_send_and_messages_document_temporary_rejections():
-    """R37: canal no atendido, bloque image sin capacidad y outbound se rechazan."""
+def test_send_and_messages_document_channel_registry_behaviors():
+    """R37: /send usa el registro; POST /messages conserva su rechazo temporal."""
     variant = _section(_base(), "Variante canónica de POST /send", 3)
     for fragment in (
-        "no es `telegram` ni `whatsapp`",
+        "`ChannelRegistry`",
+        "no existe una fila",
         "`422 validation_error`",
-        "`supports_images`",
-        "#61",
+        "`422 channel_inactive`",
+        "`502 upstream_error`",
+        "`503 channel_store_unavailable`",
+        "`503 channel_secrets_unavailable`",
+        "degrada los bloques",
     ):
         assert fragment in variant, fragment
 
     send_errors = _section(_section(_doc(), "POST /send", 3), "Errores", 4)
-    send_422 = re.search(r"^\| 422 \|(.*)$", send_errors, re.MULTILINE)
-    assert send_422
-    for fragment in ("no es `telegram` ni `whatsapp`", "`image`", "`supports_images`"):
-        assert fragment in send_422.group(1), fragment
+    rows = _error_rows(send_errors)
+    assert {
+        ("422", "validation_error"),
+        ("422", "channel_inactive"),
+        ("502", "upstream_error"),
+        ("503", "channel_store_unavailable"),
+        ("503", "channel_secrets_unavailable"),
+    } <= rows
 
     messages_errors = _section(_section(_doc(), "POST /messages", 3), "Errores", 4)
     messages_422 = re.search(r"^\| 422 \|(.*)$", messages_errors, re.MULTILINE)

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from orchestrator.accounts import hash_token, new_link_token
+from orchestrator.adapters.outbox import OutboxGatewayClient
 from orchestrator.adapters.repository import FakeRepository
 
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -269,6 +270,7 @@ def test_staff_reads_happen_before_any_write(env_factory, route):
     repo = RecordingRepository()
     env.repo = repo
     env.adapters.repository = repo
+    env.adapters.outbound = OutboxGatewayClient(repo, env.adapters.clock)
 
     if route == "start":
         profile = repo.create_profile("asesor1", "asesor", "hash", FIXED_NOW)
@@ -303,6 +305,7 @@ def test_non_positive_sender_is_never_staff(env_factory):
     repo.save_conversation_texts(texts, "test-seed", FIXED_NOW)
     env.repo = repo
     env.adapters.repository = repo
+    env.adapters.outbound = OutboxGatewayClient(repo, env.adapters.clock)
     profile = repo.create_profile("asesor0", "asesor", "hash", FIXED_NOW)
     repo.profiles[profile.id].telegram_user_id = 0
     repo.calls.clear()

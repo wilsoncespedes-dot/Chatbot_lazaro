@@ -31,7 +31,11 @@ verificación y comunica el resultado al leader. El reviewer sigue siendo Claude
    mientras el primero siga activo. Para una
    revisión de código, añade `--context progress/review_<name>.md`. Para una
    corrección de pruebas, añade `--context progress/impl_<name>.md` después de
-   registrar allí el error concreto de `init.sh`.
+   registrar allí el error concreto de `init.sh`. Si el writer devuelve `75`
+   porque hay otro activo, no marques la feature bloqueada ni inicies otro; deja
+   la feature `in_progress` para que el leader la reintente después. Al esperar,
+   comprueba `.opencode/writer.lock` o la tarea específica; no esperes a que
+   desaparezca todo `opencode.exe`, porque la TUI puede seguir abierta.
 5. No edites código de aplicación. Si OpenCode falla o queda bloqueado, informa
    el motivo; no intentes implementar tú el cambio.
 6. Tras una respuesta `done`, ejecuta `bash ./init.sh` una sola vez. Si falla, añade el

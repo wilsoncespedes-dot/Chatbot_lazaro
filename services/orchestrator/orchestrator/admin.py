@@ -305,7 +305,9 @@ ADMIN_NAV_LINKS = [
     ("/admin/plantillas", "Plantillas"),
     ("/admin/ajustes", "Ajustes"),
     ("/admin/metricas", "Métricas"),
+    ("/admin/simulador", "Simulador"),
     ("/admin/supresiones", "Supresiones"),
+    ("/admin/envios", "Envíos fallidos"),
 ]
 
 

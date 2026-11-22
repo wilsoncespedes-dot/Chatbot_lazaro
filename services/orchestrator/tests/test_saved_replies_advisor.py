@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from orchestrator.domain import SavedReply
 
+from fakes import drain_queues
+
 
 def _add_reply(
     env,
@@ -75,6 +77,7 @@ def test_advisor_can_edit_loaded_reply_before_sending(env_factory, panel):
         },
         follow_redirects=False,
     )
+    drain_queues(env.settings, env.adapters)
 
     assert sent.status_code == 303
     assert (100, "Texto editado por el asesor") in env.gateway.sent

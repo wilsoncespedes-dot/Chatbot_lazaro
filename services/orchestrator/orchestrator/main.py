@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from lazaro_contracts import (
@@ -40,18 +40,25 @@ from .adapters.handover import HttpHandoverClient
 from .adapters.llm import HttpLLMClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
+from .adapters.simulator import HttpSimulatorClient
+from .adapters.channels import HttpChannelDirectory
 from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
 from .advisor_routes import AdvisorAccessDenied, create_advisor_router
 from .config import Settings
+from .envios_routes import create_envios_router
 from .domain import (
-    ATTENDED_CHANNELS,
     Adapters,
+    DedupKey,
     DomainError,
+    InboundEntry,
+    ServiceUnavailable,
+    UpstreamError,
     _has_current_consent,
     close_client_session,
     consent_button_pending,
     consent_configured,
     consent_text_pending,
+    conversation_key,
     conversation_texts,
     create_client,
     create_profile,
@@ -67,7 +74,9 @@ from .domain import (
     send_expiry_notices,
 )
 from .identity_routes import create_identity_router
+from .legacy import LEGACY_CHANNEL, legacy_from_normalized
 from .panel_live_routes import create_panel_live_router
+from .simulator_routes import create_simulator_router
 
 logger = logging.getLogger(__name__)
 
@@ -175,23 +184,6 @@ def _error(status_code: int, error: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
-def _legacy_from_normalized(message: NormalizedMessage) -> MessageRequest | None:
-    """Traduce solo el payload canónico Telegram al flujo histórico (R3).
-
-    WhatsApp conserva sus ids externos como texto y se procesa por el flujo
-    multicanal; nunca se convierte a `telegram_user_id`.
-    """
-    if message.channel != "telegram" or message.kind != "text" or not message.text:
-        return None
-    return MessageRequest(
-        update_id=int(message.external_message_id),
-        telegram_user_id=int(message.external_user_id),
-        chat_id=int(message.external_chat_id),
-        text=message.text,
-        received_at=message.received_at,
-    )
-
-
 def build_default_adapters(settings: Settings) -> Adapters:
     """Adaptadores reales; ninguno abre conexiones hasta su primer uso."""
     timeout = settings.http_timeout_seconds
@@ -232,6 +224,15 @@ def build_default_adapters(settings: Settings) -> Adapters:
         ),
         db_query=db_query,
         client_data=client_data,
+        simulator=HttpSimulatorClient(
+            settings.telegram_gateway_url, settings.service_token, timeout
+        ),
+        channels=HttpChannelDirectory(
+            settings.telegram_gateway_url,
+            settings.service_token,
+            settings.channel_directory_ttl_seconds,
+            timeout,
+        ),
         clock=lambda: datetime.now(timezone.utc),
         new_id=lambda: uuid.uuid4().hex,
     )
@@ -358,40 +359,35 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     app.router.routes.extend(create_admin_router(settings, adapters).routes)
     app.router.routes.extend(create_advisor_router(settings, adapters).routes)
     app.router.routes.extend(create_panel_live_router(settings, adapters).routes)
+    app.router.routes.extend(create_simulator_router(settings, adapters).routes)
     app.router.routes.extend(create_identity_router(settings, adapters).routes)
+    app.router.routes.extend(create_envios_router(settings, adapters).routes)
 
-    def _process(message: MessageRequest, active: Adapters) -> None:
-        try:
-            process_message(message, settings, active)
-        except Exception as exc:
-            logger.error(
-                "process_message_failed update_id=%s code=%s",
-                message.update_id,
-                type(exc).__name__,
-            )
+    def _mark_dedup(dedup: DedupKey) -> bool:
+        if dedup.kind == "update":
+            return adapters.repository.mark_update_if_new(dedup.update_id)
+        return adapters.repository.mark_message_if_new(
+            dedup.channel, dedup.external_message_id
+        )
 
-    def _process_channel(message: NormalizedMessage, active: Adapters) -> None:
+    def _text_pending(message: NormalizedMessage) -> bool:
+        # #65 R18: sin directorio de canales se falla cerrado con upstream_error
+        # y el mensaje no se encola (el gateway reintenta).
         try:
-            process_channel_message(message, settings, active)
-        except Exception as exc:
-            logger.error(
-                "process_channel_failed channel=%s code=%s",
-                message.channel,
-                type(exc).__name__,
-            )
+            return consent_text_pending(message, settings, adapters)
+        except ServiceUnavailable:
+            logger.error("channel_directory_unavailable")
+            raise UpstreamError("No se pudo consultar el directorio de canales.") from None
 
     @app.post("/messages", status_code=202, response_model=MessageResponse)
-    def post_message(
-        body: MessageRequest | NormalizedMessage, background: BackgroundTasks
-    ):
-        if isinstance(body, NormalizedMessage) and (
-            body.channel not in ATTENDED_CHANNELS or body.direction != "inbound"
-        ):
+    def post_message(body: MessageRequest | NormalizedMessage):
+        # #65 R28-R30: cualquier canal válido; solo se rechaza lo no entrante.
+        if isinstance(body, NormalizedMessage) and body.direction != "inbound":
             raise RequestValidationError([])
         if isinstance(body, NormalizedMessage):
             normalized = body
             try:
-                legacy = _legacy_from_normalized(body)
+                legacy = legacy_from_normalized(body)
             except (TypeError, ValueError):
                 # Los ids canónicos son texto: si no se pueden representar en el
                 # flujo histórico de Telegram, se procesa con identidad de canal
@@ -402,18 +398,11 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
                 if legacy is not None
                 else (lambda: process_channel_message(body, settings, adapters))
             )
-            action = (
-                (lambda: _process(legacy, adapters))
-                if legacy is not None
-                else (lambda: _process_channel(body, adapters))
-            )
             # R4/R5: el botón de consentimiento se procesa en la petición HTTP
             # para que un fallo al guardar la evidencia responda 500 (R18 de #35).
-            # R21, R23: sin aviso configurado o sin consentimiento vigente no se
-            # persiste la clave del mensaje; el gateway ya deduplica con TTL.
-            # Tras consentir, la clave compuesta vuelve a ser la barrera
-            # persistente. Se aplica también al payload canónico de Telegram
-            # aunque se procese con el flujo histórico.
+            # R7: sin consentimiento vigente no se persiste la clave del mensaje;
+            # el gateway ya deduplica con TTL. Tras consentir, la clave compuesta
+            # vuelve a ser la barrera persistente.
             consent_ready = (
                 consent_configured(settings, adapters)
                 and adapters.repository.has_channel_privacy_consent(
@@ -422,39 +411,66 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
                     conversation_texts(settings, adapters).notice_version,
                 )
             )
-            # R46 R16: la frase de texto de Telegram se procesa igual.
+            # R46 R16, #65 R24: la frase de un canal en modo `texto` se procesa igual.
             pending = consent_button_pending(body) or (
-                not consent_ready and consent_text_pending(body, settings)
+                not consent_ready and _text_pending(body)
             )
-            mark_new = lambda: adapters.repository.mark_message_if_new(
-                normalized.channel, normalized.external_message_id
+            dedup = (
+                DedupKey(
+                    kind="message",
+                    channel=normalized.channel,
+                    external_message_id=normalized.external_message_id,
+                )
+                if consent_ready
+                else None
+            )
+            entry = InboundEntry(
+                conversation_key=conversation_key(
+                    normalized.channel, normalized.external_user_id
+                ),
+                channel=normalized.channel,
+                external_user_id=normalized.external_user_id,
+                payload_kind="channel",
+                payload=body.model_dump(mode="json"),
             )
         else:
             legacy = body
             normalized = normalize_legacy_message(body)
             direct = lambda: process_message(legacy, settings, adapters)
-            action = lambda: _process(legacy, adapters)
             pending = (
                 not _has_current_consent(
-                    "telegram",
+                    LEGACY_CHANNEL,
                     str(legacy.telegram_user_id),
                     settings,
                     adapters,
                 )
-                and consent_text_pending(normalized, settings)
+                and _text_pending(normalized)
             )
             # R22: la excepción aprobada de #35 conserva únicamente el
             # `update_id` en `processed_updates`, sin identidad ni payload.
-            consent_ready = True
-            mark_new = lambda: adapters.repository.mark_update_if_new(legacy.update_id)
-        if consent_ready and not mark_new():
-            return MessageResponse(status="duplicate")
+            dedup = DedupKey(kind="update", update_id=legacy.update_id)
+            entry = InboundEntry(
+                conversation_key=conversation_key(
+                    LEGACY_CHANNEL, str(legacy.telegram_user_id)
+                ),
+                channel=LEGACY_CHANNEL,
+                external_user_id=str(legacy.telegram_user_id),
+                payload_kind="legacy",
+                payload=body.model_dump(mode="json"),
+            )
         if pending:
-            # Las aceptaciones se procesan en la petición HTTP para que un
-            # fallo al guardar la evidencia responda 500 (R18 de #35).
+            # R6: la aceptación de consentimiento se procesa en la petición.
+            if dedup is not None and not _mark_dedup(dedup):
+                return MessageResponse(status="duplicate")
             direct()
-        else:
-            background.add_task(action)
+            return MessageResponse(status="accepted")
+        try:
+            inserted = adapters.repository.enqueue_inbound(entry, dedup)
+        except Exception as exc:  # noqa: BLE001 - R5: revierte dedup + INSERT
+            logger.error("inbox_enqueue_failed code=%s", type(exc).__name__)
+            return _error(500, "internal_error", "Error interno.")
+        if not inserted:
+            return MessageResponse(status="duplicate")
         return MessageResponse(status="accepted")
 
     @app.post("/privacy/purge", response_model=PrivacyPurgeResponse)

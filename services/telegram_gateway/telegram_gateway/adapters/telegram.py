@@ -166,14 +166,7 @@ class TelegramChannelAdapter:
         self._client = client
 
     def capabilities(self) -> ChannelCapabilities:
-        return ChannelCapabilities(
-            free_text_allowed=True,
-            max_options=MAX_OPTION_COUNT,
-            min_list_options=MIN_LIST_OPTIONS,
-            max_list_options=MAX_LIST_OPTIONS,
-            supports_links=True,
-            requires_template=False,
-        )
+        return telegram_capabilities()
 
     def normalize_incoming(
         self, raw: dict, received_at: datetime
@@ -198,3 +191,19 @@ class TelegramChannelAdapter:
         if normalized in ("sent", "delivered", "read", "failed"):
             return normalized  # type: ignore[return-value]
         return "failed"
+
+
+def telegram_capabilities() -> ChannelCapabilities:
+    """Capacidades de Telegram: texto libre siempre, sin plantillas."""
+    return ChannelCapabilities(
+        free_text_allowed=True,
+        max_options=MAX_OPTION_COUNT,
+        min_list_options=MIN_LIST_OPTIONS,
+        max_list_options=MAX_LIST_OPTIONS,
+        supports_links=True,
+        requires_template=False,
+        supports_buttons=True,
+        supports_images=False,
+        supports_files=False,
+        supports_audio=False,
+    )

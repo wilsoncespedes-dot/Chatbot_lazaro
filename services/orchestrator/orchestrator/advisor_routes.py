@@ -21,6 +21,7 @@ from .admin_routes import (
 )
 from .config import Settings
 from .domain import (
+    inbox_channel_options,
     Adapters,
     AdvisorForbidden,
     AdvisorUnavailable,
@@ -284,6 +285,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 advisor_id, channel, assignment, settings, adapters, tag=tag
             )
             tags = list_case_tags(adapters, only_active=True)
+            channel_choices = tuple(inbox_channel_options(adapters))
         except DomainError as exc:
             _audit_error(profile, "inbox_viewed", exc, adapters)
             return _domain_error(exc, session.csrf_token)
@@ -298,6 +300,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 selected_assignment=assignment,
                 selected_tag=tag,
                 live_enabled=settings.panel_live_enabled,
+                channel_choices=channel_choices,
             )
         )
 
@@ -690,6 +693,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 profile, settings, adapters
             )
             tags = list_case_tags(adapters, only_active=True)
+            channel_choices = tuple(inbox_channel_options(adapters))
         except DomainError as exc:
             _audit_error(profile, "all_cases_viewed", exc, adapters)
             return _domain_error(exc, session.csrf_token)
@@ -708,6 +712,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 selected_assignment=assignment,
                 selected_tag=tag,
                 live_enabled=settings.panel_live_enabled,
+                channel_choices=channel_choices,
             )
         )
 

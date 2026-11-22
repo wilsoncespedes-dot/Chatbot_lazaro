@@ -3,25 +3,35 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from lazaro_contracts import (
     MAX_TEXT_LENGTH,
+    ChannelCapabilities,
     DeliveryStatus,
     ImageBlock,
+    LinkBlock,
+    ListBlock,
     MessageRequest,
     NormalizedMessage,
+    OptionsBlock,
     ResponseBlock,
     TemplateBlock,
+    TextBlock,
 )
 
 if TYPE_CHECKING:
+    from .adapters.callback import CallbackClient
     from .adapters.dedup import DedupStore
     from .adapters.message_buffer import MessageBuffer
     from .adapters.orchestrator import OrchestratorClient
     from .adapters.telegram import TelegramClient
     from .adapters.whatsapp import ChannelAdapter
     from .adapters.whatsapp_window import WhatsAppWindowStore
+    from .adapters.channel_repository import ChannelRepository
+    from .adapters.mailbox import MailboxRepository
+    from .registry import ChannelRegistry
+    from .ports.canal import Canal
 
 
 class DomainError(Exception):
@@ -62,10 +72,42 @@ class WebhookForbidden(DomainError):
 
 
 class UnknownChannel(DomainError):
-    """#60: canal sin adaptador en este servicio (hasta el registry de #61)."""
+    """Canal que no está registrado en este gateway."""
 
     code = "validation_error"
     status_code = 422
+
+
+class ChannelNotFound(DomainError):
+    """No existe una fila de canal para el id solicitado."""
+
+    code = "not_found"
+    status_code = 404
+
+
+class ChannelInactive(DomainError):
+    code = "channel_inactive"
+    status_code = 422
+
+
+class ChannelAlreadyExists(DomainError):
+    code = "channel_exists"
+    status_code = 409
+
+
+class ChannelManagedByEnvironment(DomainError):
+    code = "channel_managed_by_environment"
+    status_code = 409
+
+
+class ChannelSecretsUnavailable(DomainError):
+    code = "channel_secrets_unavailable"
+    status_code = 503
+
+
+class ChannelStoreUnavailable(DomainError):
+    code = "channel_store_unavailable"
+    status_code = 503
 
 
 class UnsupportedBlock(DomainError):
@@ -75,8 +117,40 @@ class UnsupportedBlock(DomainError):
     status_code = 422
 
 
+class PayloadTooLarge(DomainError):
+    """#62: el cuerpo del webhook supera el límite configurado."""
+
+    code = "payload_too_large"
+    status_code = 413
+
+
+class WebhookUnauthorized(DomainError):
+    """#62: firma ausente/incorrecta o timestamp fuera de la ventana."""
+
+    code = "unauthorized"
+    status_code = 401
+
+
+class InvalidWebhookPayload(DomainError):
+    """#62: el cuerpo del webhook no cumple el contrato del canal."""
+
+    code = "validation_error"
+    status_code = 422
+
+
+class InvalidChannelConfig(DomainError):
+    """#62: la configuración del canal no es válida y no se persiste."""
+
+    code = "validation_error"
+    status_code = 422
+
+
 class OrchestratorError(Exception):
     """Fallo al llamar al orquestador; el webhook la captura y no llega al cliente."""
+
+
+class CallbackNetworkError(Exception):
+    """#62: fallo de red o de tiempo de espera en el callback saliente."""
 
 
 @dataclass(frozen=True)
@@ -99,6 +173,48 @@ class IncomingCallback:
     button_proof: str | None
 
 
+@dataclass(frozen=True)
+class ChannelRecord:
+    id: str
+    name: str
+    adapter_type: str
+    icon: str
+    color: str
+    config: Mapping[str, Any]
+    active: bool
+    created_at: datetime
+    has_secrets: bool
+    active_follows_environment: bool
+
+
+@dataclass(frozen=True)
+class ChannelSecrets:
+    secret: str | None = field(default=None, repr=False)
+    credentials: Mapping[str, str] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
+class ChannelSeed:
+    id: str
+    name: str
+    adapter_type: str
+    icon: str
+    color: str
+    config: Mapping[str, Any] = field(default_factory=dict)
+
+
+BUILTIN_CHANNEL_SEEDS: tuple[ChannelSeed, ...] = (
+    ChannelSeed(
+        "telegram", "Telegram", "telegram", "telegram", "#1B6FA8",
+        {"consent_mode": "texto"},
+    ),
+    ChannelSeed(
+        "whatsapp", "WhatsApp", "whatsapp_cloud", "whatsapp", "#0E7A5F",
+        {"consent_mode": "boton"},
+    ),
+)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -112,6 +228,10 @@ class Adapters:
     buffer: "MessageBuffer | None" = None
     whatsapp: "ChannelAdapter | None" = None
     whatsapp_window: "WhatsAppWindowStore | None" = None
+    channels: "ChannelRepository | None" = None
+    channel_registry: "ChannelRegistry | None" = None
+    callback: "CallbackClient | None" = None
+    mailbox: "MailboxRepository | None" = None
 
 
 @dataclass(frozen=True)
@@ -302,20 +422,73 @@ def send_response(
     destination: str,
     blocks: Sequence[ResponseBlock],
 ) -> DeliveryStatus:
-    """R7-R9: consulta las capacidades del canal antes de enviar y falla cerrado."""
-    block_list = list(blocks)
-    if not block_list:
-        raise ValueError("la respuesta no tiene bloques")
+    """Degrada según capacidades y luego envía por el adaptador legado."""
     capabilities_for = getattr(adapter, "capabilities_for", None)
     capabilities = (
         capabilities_for(destination)
         if callable(capabilities_for)
         else adapter.capabilities()
     )
-    if not capabilities.supports_images and any(
-        isinstance(block, ImageBlock) for block in block_list
-    ):
-        raise UnsupportedBlock("Este canal no admite imágenes.")
+    prepared = prepare_blocks(blocks, capabilities)
+    return adapter.send(destination, prepared)
+
+
+def degrade_blocks(
+    blocks: Sequence[ResponseBlock], capabilities: ChannelCapabilities
+) -> list[ResponseBlock]:
+    """Adapta bloques que el canal no puede representar, sin IO ni mutación."""
+    degraded: list[ResponseBlock] = []
+    for block in blocks:
+        if isinstance(block, OptionsBlock) and (
+            not capabilities.supports_buttons
+            or len(block.options) > capabilities.max_options
+        ):
+            text = "\n".join(
+                f"{index}. {option}"
+                for index, option in enumerate(block.options, start=1)
+            )
+            degraded.append(TextBlock(type="text", text=text))
+        elif isinstance(block, ListBlock) and (
+            len(block.options) < capabilities.min_list_options
+            or len(block.options) > capabilities.max_list_options
+        ):
+            text = "\n".join(
+                f"{index}. {option}"
+                for index, option in enumerate(block.options, start=1)
+            )
+            degraded.append(TextBlock(type="text", text=text))
+        elif isinstance(block, ImageBlock) and not capabilities.supports_images:
+            if capabilities.supports_links:
+                degraded.append(
+                    LinkBlock(type="link", text=block.alt_text, url=block.url)
+                )
+            else:
+                degraded.append(
+                    TextBlock(type="text", text=f"{block.alt_text}: {block.url}")
+                )
+        elif isinstance(block, LinkBlock) and not capabilities.supports_links:
+            combined = f"{block.text}: {block.url}"
+            if len(combined) <= MAX_TEXT_LENGTH:
+                degraded.append(TextBlock(type="text", text=combined))
+            else:
+                degraded.extend(
+                    (
+                        TextBlock(type="text", text=block.text),
+                        TextBlock(type="text", text=block.url),
+                    )
+                )
+        else:
+            degraded.append(block)
+    return degraded
+
+
+def prepare_blocks(
+    blocks: Sequence[ResponseBlock], capabilities: ChannelCapabilities
+) -> list[ResponseBlock]:
+    """Degrada primero y después aplica las restricciones de ventana/plantilla."""
+    block_list = degrade_blocks(blocks, capabilities)
+    if not block_list:
+        raise ValueError("la respuesta no tiene bloques")
     has_free_text = any(not isinstance(block, TemplateBlock) for block in block_list)
     if has_free_text and not capabilities.free_text_allowed:
         raise ChannelWindowClosed(
@@ -325,4 +498,14 @@ def send_response(
         raise ChannelWindowClosed(
             "Este canal exige una plantilla y la respuesta usa texto libre."
         )
-    return adapter.send(destination, block_list)
+    return block_list
+
+
+def send_through_channel(
+    channel: "Canal",
+    destination: str,
+    blocks: Sequence[ResponseBlock],
+) -> DeliveryStatus:
+    """Degrada y envía por el puerto de canal."""
+    prepared = prepare_blocks(blocks, channel.capacidades(destination))
+    return channel.enviar_mensaje(destination, prepared)

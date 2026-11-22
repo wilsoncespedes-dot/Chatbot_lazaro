@@ -118,8 +118,8 @@ class _Cursor:
 
     def fetchall(self):
         sql = self.log[-1][0]
-        if sql.startswith("SELECT id FROM contacts"):
-            return [("c1",)]
+        if sql.startswith("SELECT id, external_chat_id, chat_id FROM contacts"):
+            return [("c1", "100", 100)]
         return []
 
 

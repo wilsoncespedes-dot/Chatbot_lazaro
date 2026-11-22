@@ -110,3 +110,34 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Tests:** nuevos `contracts/tests/test_canal_abierto.py`, `contracts/tests/test_canal_abierto_doc.py`, `services/telegram_gateway/tests/test_canal_abierto.py` y `services/orchestrator/tests/test_canal_abierto.py`. Ningún test ni ejemplo existente se editó (R47).
 - **Resultado:** writer OpenCode/DeepSeek. Un ciclo de corrección por revisión de código: `JsonValue` de pydantic con `allow_nan=False` y tests de tuplas, clave no texto y 100 000 niveles (R17), y consentimiento previo en los tests de R43/R44. `./init.sh` verde: 3729 passed, 1 skipped. Revisiones de spec y de código `APPROVED`.
 - **Nota del arnés:** `scripts/run_opencode_writer.sh` no acepta `progress/review_code_<feature>.md` como `--context`. Los hallazgos se copiaron a `progress/impl_<feature>.md`.
+## 2026-11-21 — Feature #61 registro_canales_gateway (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Gateway:** puerto `Canal` (`ports/canal.py`) y `ChannelRegistry` con registro por decorador (tipo desconocido o duplicado falla cerrado). Telegram y WhatsApp Cloud API migrados a `adapters/channels/`; los webhooks heredados responden igual y `POST /send` resuelve el adaptador con el registry.
+- **Tabla `canales`:** repositorio pg8000 perezoso con schema idempotente, siembra diferida de `telegram` y `whatsapp` desde las variables actuales, y secretos de `config` cifrados con Fernet (`cryptography`, clave `CHANNEL_SECRETS_KEY` opcional); listados sin secretos y logs sin valores.
+- **Degradación pura:** botones a lista numerada, imagen a enlace y lista a texto numerado según capacidades; sustituye la guarda temporal de #60.
+- **Rutas internas:** `/channels`, alta, edición, activación y revelar/regenerar secreto con `X-Service-Token`, documentadas en `CONTRATOS.md`. Health consulta Redis y PostgreSQL; Compose y `render.yaml` ajustados.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 3879 passed, 1 skipped. Revisiones de spec y de código `APPROVED`. Informe R→test en `progress/impl_registro_canales_gateway.md`.
+
+## 2026-11-21 — Feature #62 webhook_generico_firmado (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Gateway:** adaptador `webhook_generico` y ruta pública `POST /webhooks/{canal_id}` con HMAC-SHA256 de `<timestamp>.<cuerpo>`, ventana anti-repetición configurable, 404 sin distinguir inexistente/inactivo, 413/401/422 con precedencia definida, e idempotencia por `(canal_id, external_message_id)`.
+- **Callback saliente:** `POST` firmado a `config.callback_url` con bloqueo anti-SSRF (https, sin direcciones privadas/loopback/link-local/metadatos). Ejemplos firmados de `CONTRATOS.md` verificados por tests.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 3979 passed. Revisiones de spec y de código `APPROVED`. Informe R→test en `progress/impl_webhook_generico_firmado.md`.
+
+## 2026-11-21 — Feature #63 canal_simulado (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Adaptador SIMULADO:** tipo `simulado` configurable desde `config` (nombre, ícono, color, capacidades), sin llamadas de red; respuestas salientes en un buzón propio con retención corta configurable. La marca SIMULADO aparece en clase, docstring, etiqueta del panel y herramienta de prueba.
+- **Panel y herramienta:** página de prueba tipo chat (solo admin y supervisor) y `scripts/simular_canal.py`, que envía mensajes firmados al webhook genérico. Hasta #65 el orquestador rechaza con 422 los canales no atendidos y el buzón lo muestra como tal.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4103 passed, 1 skipped. Revisiones de spec y de código `APPROVED`. Informe R→test en `progress/impl_canal_simulado.md`.
+
+## 2026-11-21 — Feature #64 cola_entrada_outbox (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Cola y outbox en Postgres:** `POST /messages` guarda el mensaje en la tabla de entrada junto a la deduplicación y responde 202; worker `procesar_entrantes` (`FOR UPDATE SKIP LOCKED`, orden por conversación, reintentos con máximo y motivo de fallo). Toda respuesta saliente se escribe en `outbox` en la misma transacción; worker `enviar_salientes` con backoff exponencial con jitter, sin reintento de 422, orden por destino y entrega al menos una vez.
+- **Panel y operación:** envíos fallidos visibles y reintentables por supervisor/admin con auditoría; workers añadidos a `docker-compose.yml`; purga por retención y supresión.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4161 passed, 1 skipped (3 rondas de corrección: 44 -> 20 -> 0 fallos). Revisión de código `APPROVED`. Informe R→test en `progress/impl_cola_entrada_outbox.md`.
+
+## 2026-11-21 — Feature #65 nucleo_sin_nombres_canal (done)
+- **Modo:** supervisado; spec aprobado por el reviewer. El código lo escribió Claude directamente (OpenCode Go sin cuota), por decisión del dueño, sin revisión de código del reviewer.
+- **Núcleo sin nombres de canal:** el orquestador decide ventana y plantillas por `ChannelInfo.capabilities` y el consentimiento por `config.consent_mode` (`texto`/`boton`), leídos de `GET /channels` del gateway con caché (`CHANNEL_DIRECTORY_TTL_SECONDS`) y copia obsoleta. Se retiran `ATTENDED_CHANNELS`, `INBOX_CHANNELS` y `TEXT_CONSENT_CHANNELS`; los literales `telegram`/`whatsapp` quedan solo en `orchestrator/legacy.py`.
+- **Gateway:** `default_capabilities` en cada adaptador y siembra idempotente de `consent_mode`. **Datos:** columna `canal_id` en contactos y mensajes con migración idempotente.
+- **Resultado:** `./init.sh` verde: 4224 passed, 1 skipped. Informe R→test en `progress/impl_nucleo_sin_nombres_canal.md`.

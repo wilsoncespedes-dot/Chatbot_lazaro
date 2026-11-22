@@ -13,6 +13,8 @@ from orchestrator.domain import (
     update_template,
 )
 
+from fakes import drain_queues
+
 PASSWORD = "clave-segura-123"
 CSRF = "csrf-token"
 
@@ -189,6 +191,7 @@ def test_suppression_uses_approved_template_or_skips(env):
     change_template_status("resultado_ok", "approved", actor, env.adapters)
     env.repo.suppression_requests["req-1"].status = "pending"
     execute_suppression_from_panel("req-1", actor, None, env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert env.repo.suppression_requests["req-1"].notification_result == "template"
     assert env.gateway.blocks_sent[-1][2][0].name == "resultado_ok"
 

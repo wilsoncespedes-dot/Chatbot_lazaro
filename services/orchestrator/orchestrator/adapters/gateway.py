@@ -15,6 +15,7 @@ from lazaro_contracts import (
 )
 
 from ..domain import ChannelRejected, ServiceUnavailable
+from ..legacy import LEGACY_CHANNEL
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ class FakeGatewayClient:
         rendered = "\n".join(texts)
         if texts:
             self.channel_sent.append((channel, destination, rendered))
-        if channel == "telegram":
+        if channel == LEGACY_CHANNEL:
             try:
                 chat_id = int(destination)
             except (TypeError, ValueError):

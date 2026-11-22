@@ -16,68 +16,426 @@
     "done_features": "Las features done se guardan resumidas (id, name, title). Su descripción, acceptance y spec completos están en el tag git archivo-antes-limpieza-2026-11-15."
   },
   "later": [
-    {"name": "esqueleto_instagram", "title": "Esqueleto del adaptador Instagram Messaging, sin credenciales", "note": "Opcional del encargo del profesor (2026-11-21), solo si queda tiempo tras #78. WhatsApp Cloud API ya es un adaptador real (#43), no necesita esqueleto."}
+    {
+      "name": "esqueleto_instagram",
+      "title": "Esqueleto del adaptador Instagram Messaging, sin credenciales",
+      "note": "Opcional del encargo del profesor (2026-11-21), solo si queda tiempo tras #78. WhatsApp Cloud API ya es un adaptador real (#43), no necesita esqueleto."
+    }
   ],
   "features": [
-    {"id": 1, "name": "contratos_servicios", "title": "Contratos entre servicios", "sdd": true, "status": "done"},
-    {"id": 2, "name": "esqueleto_servicios", "title": "Esqueleto de servicios con Docker", "sdd": true, "status": "done"},
-    {"id": 3, "name": "telegram_gateway", "title": "Telegram gateway", "sdd": true, "status": "done"},
-    {"id": 4, "name": "orquestador_basico", "title": "Orquestador básico", "sdd": true, "status": "done"},
-    {"id": 5, "name": "rag_ingesta_busqueda", "title": "RAG: ingesta de manuales y búsqueda con umbral", "sdd": true, "status": "done"},
-    {"id": 6, "name": "no_inventar", "title": "No inventar: validación de citas y rechazo fijo", "sdd": true, "status": "done"},
-    {"id": 9, "name": "contrato_asignar_caso", "title": "Contrato: asignar un caso a un asesor", "sdd": true, "status": "done"},
-    {"id": 7, "name": "traspaso_asesor", "title": "Traspaso a asesor", "sdd": true, "status": "done"},
-    {"id": 8, "name": "evaluacion", "title": "Evaluación con preguntas de ejemplo", "sdd": true, "status": "done"},
-    {"id": 10, "name": "validacion_config_asesores", "title": "Validación de ADVISOR_CHAT_IDS al arrancar handover", "sdd": true, "status": "done"},
-    {"id": 11, "name": "registro_solicitudes_traspaso", "title": "Registro de cada solicitud de traspaso en handover", "sdd": true, "status": "done"},
-    {"id": 12, "name": "vencimiento_automatico", "title": "Ejecución periódica de POST /cases/check-timeouts", "sdd": true, "status": "done"},
-    {"id": 13, "name": "contrato_autorizacion_asesores", "title": "Contrato: autorización de asesores sobre un caso", "sdd": true, "status": "done"},
-    {"id": 14, "name": "autorizacion_asesores", "title": "Autorización de asesores para responder y cerrar casos", "sdd": true, "status": "done"},
-    {"id": 15, "name": "contrato_conversacion_caso", "title": "Contrato: mensajes del cliente hacia el asesor", "sdd": true, "status": "done"},
-    {"id": 16, "name": "conversacion_cliente_asesor", "title": "Conversación bidireccional cliente-asesor por Telegram", "sdd": true, "status": "done"},
-    {"id": 17, "name": "contrato_cierre_casos_huerfanos", "title": "Contrato: cierre de casos huérfanos (asesor retirado de ADVISOR_CHAT_IDS)", "sdd": true, "status": "done"},
-    {"id": 18, "name": "candado_repositorio_orquestador", "title": "Candado en la conexión compartida de PostgresRepository del orquestador", "sdd": true, "status": "done"},
-    {"id": 19, "name": "edicion_fragmentos", "title": "Edición del contenido de fragmentos RAG", "sdd": true, "status": "done"},
-    {"id": 20, "name": "verificacion_cuentas", "title": "Vincular perfiles verificados con cuentas de Telegram", "sdd": true, "status": "done"},
-    {"id": 21, "name": "panel_administracion", "title": "Panel administrativo mínimo", "sdd": true, "status": "done"},
-    {"id": 22, "name": "panel_fragmentos", "title": "Manuales y fragmentos en el panel administrativo", "sdd": true, "status": "done"},
-    {"id": 23, "name": "bootstrap_administrador", "title": "Crear el primer administrador de forma segura", "sdd": true, "status": "done"},
-    {"id": 24, "name": "despliegue_produccion", "title": "Configuración y verificaciones para despliegue de producción", "sdd": true, "status": "done"},
-    {"id": 25, "name": "clasificador_consultas", "title": "Clasificar consultas por categoría configurable", "sdd": true, "status": "done"},
-    {"id": 26, "name": "consulta_bd_lenguaje_natural", "title": "Consultas de datos autorizadas en lenguaje natural", "sdd": true, "status": "done"},
-    {"id": 27, "name": "privacidad_y_retencion_datos", "title": "Política de privacidad, retención y eliminación de datos", "sdd": true, "status": "done"},
-    {"id": 28, "name": "despliegue_retencion", "title": "Retención de datos en Render", "sdd": true, "status": "done"},
-    {"id": 29, "name": "panel_asesores", "title": "Panel de asesores para atender casos", "sdd": true, "status": "done"},
-    {"id": 30, "name": "agrupacion_mensajes", "title": "Agrupar mensajes consecutivos del cliente", "sdd": true, "status": "done"},
-    {"id": 31, "name": "busqueda_hibrida_rag", "title": "Búsqueda híbrida para manuales", "sdd": true, "status": "done"},
-    {"id": 32, "name": "traspaso_automatico_fallos", "title": "Derivar automáticamente tras fallos repetidos", "sdd": true, "status": "done"},
-    {"id": 33, "name": "contrato_listar_casos_asesor", "title": "Contrato para listar casos de un asesor", "sdd": true, "status": "done"},
-    {"id": 34, "name": "robustez_estado_traspaso_automatico", "title": "Retención y recuperación del estado de traspaso automático", "sdd": true, "status": "done"},
-    {"id": 35, "name": "consentimiento_antes_de_datos", "title": "No guardar datos personales antes del consentimiento", "sdd": true, "status": "done"},
-    {"id": 36, "name": "nucleo_multicanal", "title": "Núcleo multicanal Telegram y WhatsApp", "sdd": true, "status": "done"},
-    {"id": 37, "name": "estados_y_consentimiento", "title": "Estados de conversación y consentimiento versionado", "sdd": true, "status": "done"},
-    {"id": 38, "name": "identidad_credenciales", "title": "Identidad web, credenciales y sesiones", "sdd": true, "status": "done"},
-    {"id": 39, "name": "harness_ia_por_estado", "title": "Harness de IA con herramientas y datos por estado", "sdd": true, "status": "done"},
-    {"id": 40, "name": "memoria_por_cliente", "title": "Historial resumido y memoria permanente por cliente", "sdd": true, "status": "done"},
-    {"id": 41, "name": "panel_asesores_multicanal", "title": "Panel de asesores multicanal y solicitudes de supresión", "sdd": true, "status": "done"},
-    {"id": 42, "name": "administracion_y_avisos", "title": "Administración de clientes, textos y avisos", "sdd": true, "status": "done"},
-    {"id": 43, "name": "proveedor_whatsapp_real", "title": "Integración del proveedor real de WhatsApp", "sdd": true, "status": "done"},
-    {"id": 44, "name": "confirmar_callback_telegram", "title": "Confirmar callback_query de Telegram (answerCallbackQuery)", "sdd": true, "status": "done"},
-    {"id": 45, "name": "corregir_foreign_session_windows", "title": "Corregir tipo de parámetro en PostgresRepository.foreign_session_windows", "sdd": true, "status": "done"},
-    {"id": 46, "name": "consentimiento_texto_telegram", "title": "Consentimiento por frase de texto en Telegram (sin botones inline)", "sdd": true, "status": "done"},
-    {"id": 47, "name": "healthcheck_dependencias", "title": "Health checks reales de dependencias", "sdd": true, "status": "done"},
-    {"id": 48, "name": "retirar_asesores_telegram", "title": "Retirar la atención de asesores por Telegram", "sdd": true, "status": "done"},
-    {"id": 49, "name": "roles_supervisor_responsable_datos", "title": "Roles de supervisor y responsable de datos en el panel", "sdd": true, "status": "done"},
-    {"id": 50, "name": "notas_internas_y_etiquetas", "title": "Notas internas y etiquetas en los casos", "sdd": true, "status": "done"},
-    {"id": 51, "name": "respuestas_guardadas", "title": "Respuestas guardadas para asesores", "sdd": true, "status": "done"},
-    {"id": 52, "name": "asignacion_automatica_carga", "title": "Asignación automática de casos por carga", "sdd": true, "status": "done"},
-    {"id": 53, "name": "panel_tiempo_real", "title": "Panel de asesores en tiempo real", "sdd": true, "status": "done"},
-    {"id": 54, "name": "segundo_factor_panel", "title": "Segundo factor en el acceso del personal al panel", "sdd": true, "status": "done"},
-    {"id": 55, "name": "evaluacion_ataques_y_preguntas_reales", "title": "Evaluación con casos de ataque y preguntas reales", "sdd": true, "status": "done"},
-    {"id": 56, "name": "rediseño_visual_paneles", "title": "Rediseño visual moderno de los paneles", "sdd": true, "status": "done"},
-    {"id": 57, "name": "retencion_evidencia_y_privacidad_inicial", "title": "Aplicar la retención aprobada a la evidencia de consentimiento", "sdd": true, "status": "done"},
-    {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"},
-    {"id": 59, "name": "chat_caso_asesor", "title": "Vista de chat en el detalle del caso del panel de asesores", "sdd": true, "status": "done"},
+    {
+      "id": 1,
+      "name": "contratos_servicios",
+      "title": "Contratos entre servicios",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 2,
+      "name": "esqueleto_servicios",
+      "title": "Esqueleto de servicios con Docker",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 3,
+      "name": "telegram_gateway",
+      "title": "Telegram gateway",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 4,
+      "name": "orquestador_basico",
+      "title": "Orquestador básico",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 5,
+      "name": "rag_ingesta_busqueda",
+      "title": "RAG: ingesta de manuales y búsqueda con umbral",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 6,
+      "name": "no_inventar",
+      "title": "No inventar: validación de citas y rechazo fijo",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 9,
+      "name": "contrato_asignar_caso",
+      "title": "Contrato: asignar un caso a un asesor",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 7,
+      "name": "traspaso_asesor",
+      "title": "Traspaso a asesor",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 8,
+      "name": "evaluacion",
+      "title": "Evaluación con preguntas de ejemplo",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 10,
+      "name": "validacion_config_asesores",
+      "title": "Validación de ADVISOR_CHAT_IDS al arrancar handover",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 11,
+      "name": "registro_solicitudes_traspaso",
+      "title": "Registro de cada solicitud de traspaso en handover",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 12,
+      "name": "vencimiento_automatico",
+      "title": "Ejecución periódica de POST /cases/check-timeouts",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 13,
+      "name": "contrato_autorizacion_asesores",
+      "title": "Contrato: autorización de asesores sobre un caso",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 14,
+      "name": "autorizacion_asesores",
+      "title": "Autorización de asesores para responder y cerrar casos",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 15,
+      "name": "contrato_conversacion_caso",
+      "title": "Contrato: mensajes del cliente hacia el asesor",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 16,
+      "name": "conversacion_cliente_asesor",
+      "title": "Conversación bidireccional cliente-asesor por Telegram",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 17,
+      "name": "contrato_cierre_casos_huerfanos",
+      "title": "Contrato: cierre de casos huérfanos (asesor retirado de ADVISOR_CHAT_IDS)",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 18,
+      "name": "candado_repositorio_orquestador",
+      "title": "Candado en la conexión compartida de PostgresRepository del orquestador",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 19,
+      "name": "edicion_fragmentos",
+      "title": "Edición del contenido de fragmentos RAG",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 20,
+      "name": "verificacion_cuentas",
+      "title": "Vincular perfiles verificados con cuentas de Telegram",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 21,
+      "name": "panel_administracion",
+      "title": "Panel administrativo mínimo",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 22,
+      "name": "panel_fragmentos",
+      "title": "Manuales y fragmentos en el panel administrativo",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 23,
+      "name": "bootstrap_administrador",
+      "title": "Crear el primer administrador de forma segura",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 24,
+      "name": "despliegue_produccion",
+      "title": "Configuración y verificaciones para despliegue de producción",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 25,
+      "name": "clasificador_consultas",
+      "title": "Clasificar consultas por categoría configurable",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 26,
+      "name": "consulta_bd_lenguaje_natural",
+      "title": "Consultas de datos autorizadas en lenguaje natural",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 27,
+      "name": "privacidad_y_retencion_datos",
+      "title": "Política de privacidad, retención y eliminación de datos",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 28,
+      "name": "despliegue_retencion",
+      "title": "Retención de datos en Render",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 29,
+      "name": "panel_asesores",
+      "title": "Panel de asesores para atender casos",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 30,
+      "name": "agrupacion_mensajes",
+      "title": "Agrupar mensajes consecutivos del cliente",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 31,
+      "name": "busqueda_hibrida_rag",
+      "title": "Búsqueda híbrida para manuales",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 32,
+      "name": "traspaso_automatico_fallos",
+      "title": "Derivar automáticamente tras fallos repetidos",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 33,
+      "name": "contrato_listar_casos_asesor",
+      "title": "Contrato para listar casos de un asesor",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 34,
+      "name": "robustez_estado_traspaso_automatico",
+      "title": "Retención y recuperación del estado de traspaso automático",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 35,
+      "name": "consentimiento_antes_de_datos",
+      "title": "No guardar datos personales antes del consentimiento",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 36,
+      "name": "nucleo_multicanal",
+      "title": "Núcleo multicanal Telegram y WhatsApp",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 37,
+      "name": "estados_y_consentimiento",
+      "title": "Estados de conversación y consentimiento versionado",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 38,
+      "name": "identidad_credenciales",
+      "title": "Identidad web, credenciales y sesiones",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 39,
+      "name": "harness_ia_por_estado",
+      "title": "Harness de IA con herramientas y datos por estado",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 40,
+      "name": "memoria_por_cliente",
+      "title": "Historial resumido y memoria permanente por cliente",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 41,
+      "name": "panel_asesores_multicanal",
+      "title": "Panel de asesores multicanal y solicitudes de supresión",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 42,
+      "name": "administracion_y_avisos",
+      "title": "Administración de clientes, textos y avisos",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 43,
+      "name": "proveedor_whatsapp_real",
+      "title": "Integración del proveedor real de WhatsApp",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 44,
+      "name": "confirmar_callback_telegram",
+      "title": "Confirmar callback_query de Telegram (answerCallbackQuery)",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 45,
+      "name": "corregir_foreign_session_windows",
+      "title": "Corregir tipo de parámetro en PostgresRepository.foreign_session_windows",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 46,
+      "name": "consentimiento_texto_telegram",
+      "title": "Consentimiento por frase de texto en Telegram (sin botones inline)",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 47,
+      "name": "healthcheck_dependencias",
+      "title": "Health checks reales de dependencias",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 48,
+      "name": "retirar_asesores_telegram",
+      "title": "Retirar la atención de asesores por Telegram",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 49,
+      "name": "roles_supervisor_responsable_datos",
+      "title": "Roles de supervisor y responsable de datos en el panel",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 50,
+      "name": "notas_internas_y_etiquetas",
+      "title": "Notas internas y etiquetas en los casos",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 51,
+      "name": "respuestas_guardadas",
+      "title": "Respuestas guardadas para asesores",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 52,
+      "name": "asignacion_automatica_carga",
+      "title": "Asignación automática de casos por carga",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 53,
+      "name": "panel_tiempo_real",
+      "title": "Panel de asesores en tiempo real",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 54,
+      "name": "segundo_factor_panel",
+      "title": "Segundo factor en el acceso del personal al panel",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 55,
+      "name": "evaluacion_ataques_y_preguntas_reales",
+      "title": "Evaluación con casos de ataque y preguntas reales",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 56,
+      "name": "rediseño_visual_paneles",
+      "title": "Rediseño visual moderno de los paneles",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 57,
+      "name": "retencion_evidencia_y_privacidad_inicial",
+      "title": "Aplicar la retención aprobada a la evidencia de consentimiento",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 58,
+      "name": "correcciones_sonar",
+      "title": "Corregir hallazgos del análisis estático (Sonar)",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 59,
+      "name": "chat_caso_asesor",
+      "title": "Vista de chat en el detalle del caso del panel de asesores",
+      "sdd": true,
+      "status": "done"
+    },
     {
       "id": 60,
       "name": "contrato_canal_abierto",
@@ -93,7 +451,9 @@
         "La decisión vigente «solo texto» no cambia: el contrato transporta los tipos multimedia, pero el bot sigue pidiendo que el cliente escriba (lo aplica el núcleo, no el contrato).",
         "Pruebas en `contracts/tests/` cubren identificadores de canal válidos e inválidos, cada tipo nuevo, adjuntos, límite de metadata, bloque imagen y compatibilidad con payloads antiguos; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [43],
+      "dependencies": [
+        43
+      ],
       "sdd": true,
       "status": "done"
     },
@@ -101,20 +461,9 @@
       "id": 61,
       "name": "registro_canales_gateway",
       "title": "Puerto Canal, ChannelRegistry y tabla canales (Telegram y WhatsApp migrados)",
-      "description": "Fase 2. Arquitectura hexagonal en el gateway de canales: el puerto `Canal`, un registro dinámico de adaptadores y la tabla `canales`. Telegram y WhatsApp Cloud API pasan a ser adaptadores registrados sin perder funcionalidad.",
-      "acceptance": [
-        "En `services/telegram_gateway` existe el puerto `Canal` (`ports/canal.py`) con `recibir_mensaje(payload)` → mensaje normalizado o nada, `enviar_mensaje(destino, bloques)` → estado de entrega, `identificar_usuario(payload)` → id externo del usuario o nada, y `capacidades(destino)`; cada canal vive en `adapters/channels/<canal>.py`.",
-        "`ChannelRegistry` asocia en tiempo de ejecución `tipo_adaptador` → clase mediante registro (decorador o tabla de registro); no hay `if/else` ni enum por canal en el gateway. Un `tipo_adaptador` desconocido o duplicado falla cerrado con un error explícito.",
-        "Tabla `canales` propiedad del gateway: `id`, `nombre`, `tipo_adaptador`, `icono`, `color`, `config` (JSON), `activo`, `creado_en`. Los secretos de `config` se guardan cifrados con `cryptography` (decisión del dueño, 2026-11-21) y una clave leída de una variable de entorno; nunca se escriben en logs y las rutas de listado no los devuelven.",
-        "Al arrancar, si no existen, se crean las filas `telegram` y `whatsapp` a partir de las variables actuales (`TELEGRAM_*`, `WHATSAPP_*`); WhatsApp queda inactivo con `WHATSAPP_ENABLED=false`. La siembra es idempotente y no exige cambios manuales en el servidor.",
-        "Telegram y WhatsApp Cloud API se migran al puerto sin perder funcionalidad: `/telegram/webhook` y `/whatsapp/webhook` responden igual (el webhook ya registrado en Telegram no cambia) y `POST /send` resuelve el adaptador con el registry.",
-        "Degradación pura (sin IO) según capacidades: botones → lista numerada, imagen → enlace, lista → texto numerado; probada por combinación de capacidades.",
-        "El gateway expone rutas internas con `X-Service-Token` para listar canales con metadatos públicos (sin secretos) y para crear, editar, activar, desactivar y regenerar el secreto; las consume el panel en #66 y quedan en `CONTRATOS.md`.",
-        "Pruebas: registry (alta, duplicado, desconocido), degradación, Telegram y WhatsApp a través del puerto, identificar_usuario, protección de secretos, siembra idempotente; toda la batería actual del gateway sigue verde; `./init.sh` verde y reviewer aprueba."
-      ],
-      "dependencies": [60],
       "sdd": true,
-      "status": "spec_ready"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 62,
@@ -131,9 +480,12 @@
         "La URL de callback debe ser https y no puede resolver a direcciones privadas, loopback, link-local ni de metadatos (anti-SSRF), salvo un ajuste explícito de desarrollo documentado.",
         "Pruebas: firma válida, inválida, ausente y vencida; canal inactivo; formato normalizado y por adaptador; duplicado; callback firmado y verificable con el ejemplo de `CONTRATOS.md`; SSRF bloqueado; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [61],
+      "dependencies": [
+        61
+      ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 63,
@@ -148,9 +500,12 @@
         "Hasta #65 el orquestador rechaza con 422 los canales que no son `telegram` ni `whatsapp` (guarda temporal `ATTENDED_CHANNELS` de #60): en esta feature el gateway entrega el mensaje y el buzón y la página muestran ese rechazo como tal; el recorrido completo del canal simulado (consentimiento, login, bot, asesor) se verifica en #65.",
         "Pruebas: buzón, capacidades configurables, script de envío firmado, permisos de la página y marca SIMULADO visible; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [62],
+      "dependencies": [
+        62
+      ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 64,
@@ -167,9 +522,12 @@
         "`docker-compose.yml` añade los dos workers con la imagen del orquestador, igual que `timeouts_worker`; las filas procesadas se purgan con la retención vigente y la supresión las elimina.",
         "Pruebas: sin pérdida ante caída simulada, concurrencia entre workers, backoff, fallido, no reintento de 422, orden por destino, reintento manual y retención; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [61],
+      "dependencies": [
+        61
+      ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 65,
@@ -185,9 +543,14 @@
         "Un canal nuevo (probado con el canal simulado de #63) recorre consentimiento, login, bot, escalamiento y respuesta del asesor sin cambios en el núcleo, y las respuestas salen por el mismo canal y destino de la conversación.",
         "Pruebas: barrido de nombres de canal, ventana por capacidades, consentimiento por ajuste, migración de datos y flujo completo con canal simulado; toda la batería actual del orquestador sigue verde; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [61, 63, 64],
+      "dependencies": [
+        61,
+        63,
+        64
+      ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 66,
@@ -202,7 +565,10 @@
         "Ícono de una lista cerrada servida desde el mismo origen (o emoji) y color validado (`#RRGGBB`) con contraste suficiente para la etiqueta; sin CDN y sin cambiar la CSP.",
         "Pruebas: permisos, validaciones, copiar URL, ver y regenerar secreto con auditoría, ocultamiento de credenciales y desactivación; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [61, 65],
+      "dependencies": [
+        61,
+        65
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -222,7 +588,9 @@
         "La etiqueta no depende solo del color (incluye el nombre como texto) y cumple contraste WCAG AA; es un único componente que reutilizará el dashboard de #75.",
         "Pruebas por cada ubicación, filtro, vista en vivo, canal inactivo y desconocido y escape de nombre/ícono; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [66],
+      "dependencies": [
+        66
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -240,7 +608,9 @@
         "El login obligatorio y el consentimiento previo (#35) no cambian: antes del consentimiento no se guarda contenido y por tanto no hay nada que mostrar.",
         "Pruebas: estados, lectura en vivo, tomar (con y sin caso, concurrencia entre dos asesores), devolver, permisos y auditoría; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [67],
+      "dependencies": [
+        67
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -256,7 +626,9 @@
         "Ambas estrategias respetan las reglas de #52: solo asesores con presencia `available`, sin autoasignar supresiones ni casos fuera de horario, y sin pisar asignaciones hechas por personas.",
         "Pruebas: reparto round-robin, salto de asesores no disponibles, concurrencia, cambio de estrategia en caliente y regresión de `por_carga`; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [52],
+      "dependencies": [
+        52
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -272,7 +644,9 @@
         "Cada detección queda en eventos con su motivo y no se repite para la misma conversación dentro de un intervalo configurable.",
         "Pruebas: detección por frase y por router, aviso en bandeja y en vivo, ajuste de crear caso, anti-repetición y que el texto del cliente se trate como dato; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [68],
+      "dependencies": [
+        68
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -288,7 +662,9 @@
         "Ninguna respuesta rápida está escrita en el código: no se siembra contenido de negocio.",
         "Pruebas: coincidencia y prioridad, estados excluidos, degradación, validación de la imagen, permisos y que el modelo no se llame; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [65],
+      "dependencies": [
+        65
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -307,7 +683,9 @@
         "Supuesto a confirmar con legal: la aceptación por cliente se conserva hasta la supresión del cliente (configurable); la supresión la borra junto con sus identidades.",
         "Pruebas: aceptación compartida entre canales vinculados, canal nuevo sin vincular, cambio de versión, supresión y regresión de #35, #37 y #46; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [65],
+      "dependencies": [
+        65
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -325,7 +703,10 @@
         "`docs/especificacion.md` deja documentado que el login podría ser configurable según la empresa, como posibilidad, sin implementarlo.",
         "Pruebas: formato y unicidad del ID, mensaje en el chat, botón copiar y búsqueda en el panel, que el ID no autentique, y lista de canales; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [66, 72],
+      "dependencies": [
+        66,
+        72
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -344,7 +725,11 @@
         "Si el servidor MCP no está disponible, el bot responde como hoy y el fallo queda registrado.",
         "Pruebas con un MCP falso: solo lectura, autorización por estado, `cliente_id` de la sesión, caída del MCP y auditoría; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [26, 39, 65],
+      "dependencies": [
+        26,
+        39,
+        65
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -360,7 +745,9 @@
         "Reutiliza los cálculos de las métricas existentes (`/admin/metricas`, `/asesor/metricas`) sin duplicarlos.",
         "Pruebas: funciones puras del SVG (escape de nombres, datos vacíos, muchos canales), cálculos de tiempos y permisos; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [67],
+      "dependencies": [
+        67
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -376,7 +763,9 @@
         "No existe clase, configuración, botón, ruta ni texto que haga creer que la conexión con Lázaro funciona.",
         "Pruebas: contrato del puerto con la implementación local, regresión de la creación manual y tarjeta visible; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [42],
+      "dependencies": [
+        42
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -396,7 +785,9 @@
         "Correo y teléfono se agregan al cliente si no existen (cambio de esquema aprobado el 2026-11-21) y quedan sujetos a retención y supresión.",
         "Pruebas: parseo y separadores, validaciones, duplicados en base y en archivo, actualizar y saltar, resumen, límites, permisos y CSRF; `./init.sh` verde y reviewer aprueba."
       ],
-      "dependencies": [76],
+      "dependencies": [
+        76
+      ],
       "sdd": true,
       "status": "pending"
     },
@@ -413,7 +804,26 @@
         "Incluye la sección «Posibilidades a futuro»: integración de clientes con la API de Lázaro (`LazaroClientSource`), que la IA consulte los datos de los negocios de Lázaro (hoteles, restaurantes) mediante su API, y login configurable según la empresa; nada de esto se presenta como implementado.",
         "Incluye un resumen honesto de lo que funciona de verdad, lo que es simulado y lo que es solo propuesta."
       ],
-      "dependencies": [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77],
+      "dependencies": [
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77
+      ],
       "sdd": false,
       "status": "pending"
     }

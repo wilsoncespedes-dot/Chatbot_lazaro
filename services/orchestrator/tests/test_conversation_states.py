@@ -12,7 +12,7 @@ from orchestrator.domain import (
     apply_conversation_event,
     conversation_texts,
     consent_configured,
-    process_channel_message,
+    process_channel_message as _process_channel_message,
     transition_state,
 )
 from orchestrator.privacy import (
@@ -21,6 +21,14 @@ from orchestrator.privacy import (
     consent_button_proof,
     notice_sha256,
 )
+
+from fakes import drain_queues
+
+
+def process_channel_message(message, settings, adapters):
+    """Igual que el dominio, pero entrega la salida para observar el gateway."""
+    _process_channel_message(message, settings, adapters)
+    drain_queues(settings, adapters)
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 

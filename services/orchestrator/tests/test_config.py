@@ -125,6 +125,7 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/plantillas/{name}/estado",
         "/admin/ajustes",
         "/admin/metricas",
+        "/admin/simulador",
         "/credentials/expiry-notices",
         "/asesor",
         "/asesor/login",
@@ -145,6 +146,7 @@ def test_only_health_and_messages_routes_exposed():
         "/asesor/todos",
         "/asesor/casos/{case_id}/reasignar",
         "/asesor/metricas",
+        "/asesor/simulador",
         "/asesor/supresiones",
         "/asesor/supresiones/{request_id}/execute",
         "/asesor/live/inbox",
@@ -152,6 +154,8 @@ def test_only_health_and_messages_routes_exposed():
         "/asesor/static/panel_live.js",
         "/admin/supresiones",
         "/admin/supresiones/{request_id}/execute",
+        "/admin/envios",
+        "/admin/envios/{row_id}/reintentar",
     }
 
 

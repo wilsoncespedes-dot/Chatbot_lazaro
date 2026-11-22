@@ -12,6 +12,8 @@ from lazaro_contracts import CaseAuthorizeResponse, ErrorResponse
 from orchestrator.adapters.handover import HttpHandoverClient
 from orchestrator.domain import AuthorizationDenied, ServiceUnavailable
 
+from fakes import drain_queues
+
 HEADERS = {"X-Service-Token": "svc-token"}
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -22,11 +24,13 @@ def _reply(
     advisor_id: str = "555",
     text: str = "Hola, soy tu asesor",
 ):
-    return env.client.post(
+    response = env.client.post(
         f"/cases/{case_id}/reply",
         json={"advisor_id": advisor_id, "text": text},
         headers=HEADERS,
     )
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _open_case(env):
@@ -84,13 +88,13 @@ def test_reply_forbidden_for_unknown_case_returns_403_not_404(env):
     _assert_error(_reply(env, "no-existe"), 403, "forbidden")
 
 
-def test_reply_allowed_follows_authorize_send_store_assign_order(env):
-    """autorizacion_asesores R24: orden authorize → send → add_message → assign."""
+def test_reply_allowed_persists_then_assigns_before_worker_delivery(env):
+    """R24 + R18 (#64): autoriza, guarda mensaje+outbox y asigna; el worker envía."""
     _open_case(env)
     calls = []
     original_authorize = env.handover.authorize
-    original_send = env.gateway.send
-    original_add_message = env.repo.add_message
+    original_send = env.gateway.send_channel_blocks
+    original_persist = env.repo.add_message_with_outbox
     original_assign = env.handover.assign
 
     def authorize(*args, **kwargs):
@@ -101,22 +105,23 @@ def test_reply_allowed_follows_authorize_send_store_assign_order(env):
         calls.append("send")
         return original_send(*args, **kwargs)
 
-    def add_message(*args, **kwargs):
-        calls.append("add_message")
-        return original_add_message(*args, **kwargs)
+    def persist(*args, **kwargs):
+        calls.append("persist")
+        return original_persist(*args, **kwargs)
 
     def assign(*args, **kwargs):
         calls.append("assign")
         return original_assign(*args, **kwargs)
 
     env.handover.authorize = authorize
-    env.gateway.send = send
-    env.repo.add_message = add_message
+    env.gateway.send_channel_blocks = send
+    env.repo.add_message_with_outbox = persist
     env.handover.assign = assign
     response = _reply(env)
     assert response.status_code == 200
     assert response.json() == {"sent": True}
-    assert calls == ["authorize", "send", "add_message", "assign"]
+    assert calls[:3] == ["authorize", "persist", "assign"]
+    assert calls[-1] == "send"
 
 
 def test_reply_forbidden_returns_403_without_sending_or_storing(env):

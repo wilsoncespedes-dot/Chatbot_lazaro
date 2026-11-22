@@ -76,12 +76,15 @@ def test_incoming_and_outgoing_messages_saved_with_dates(env):
     assert (bot_msg.role, bot_msg.text, bot_msg.at) == ("bot", "Respuesta final", FIXED_NOW)
 
 
-def test_failed_send_is_not_saved_as_outgoing(env):
-    """R26"""
+def test_failed_send_keeps_message_and_pending_outbox(env):
+    """R17, R26 (#64): el mensaje se guarda y la salida queda para reintento."""
     env.gateway.fail = True
     response = env.post()
     assert response.status_code == 202
-    assert [m.role for m in env.repo.messages] == ["user"]
+    assert [m.role for m in env.repo.messages] == ["user", "bot"]
+    [(row)] = env.repo.outbox.values()
+    assert row["status"] == "pending"
+    assert row["last_error"] == "ServiceUnavailable"
 
 
 def test_rag_answer_event_saved(env):

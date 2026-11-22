@@ -117,8 +117,10 @@ def _json_depth(value: JsonValue) -> int:
     return max_depth
 
 
-def _check_metadata(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    """R15, R16, R17: JSON compacto de hasta 4096 bytes y profundidad 5."""
+def check_json_object(
+    value: dict[str, JsonValue], max_bytes: int, max_depth: int
+) -> dict[str, JsonValue]:
+    """Valida el tamaño y la profundidad de un objeto JSON compacto."""
     try:
         size = len(
             json.dumps(
@@ -126,12 +128,27 @@ def _check_metadata(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
             ).encode("utf-8")
         )
     except (TypeError, ValueError) as exc:
-        raise ValueError("metadata debe ser JSON") from exc
-    if size > MAX_METADATA_BYTES:
-        raise ValueError("metadata supera el tamaño máximo")
-    if _json_depth(value) > MAX_METADATA_DEPTH:
-        raise ValueError("metadata supera la profundidad máxima")
+        raise ValueError("el valor debe ser un objeto JSON") from exc
+    if size > max_bytes:
+        raise ValueError("el objeto JSON supera el tamaño máximo")
+    if _json_depth(value) > max_depth:
+        raise ValueError("el objeto JSON supera la profundidad máxima")
     return value
+
+
+def _check_metadata(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """R15, R16, R17: JSON compacto de hasta 4096 bytes y profundidad 5."""
+    try:
+        return check_json_object(value, MAX_METADATA_BYTES, MAX_METADATA_DEPTH)
+    except ValueError as exc:
+        message = str(exc)
+        if message == "el valor debe ser un objeto JSON":
+            message = "metadata debe ser JSON"
+        elif message == "el objeto JSON supera el tamaño máximo":
+            message = "metadata supera el tamaño máximo"
+        elif message == "el objeto JSON supera la profundidad máxima":
+            message = "metadata supera la profundidad máxima"
+        raise ValueError(message) from exc
 
 
 class Attachment(ContractModel):

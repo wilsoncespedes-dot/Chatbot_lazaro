@@ -11,6 +11,8 @@ from lazaro_contracts import ExpiryNoticeRunResponse
 from orchestrator.adapters.repository import WhatsAppTemplate
 from orchestrator.domain import ClientSession, send_expiry_notices
 
+from fakes import drain_queues
+
 NOW = None
 
 
@@ -63,6 +65,7 @@ def test_sends_text_with_days_and_local_date(env):
     """R45, R46, R50, R57: candidata, texto con {dias}/{fecha}, evento y auditoría."""
     profile, contact = _client(env, valid_until=env.adapters.clock() + timedelta(days=3))
     response = send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert isinstance(response, ExpiryNoticeRunResponse)
     assert (response.enabled, response.candidates, response.sent_text) == (True, 1, 1)
     assert "3 días" in env.gateway.channel_sent[-1][2]
@@ -154,6 +157,7 @@ def test_whatsapp_closed_window_sends_only_template_with_variables(env):
         )
     )
     response = send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert response.sent_template == 1
     blocks = env.gateway.blocks_sent[-1][2]
     assert len(blocks) == 1
@@ -182,7 +186,9 @@ def test_success_is_sent_only_once_and_sending_orphan_is_not_retried(env):
     """R53, R55: un periodo se envía exactamente una vez; `sending` no se reintenta."""
     profile, _ = _client(env)
     send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert len(env.gateway.channel_sent) == 1
     assert send_expiry_notices(env.settings, env.adapters).skipped["already_notified"] == 1
 
@@ -196,29 +202,34 @@ def test_success_is_sent_only_once_and_sending_orphan_is_not_retried(env):
     assert send_expiry_notices(env.settings, env.adapters).skipped["already_notified"] >= 1
 
 
-def test_failure_marks_failed_and_retries_until_max(env):
-    """R58, R53: un fallo marca failed, incrementa intentos y reintenta hasta el máximo."""
-    env.settings.expiry_notice_max_attempts = 2
+def test_delivery_failure_is_retried_by_outbox(env):
+    """R58 (#42) + R23 (#64): el aviso se encola; la entrega fallida se reintenta."""
     _client(env)
     env.gateway.fail = True
-    assert send_expiry_notices(env.settings, env.adapters).failed == 1
-    assert send_expiry_notices(env.settings, env.adapters).failed == 1
     response = send_expiry_notices(env.settings, env.adapters)
-    assert response.skipped["already_notified"] == 1
-    [(row)] = env.repo.expiry_notices.values()
-    assert row["status"] == "failed" and row["attempts"] == 2
+    drain_queues(env.settings, env.adapters)
+    assert response.sent_text == 1
+    [(row)] = env.repo.outbox.values()
+    assert row["status"] == "pending"
+    assert row["last_error"] == "ServiceUnavailable"
+    [(notice)] = env.repo.expiry_notices.values()
+    assert notice["status"] == "sent"
 
 
 def test_failure_then_success_retries_once(env):
-    """R58: tras un fallo, el siguiente intento puede enviar y marcar sent."""
+    """R58: el reintento del outbox entrega el aviso una vez."""
     _client(env)
     env.gateway.fail = True
     send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     env.gateway.fail = False
-    response = send_expiry_notices(env.settings, env.adapters)
-    assert response.sent_text == 1
-    [(row)] = env.repo.expiry_notices.values()
-    assert row["status"] == "sent"
+    [(row_id, row)] = env.repo.outbox.items()
+    row["next_attempt_at"] = env.adapters.clock()
+    drain_queues(env.settings, env.adapters)
+    assert env.repo.outbox[row_id]["status"] == "sent"
+    assert len(env.gateway.channel_sent) == 1
+    [(notice)] = env.repo.expiry_notices.values()
+    assert notice["status"] == "sent"
 
 
 def test_two_concurrent_passes_send_at_most_one_notice(env):
@@ -226,6 +237,7 @@ def test_two_concurrent_passes_send_at_most_one_notice(env):
     _client(env)
     with ThreadPoolExecutor(max_workers=2) as executor:
         list(executor.map(lambda _: send_expiry_notices(env.settings, env.adapters), range(2)))
+    drain_queues(env.settings, env.adapters)
     assert len(env.gateway.channel_sent) == 1
 
 
@@ -233,6 +245,7 @@ def test_renewal_creates_a_new_period_that_can_notify_again(env):
     """R56: el periodo nuevo avisa una vez y no avisa si no vuelve a ser candidato."""
     profile, _ = _client(env, valid_until=env.adapters.clock() + timedelta(days=3))
     send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     far = env.adapters.clock() + timedelta(days=60)
     env.repo.renew_client_credential(profile.id, far, env.adapters.clock())
     response = send_expiry_notices(env.settings, env.adapters)
@@ -241,5 +254,6 @@ def test_renewal_creates_a_new_period_that_can_notify_again(env):
     near = env.adapters.clock() + timedelta(days=2)
     env.repo.renew_client_credential(profile.id, near, env.adapters.clock())
     response = send_expiry_notices(env.settings, env.adapters)
+    drain_queues(env.settings, env.adapters)
     assert response.sent_text == 1
     assert len(env.gateway.channel_sent) == 2

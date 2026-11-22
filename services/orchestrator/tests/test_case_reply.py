@@ -13,6 +13,8 @@ from orchestrator.adapters.handover import HttpHandoverClient
 from orchestrator.adapters.repository import PostgresRepository
 from orchestrator.domain import Contact, ServiceUnavailable
 
+from fakes import drain_queues
+
 HEADERS = {"X-Service-Token": "svc-token"}
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -20,8 +22,10 @@ FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 def _reply(env, case_id: str = "case-1", advisor_id: str = "555", text: str = "Hola, soy tu asesor",
            headers: dict | None = None, body: dict | None = None):
     payload = {"advisor_id": advisor_id, "text": text} if body is None else body
-    return env.client.post(f"/cases/{case_id}/reply", json=payload,
-                           headers=HEADERS if headers is None else headers)
+    response = env.client.post(f"/cases/{case_id}/reply", json=payload,
+                               headers=HEADERS if headers is None else headers)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _open_case(env) -> Contact:
@@ -134,10 +138,10 @@ def test_reply_unknown_case_returns_404_without_sending(env):
     assert _snapshot(env) == before
 
 
-def test_reply_send_failure_returns_502_and_stores_nothing(env):
-    """R36: si POST /send falla -> 502 upstream_error, sin guardar ni llamar a assign."""
+def test_reply_outbox_failure_returns_502_and_stores_nothing(env):
+    """R20 (#64): si no se puede encolar la salida -> 502 sin guardar ni asignar."""
     _open_case(env)
-    env.gateway.fail = True
+    env.repo.fail_outbox_insert = True
     before = _snapshot(env)
     response = _reply(env, "case-1")
     assert response.status_code == 502

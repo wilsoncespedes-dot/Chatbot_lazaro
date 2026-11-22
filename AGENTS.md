@@ -107,9 +107,11 @@ Antes de terminar:
 - Cambiar de modo: `./modo.sh supervisado` o `./modo.sh nocturno` (y
   reiniciar Claude Code). Ambos modos usan OpenCode/DeepSeek para escribir código.
   `./modo.sh` muestra el modo actual.
-- Trabajo autónomo continuo: `./nocturno.sh`. Lanza una sesión por
-  feature, se para sola con frenos de seguridad y deja un informe en
-  `progress/nocturno_<fecha>.md`.
+- Trabajo autónomo continuo: `./nocturno.sh`. Sin argumentos procesa features
+  accionables sin límite de sesiones/horas; los límites explícitos se pueden
+  fijar con `--max-sesiones`, `--max-horas` o `--timeout-min` (0 = sin límite).
+  Respeta dependencias, reintenta fallos transitorios con espera creciente y
+  deja un informe en `progress/nocturno_<fecha>.md`.
 - En modo nocturno, si te bloqueas **no pares toda la noche**: marca la
   feature `blocked`, explica el motivo en `progress/blocked_<name>.md`,
   deja `./init.sh` verde y termina la sesión. El script sigue con la

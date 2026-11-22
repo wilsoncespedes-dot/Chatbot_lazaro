@@ -6,9 +6,13 @@ from datetime import timedelta
 import pytest
 from lazaro_contracts import TemplateBlock
 
+from fakes import drain_queues
+
 
 def _post(env, path: str, data: dict):
-    return env.client.post(path, data=data, follow_redirects=False)
+    response = env.client.post(path, data=data, follow_redirects=False)
+    drain_queues(env.settings, env.adapters)
+    return response
 
 
 def _whatsapp_case(env, panel, case_id: str = "case-1", last_user_at=None):
@@ -134,8 +138,8 @@ def test_reply_requires_exactly_one_of_text_or_template(env_factory, data, panel
     assert env.gateway.sent == []
 
 
-def test_gateway_422_maps_to_channel_window_closed(env_factory, panel):
-    """R21: un 422 del gateway se presenta como 409 y no guarda mensaje."""
+def test_gateway_422_becomes_failed_outbox_row(env_factory, panel):
+    """R25 (#64): un 422 tardío del gateway deja un envío fallido visible."""
     env = env_factory()
     panel.login(env)
     _whatsapp_case(env, panel, last_user_at=panel.NOW - timedelta(hours=1))
@@ -145,9 +149,11 @@ def test_gateway_422_maps_to_channel_window_closed(env_factory, panel):
         "/asesor/reply",
         {"csrf_token": panel.CSRF, "case_id": "case-1", "text": "Hola"},
     )
-    assert response.status_code == 409
-    assert 'data-code="channel_window_closed"' in response.text
-    assert [m for m in env.repo.messages if m.role == "advisor"] == []
+    assert response.status_code == 303
+    failed = env.repo.list_failed_outbound(10)
+    assert [row.last_error for row in failed] == ["ChannelRejected"]
+    assert [m.text for m in env.repo.messages if m.role == "advisor"] == ["Hola"]
+    assert env.gateway.channel_sent == []
 
 
 def test_authorize_happens_before_window_check(env_factory, panel):

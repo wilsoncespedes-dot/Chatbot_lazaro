@@ -1,0 +1,82 @@
+"""Política de canal derivada de lo que informa el gateway (#65). Puro, sin IO.
+
+El núcleo del orquestador decide por capacidades y ajustes del canal, nunca por
+su nombre: un canal *con ventana* es el que informa `free_text_allowed=false` y
+`requires_template=true`; el modo de consentimiento sale de `config.consent_mode`.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from lazaro_contracts import CONSENT_MODES, DEFAULT_CONSENT_MODE, ChannelInfo
+
+ConsentMode = Literal["texto", "boton"]
+
+__all__ = [
+    "DEFAULT_CONSENT_MODE",
+    "ChannelPolicy",
+    "ConsentMode",
+    "consent_mode",
+    "default_policy",
+    "is_windowed",
+    "policy_from_info",
+]
+
+
+@dataclass(frozen=True)
+class ChannelPolicy:
+    id: str
+    name: str
+    icon: str
+    color: str
+    active: bool
+    windowed: bool
+    consent_mode: ConsentMode
+
+    @property
+    def text_consent(self) -> bool:
+        return self.consent_mode == "texto"
+
+
+def is_windowed(info: ChannelInfo) -> bool:
+    """R11/R12: con ventana solo si las capacidades lo dicen explícitamente."""
+    capabilities = info.capabilities
+    return (
+        capabilities is not None
+        and not capabilities.free_text_allowed
+        and capabilities.requires_template
+    )
+
+
+def consent_mode(info: ChannelInfo) -> ConsentMode:
+    """R13 y S3: `config.consent_mode` válido o `texto`."""
+    value = info.config.get("consent_mode")
+    if isinstance(value, str) and value in CONSENT_MODES:
+        return value  # type: ignore[return-value]
+    return DEFAULT_CONSENT_MODE  # type: ignore[return-value]
+
+
+def policy_from_info(info: ChannelInfo) -> ChannelPolicy:
+    return ChannelPolicy(
+        id=info.id,
+        name=info.name,
+        icon=info.icon,
+        color=info.color,
+        active=info.active,
+        windowed=is_windowed(info),
+        consent_mode=consent_mode(info),
+    )
+
+
+def default_policy(channel_id: str) -> ChannelPolicy:
+    """R14: un id ausente del directorio es sin ventana, `texto` y se nombra por su id."""
+    return ChannelPolicy(
+        id=channel_id,
+        name=channel_id,
+        icon="chat",
+        color="#5B6470",
+        active=True,
+        windowed=False,
+        consent_mode=DEFAULT_CONSENT_MODE,  # type: ignore[arg-type]
+    )

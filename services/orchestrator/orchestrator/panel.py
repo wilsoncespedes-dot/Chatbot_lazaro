@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Literal, Sequence
 
+from .channels import ChannelPolicy
 from .memory import in_window
 
 WindowState = Literal["open", "closed", "not_applicable"]
@@ -12,10 +13,10 @@ SuppressionPriority = Literal["vencida", "urgente", "alta"]
 
 
 def channel_window(
-    channel: str, last_user_at: datetime | None, now: datetime, hours: int
+    policy: ChannelPolicy, last_user_at: datetime | None, now: datetime, hours: int
 ) -> WindowState:
-    """Ventana de texto libre: Telegram nunca aplica y WhatsApp dura `hours`."""
-    if channel != "whatsapp":
+    """#65 R19: la ventana de texto libre solo aplica a canales con ventana y dura `hours`."""
+    if not policy.windowed:
         return "not_applicable"
     if last_user_at is None:
         return "closed"
