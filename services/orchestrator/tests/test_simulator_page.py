@@ -132,7 +132,7 @@ def test_page_shows_simulado_title_heading_and_label_even_if_name_lacks_it(env, 
     _admin(env, panel)
     page = env.client.get(ADMIN_PATH)
     assert "<title>Simulador [SIMULADO]</title>" in page.text
-    assert "<h2>Simulador [SIMULADO]</h2>" in page.text
+    assert "<h1>Simulador [SIMULADO]</h1>" in page.text
     assert "TikTok [SIMULADO]" in page.text
 
 

@@ -355,6 +355,8 @@ def test_clients_page_lazaro_only_in_future_card(env_factory, panel):
         html,
         flags=re.S,
     )
+    # La marca del panel (barra lateral) no es una referencia a la API de Lázaro.
+    without_card = re.sub(r'<div class="brand">.*?</div>', "", without_card, flags=re.S)
     assert not re.search(r"l[áa]zaro", without_card, re.IGNORECASE)
 
 

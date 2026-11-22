@@ -297,17 +297,11 @@ def test_post_without_session_redirects_before_csrf(env):
 def _admin_pages(env: Env) -> list:
     _create_profile(env)
     _login_ok(env)
-    csrf = _csrf(env)
-    profile_id = next(iter(env.repo.profiles))
-    link = env.client.post(
-        f"/admin/profiles/{profile_id}/link-token", data={"csrf_token": csrf}
-    )
     return [
         env.client.get("/admin/login"),
         env.client.get("/admin"),
         env.client.get("/admin/profiles"),
         env.client.get("/admin/events"),
-        link,
     ]
 
 
@@ -319,7 +313,9 @@ def test_admin_html_has_csp_and_no_external_resources(env):
     for response in _admin_pages(env):
         assert response.status_code == 200
         assert response.headers["content-security-policy"] == expected
-        assert "<script" not in response.text.lower()
+        # #60 R26: solo el script propio del login (mismo origen) está permitido.
+        own = '<script src="/admin/static/login.js" defer></script>'
+        assert "<script" not in response.text.lower().replace(own, "")
         for value in re.findall(r'(?:src|href)="([^"]*)"', response.text):
             assert not value.startswith(("http://", "https://", "//"))
 
@@ -349,7 +345,7 @@ def test_admin_responses_never_include_service_token_or_password(env):
 
 
 def test_create_profile_from_panel_and_list_it(env):
-    """R7: crear perfil -> 303 y aparece con username, rol y si está vinculado."""
+    """R7: crear perfil -> 303 y aparece con username y rol (#65: sin columna de Telegram)."""
     created = _create_profile(env)
     _login_ok(env)
     csrf = _csrf(env)
@@ -370,11 +366,7 @@ def test_create_profile_from_panel_and_list_it(env):
     page = env.client.get("/admin/profiles").text
     assert "asesor.uno" in page
     assert "asesor" in page
-    assert "No" in page
-
-    env.repo.profiles[created["id"]].telegram_user_id = 700
-    page = env.client.get("/admin/profiles").text
-    assert "Sí" in page
+    assert created["id"] in env.repo.profiles
 
 
 @pytest.mark.parametrize(
@@ -501,36 +493,20 @@ def test_change_role_rejects_invalid_role(env):
 # --- R9: enlace de vinculación ---------------------------------------------------------
 
 
-def test_link_token_page_shows_link_and_expiry_once_with_no_store(env):
-    """R9: el enlace se muestra una vez con expires_at y Cache-Control: no-store."""
+def test_panel_no_longer_issues_telegram_link_tokens(env):
+    """#65 R3, R4: sin botón ni ruta para generar el enlace de Telegram."""
     _create_profile(env)
     _login_ok(env)
     csrf = _csrf(env)
     profile_id = next(iter(env.repo.profiles))
-
+    page = env.client.get("/admin/profiles").text
+    assert "Generar enlace" not in page
+    assert "link-token" not in page
+    assert "Telegram vinculado" not in page
     response = env.client.post(
         f"/admin/profiles/{profile_id}/link-token", data={"csrf_token": csrf}
     )
-    assert response.status_code == 200
-    assert response.headers["cache-control"] == "no-store"
-    assert len(env.repo.link_tokens) == 1
-    stored = next(iter(env.repo.link_tokens.values()))
-    token = response.text.split("?start=", 1)[1].split("<", 1)[0]
-    assert token
-    assert env.repo.link_tokens.get(hash_token(token)) is stored
-    assert response.text.count(token) == 1
-    assert stored.expires_at.isoformat() in response.text
-
-
-def test_link_token_for_unknown_profile_returns_404(env):
-    """R9: perfil inexistente -> 404 sin emitir token."""
-    _create_profile(env)
-    _login_ok(env)
-    csrf = _csrf(env)
-    response = env.client.post(
-        "/admin/profiles/no-existe/link-token", data={"csrf_token": csrf}
-    )
-    assert response.status_code == 404
+    assert response.status_code in (404, 405)
     assert env.repo.link_tokens == {}
 
 

@@ -213,3 +213,63 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 ## 2026-11-22 — Feature #78 readme_multicanal (done)
 - **Modo:** nocturno (sin spec; README revisado y aprobado por reviewer, pendiente de revisión humana)
 - **README:** documenta la plataforma multicanal: diagrama de arquitectura (núcleo, puertos, adaptadores, cola y workers), cómo agregar un canal con adaptador propio o con el webhook genérico, formato del webhook y del callback con firma, configuración de cola, servidor MCP y modelo de IA (incluido Ollama), sección «Posibilidades a futuro» (`LazaroClientSource`, datos de negocios por API, login configurable; nada presentado como implementado) y resumen honesto de lo real, lo simulado y lo propuesto. Sin cambios de código. Revisión en `progress/review_readme_multicanal.md`: `APPROVED`.
+
+
+## 2026-11-17 — #60 rediseno_identidad_panel (done)
+- Nueva identidad visual (turquesa, claro/oscuro) en `/admin`, `/asesor` y `/acceso`; marca "Lázaro Software". Shell común con menú lateral agrupado e iconos SVG en línea; menú de asesores por rol (Atención / Supervisión / Privacidad) vía `ContextVar`.
+- Inicio con accesos rápidos, editor de "Textos del flujo" en dos columnas sin JS (`:target` + `:has()`), perfiles con avatar e insignias, métricas en tarjetas (`admin.metrics_body`), login nuevo con ojo para ver la contraseña (`/admin/static/login.js`, R26).
+- Escrito por Claude a pedido del usuario (OpenCode no instalado en ese equipo). Spec `specs/rediseno_identidad_panel/` (R1–R26). PR #1 y #2 unidos por el dueño. `./init.sh`: 3650 passed, 1 skipped.
+
+## 2026-11-17 — #61 fechas_y_formularios_panel (done)
+- Fechas legibles ("17 nov 2026, 2:33 p. m.") en la zona del negocio con `admin.time_html`, también en el chat del caso y el JS en vivo (sustituye `dd/mm HH:MM UTC` de #59 R3). Formularios de alta en cuadrícula (`create-form`) y acciones de Clientes de igual ancho. R7: `/admin/supresiones` dentro del panel admin (PR #4). Spec `specs/fechas_y_formularios_panel/`. PR #3 unido.
+
+## 2026-11-17 — #62 validacion_respuestas_flexible (done)
+- La validación anti-alucinación dejaba de rechazar respuestas correctas: quita bloques ```json, ignora marcadores de pasos al inicio de línea y compara citas sin tildes ni puntuación (palabras completas). Cifras inventadas y paráfrasis se siguen rechazando. Spec `specs/validacion_respuestas_flexible/`. PR #5.
+
+## 2026-11-17 — #63 fragmentos_por_seccion (done)
+- `rag.domain.chunk_text` trocea por secciones (títulos Markdown y numerados) y frases, con la ruta de títulos al inicio de cada fragmento; la extracción DOCX conserva títulos y filas de tabla. Requiere volver a subir los manuales. Spec `specs/fragmentos_por_seccion/`. PR #6 (encima de #5).
+
+## 2026-11-17 — #64 preguntas_seguimiento (done)
+- Mensajes cortos con una pregunta anterior reciente buscan también con "pregunta anterior + mensaje" y combinan resultados; la IA recibe `<pregunta_anterior>` neutralizada. Configurable con `RAG_FOLLOWUP_*`. Spec `specs/preguntas_seguimiento/`. PR #7 (encima de #6).
+
+## Notas del equipo traídas en el merge (rama feat/lazaro-backlog-complete; sus #60-#65 son aquí #79-#84)
+
+## 2026-11-16 — pruebas manuales con Telegram (fuera del flujo SDD, pedido del dueño)
+
+- Hotfix directo (opción A del dueño): `HttpLLMClient` acepta un encabezado de
+  sesión opcional (`LLM_SESSION_HEADER`, p. ej. `x-opencode-session` para
+  OpenCode Go) y la IA tiene su propio tiempo de espera (`LLM_TIMEOUT_SECONDS`,
+  60 s por defecto; antes usaba los 10 s de los servicios internos). Archivos:
+  `adapters/llm.py`, `config.py`, `main.py`, `tests/test_adapters.py`,
+  `.env.example`. Tests de `services/orchestrator` en verde.
+- Hallazgos de configuración local (no de código): la IA apuntaba a OpenAI con
+  clave de OpenCode Go; faltaban `IDENTITY_PUBLIC_BASE_URL` e
+  `IDENTITY_LINK_SIGNING_KEY`; `RAG_SIMILARITY_THRESHOLD=0.75` es demasiado alto
+  para `text-embedding-3-small` (preguntas del manual Siigo puntúan ~0.69,
+  preguntas ajenas ~0.40). Para las pruebas se usó 0.5 vía override de compose
+  fuera del repo.
+- Corregido (directo, a pedido del dueño): `/admin/profiles` ya no crea ni
+  cambia perfiles a rol `cliente` (sin credencial nunca podían entrar:
+  `login_denied credential_revocada`); remite a `/admin/clientes`. Tests en
+  `test_admin.py`; `test_roles_matrix.py::test_admin_role_selector_lists_five_roles`
+  ajustado a la regla nueva.
+- Corregido (directo): orchestrator, handover y rag reconectan a Postgres si la
+  base se reinicia (antes: `BrokenPipeError` y 500 hasta reiniciar el
+  servicio). La conexión se comprueba con `SELECT 1` tras 10 s sin uso y se
+  descarta ante errores de red. Tests en `handover/tests/test_db_reconnect.py`.
+  Verificado reiniciando el contenedor de Postgres: 0 errores.
+- `./init.sh`: 3622 passed, 1 skipped.
+- Pendiente de decidir: umbral RAG definitivo y si el cambio del encabezado de
+  sesión se formaliza como feature.
+
+## 2026-11-17 — #65 asesores_sin_telegram (in_progress, rama `lazaro/asesores-sin-telegram`, encima de PR #7)
+
+- Pedido del usuario: el panel de asesores ya no exige Telegram vinculado
+  (el Inicio solo mostraba un aviso) y se quita la generación del enlace en
+  Perfiles y roles (botón, `POST /admin/profiles/{id}/link-token`,
+  `admin.render_link` y columnas de Telegram).
+- Quitados los `except TelegramNotLinked` muertos y el mensaje
+  `telegram_not_linked`.
+- Se conserva la API interna `/profiles/{id}/link-token` y el `/start` de
+  Telegram (feature #20) porque no son del panel; sin enlace nuevo, un asesor
+  no podrá usar `/db_query` desde Telegram.

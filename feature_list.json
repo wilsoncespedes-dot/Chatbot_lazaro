@@ -821,6 +821,48 @@
       ],
       "sdd": false,
       "status": "done"
+    },
+    {
+      "id": 79,
+      "name": "rediseno_identidad_panel",
+      "title": "Rediseño de los paneles con la nueva identidad visual (menú lateral agrupado, editor de textos del flujo, login)",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 80,
+      "name": "fechas_y_formularios_panel",
+      "title": "Fechas legibles y formularios simétricos en los paneles",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 81,
+      "name": "validacion_respuestas_flexible",
+      "title": "Validación de respuestas del bot sin falsos rechazos (bloques de código, pasos numerados, citas con tildes o puntuación)",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 82,
+      "name": "fragmentos_por_seccion",
+      "title": "Trocear los manuales por secciones y frases, con el título de la sección en cada fragmento",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 83,
+      "name": "preguntas_seguimiento",
+      "title": "Preguntas de seguimiento: buscar también con la pregunta anterior del contacto",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 84,
+      "name": "asesores_sin_telegram",
+      "title": "Quitar la verificación por Telegram de los asesores y la generación del enlace de vinculación en el panel",
+      "sdd": true,
+      "status": "in_progress"
     }
   ]
 }

@@ -403,7 +403,11 @@ def test_advisor_html_has_csp_and_no_external_resources(env):
         assert response.headers["content-security-policy"] == expected
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["cache-control"] == "no-store"
-        assert response.text.count("<script") == response.text.count(live_script)
+        # #60 R26: el login añade su script propio de mismo origen.
+        login_script = '<script src="/admin/static/login.js" defer>'
+        assert response.text.count("<script") == (
+            response.text.count(live_script) + response.text.count(login_script)
+        )
         for value in re.findall(r'(?:src|href)="([^"]*)"', response.text):
             assert not value.startswith(("http://", "https://", "//"))
 

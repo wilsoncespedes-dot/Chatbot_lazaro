@@ -130,18 +130,18 @@ def test_fragment_bubble_side_and_author_label_by_role(panel, role, css_class, l
 
 
 def test_fragment_bubble_has_time_with_iso_and_utc_text(panel):
-    """R3: `datetime` ISO y texto `dd/mm HH:MM UTC`."""
+    """R3: `datetime` ISO y texto legible en la zona del negocio (#61, UTC−5)."""
     html = advisor_panel.render_history_fragment(
         [HistoryItem("user", "hola", panel.NOW)]
     )
     assert 'datetime="2026-01-02T03:04:05+00:00"' in html
-    assert "02/01 03:04 UTC" in html
+    assert "1 ene 2026, 10:04 p. m." in html
 
     offset = datetime(2026, 1, 1, 22, 4, 5, tzinfo=timezone(timedelta(hours=-5)))
     converted = advisor_panel.render_history_fragment(
         [HistoryItem("user", "hola", offset)]
     )
-    assert "02/01 03:04 UTC" in converted
+    assert "1 ene 2026, 10:04 p. m." in converted
 
 
 def test_fragment_empty_history_message():

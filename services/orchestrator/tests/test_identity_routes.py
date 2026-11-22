@@ -82,7 +82,10 @@ def test_login_page_has_no_external_resources(env_factory):
     text = env.client.get("/acceso", params={"t": token}).text
 
     assert "http://" not in text and "https://" not in text
-    assert "<script" not in text
+    # #60 R26: solo el script propio del login (mismo origen) está permitido.
+    assert "<script" not in text.replace(
+        '<script src="/admin/static/login.js" defer></script>', ""
+    )
 
 
 def test_invalid_or_used_token_returns_400_without_credentials(env_factory):
