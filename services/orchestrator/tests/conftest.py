@@ -89,6 +89,10 @@ class Env:
     settings: Settings
     adapters: Adapters
 
+    def clock(self) -> datetime:
+        """Reloj fijo de la suite (#68): mismo reloj que usa el dominio."""
+        return self.adapters.clock()
+
     def post(self, text: str = "¿Cómo instalo el módulo?", update_id: int = 1, user: int = 10,
              chat: int = 100, headers: dict | None = None, consent: bool = True,
              raise_server_exceptions: bool | None = None):

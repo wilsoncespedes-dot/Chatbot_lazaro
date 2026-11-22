@@ -7,6 +7,10 @@ import secrets
 from datetime import datetime
 from urllib.parse import quote
 
+from .channel_label import label_from_values, render_channel_label
+from .copy_button import copy_button
+from .dashboard import render_dashboard_body
+
 CSP = "default-src 'self'; form-action 'self'; frame-ancestors 'none'"
 PANEL_CSP = (
     "default-src 'self'; script-src 'self'; connect-src 'self'; "
@@ -33,6 +37,9 @@ ERROR_MESSAGES = {
     "saved_reply_variables_not_allowed": (
         "Las respuestas guardadas son texto plano y no admiten variables."
     ),
+    "quick_reply_invalid": "Los datos de la respuesta rápida no son válidos.",
+    "quick_reply_image_invalid": "La imagen de la respuesta rápida no es válida.",
+    "quick_reply_not_found": "La respuesta rápida no existe.",
 }
 
 _LONG_DIGITS_RE = re.compile(r"\d{6,}")
@@ -162,6 +169,7 @@ code { background: var(--bg); padding: 0.1rem 0.3rem;
 .chat-msg-advisor { align-self: flex-end; background: var(--ok-bg); }
 .chat-msg-bot { align-self: flex-end; background: var(--info-bg); }
 .chat-author, .chat-time { color: var(--muted); font-size: 0.8rem; }
+.channel-label { vertical-align: middle; }
 .chat-time { align-self: flex-end; }
 .chat-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-empty { margin: 0; color: var(--muted); }
@@ -300,15 +308,18 @@ ADMIN_NAV_LINKS = [
     ("/admin/categories", "Categorías"),
     ("/admin/etiquetas", "Etiquetas"),
     ("/admin/respuestas", "Respuestas guardadas"),
+    ("/admin/respuestas-rapidas", "Respuestas rápidas"),
     ("/admin/texts", "Textos del flujo"),
     ("/admin/clientes", "Clientes"),
     ("/admin/plantillas", "Plantillas"),
     ("/admin/ajustes", "Ajustes"),
     ("/admin/metricas", "Métricas"),
+    ("/admin/dashboard", "Dashboard"),
     ("/admin/simulador", "Simulador"),
     ("/admin/supresiones", "Supresiones"),
     ("/admin/envios", "Envíos fallidos"),
     ("/admin/canales", "Canales"),
+    ("/admin/mcp", "MCP de lectura"),
 ]
 
 
@@ -317,9 +328,13 @@ def render_page(
     body_html: str,
     csrf: str | None = None,
     current_path: str | None = None,
+    copy_script: bool = False,
 ) -> str:
     logout = ""
     navigation = ""
+    copy_tag = (
+        '<script src="/panel/copiar.js" defer></script>\n' if copy_script else ""
+    )
     if csrf is not None:
         logout = (
             '<form method="post" action="/admin/logout">'
@@ -338,6 +353,7 @@ def render_page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n"
         '<link rel="stylesheet" href="/admin/static/admin.css">\n'
+        f"{copy_tag}"
         "</head>\n"
         "<body>\n"
         f"{_skip_link()}\n"
@@ -712,6 +728,155 @@ def render_saved_replies(replies, csrf: str, error: str | None = None) -> str:
     return render_page("Respuestas guardadas", body, csrf, "/admin/respuestas")
 
 
+def _quick_reply_values(reply) -> dict[str, str]:
+    """Extrae del bloque guardado los valores que rellenan el formulario."""
+    values = {
+        "name": reply.name,
+        "triggers": "\n".join(reply.triggers),
+        "text": "",
+        "options": "",
+        "link_text": "",
+        "link_url": "",
+        "image_url": "",
+        "image_alt": "",
+        "priority": str(reply.priority),
+        "active": "1" if reply.active else "0",
+    }
+    for block in reply.blocks:
+        kind = block.get("type")
+        if kind == "text" and not values["text"]:
+            values["text"] = str(block.get("text", ""))
+        elif kind == "options" and not values["options"]:
+            values["options"] = "\n".join(
+                str(option) for option in block.get("options", [])
+            )
+        elif kind == "link":
+            values["link_text"] = str(block.get("text", ""))
+            values["link_url"] = str(block.get("url", ""))
+        elif kind == "image":
+            values["image_alt"] = str(block.get("alt_text", ""))
+            values["image_url"] = str(block.get("url", ""))
+    return values
+
+
+def _quick_reply_form(
+    action: str,
+    csrf: str,
+    values: dict[str, str],
+    submit_label: str,
+    image_id: str | None = None,
+    allow_remove_image: bool = False,
+) -> str:
+    active_yes = ' selected' if values.get("active") == "1" else ""
+    active_no = ' selected' if values.get("active") != "1" else ""
+    remove = ""
+    if allow_remove_image:
+        remove = (
+            '<label><input type="checkbox" name="remove_image" value="1"> '
+            "Quitar la imagen actual</label>"
+        )
+    current_image = ""
+    if image_id:
+        current_image = (
+            f'<p>Imagen actual: <a href="/media/respuestas/{_esc(image_id)}">'
+            "ver</a></p>"
+        )
+    return (
+        f'<form method="post" action="{_esc(action)}" class="card" '
+        'enctype="multipart/form-data">'
+        f"{csrf_field(csrf)}"
+        f'<label>Nombre <input name="name" value="{_esc(values.get("name", ""))}" '
+        'maxlength="200" required></label>'
+        f'<label>Disparadores (uno por línea o separados por coma) '
+        f'<textarea name="triggers" rows="3" required>'
+        f'{_esc(values.get("triggers", ""))}</textarea></label>'
+        f'<label>Texto <textarea name="text" maxlength="4096">'
+        f'{_esc(values.get("text", ""))}</textarea></label>'
+        f'<label>Opciones (una por línea, máx. 10 de 20 caracteres) '
+        f'<textarea name="options" rows="2">'
+        f'{_esc(values.get("options", ""))}</textarea></label>'
+        f'<label>Etiqueta del enlace <input name="link_text" '
+        f'value="{_esc(values.get("link_text", ""))}" maxlength="80"></label>'
+        f'<label>URL del enlace (https) <input name="link_url" type="url" '
+        f'value="{_esc(values.get("link_url", ""))}" maxlength="2048"></label>'
+        f'<label>Texto alternativo de la imagen <input name="image_alt" '
+        f'value="{_esc(values.get("image_alt", ""))}" maxlength="1024"></label>'
+        f'<label>URL de la imagen (https) <input name="image_url" type="url" '
+        f'value="{_esc(values.get("image_url", ""))}" maxlength="2048"></label>'
+        '<label>Archivo de imagen (PNG, JPEG o WebP) '
+        '<input name="image_file" type="file" '
+        'accept="image/png,image/jpeg,image/webp"></label>'
+        f"{current_image}{remove}"
+        f'<label>Prioridad (0-1000) <input name="priority" type="number" '
+        f'min="0" max="1000" value="{_esc(values.get("priority", "0"))}"></label>'
+        '<label>Activa <select name="active">'
+        f'<option value="1"{active_yes}>Sí</option>'
+        f'<option value="0"{active_no}>No</option></select></label>'
+        f'<button type="submit">{_esc(submit_label)}</button>'
+        "</form>"
+    )
+
+
+def render_quick_replies(
+    replies, csrf: str, error: str | None = None, max_image_bytes: int = 0
+) -> str:
+    """R1, R2, R3, R4: administración de respuestas rápidas del bot sin JS."""
+    error_html = ""
+    if error:
+        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    rows = []
+    for reply in replies:
+        path = quote(reply.id, safe="")
+        state = "Sí" if reply.active else "No"
+        next_active = "0" if reply.active else "1"
+        action = "Desactivar" if reply.active else "Activar"
+        values = _quick_reply_values(reply)
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(reply.name)}</td>"
+            f"<td>{_esc(', '.join(reply.triggers))}</td>"
+            f"<td>{_esc(reply.priority)}</td>"
+            f"<td>{state}</td>"
+            "<td>"
+            f'<form method="post" action="/admin/respuestas-rapidas/{path}/activa">'
+            f"{csrf_field(csrf)}"
+            f'<input type="hidden" name="active" value="{next_active}">'
+            f'<button type="submit" class="{_toggle_class(reply.active)}">'
+            f"{action}</button>"
+            "</form>"
+            "</td>"
+            "<td>"
+            + _quick_reply_form(
+                f"/admin/respuestas-rapidas/{path}",
+                csrf,
+                values,
+                "Guardar",
+                image_id=reply.image_id,
+                allow_remove_image=reply.image_id is not None,
+            )
+            + "</td>"
+            "</tr>"
+        )
+    create = _quick_reply_form(
+        "/admin/respuestas-rapidas",
+        csrf,
+        {"priority": "0", "active": "1"},
+        "Crear respuesta rápida",
+    )
+    hint = ""
+    if max_image_bytes:
+        hint = f"<p>La imagen puede pesar hasta {max_image_bytes} bytes.</p>"
+    body = (
+        f"{error_html}{hint}{create}\n"
+        + _table_wrap(
+            "<table><thead><tr><th>Nombre</th><th>Disparadores</th>"
+            "<th>Prioridad</th><th>Activa</th><th>Estado</th><th>Editar</th>"
+            f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
+    )
+    return render_page("Respuestas rápidas", body, csrf, "/admin/respuestas-rapidas")
+
+
 TEXT_FIELD_LABELS = {
     "notice_text": "Texto legal de tratamiento de datos",
     "notice_version": "Versión del texto legal",
@@ -787,15 +952,26 @@ def render_text_history(field: str, versions, csrf: str) -> str:
     return render_page(f"Historial de {field}", body, csrf, "/admin/texts")
 
 
-def render_clients(clients, csrf: str, error: str | None = None) -> str:
+def render_clients(
+    clients,
+    csrf: str,
+    error: str | None = None,
+    notice: str | None = None,
+    query: str = "",
+) -> str:
     error_html = ""
     if error:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+    notice_html = (
+        f'<p class="notice" role="status">{_esc(notice)}</p>\n' if notice else ""
+    )
     rows = []
     for client in clients:
         path = quote(client.profile_id, safe="")
         rows.append(
             "<tr>"
+            f"<td>{_esc(client.public_id or '—')} "
+            f"{copy_button(client.public_id or '')}</td>"
             f"<td>{_esc(client.username)}</td>"
             f"<td>{_esc(client.status)}</td>"
             f"<td>{_esc(client.valid_from.isoformat())}</td>"
@@ -820,7 +996,22 @@ def render_clients(clients, csrf: str, error: str | None = None) -> str:
             "</tr>"
         )
     body = (
-        f"{error_html}"
+        f"{error_html}{notice_html}"
+        '<p><a class="btn" href="/admin/clientes/importar">Importar clientes</a></p>'
+        '<section class="card" id="futuro-lazaro">'
+        "<p>"
+        "A futuro, esta sección podría conectarse a la API de Lazaro para traer "
+        "los clientes automáticamente y mantenerlos sincronizados (evitando "
+        "clientes creados o eliminados solo en un sistema). El bot podría "
+        "identificar al cliente por el ID que entrega en el chat y buscarlo en "
+        "los datos de Lazaro."
+        "</p>"
+        "</section>"
+        '<form method="get" action="/admin/clientes" class="card">'
+        f'<label>Buscar por ID de cliente '
+        f'<input name="q" value="{_esc(query)}" autocomplete="off"></label>'
+        '<button type="submit" class="btn-secondary">Buscar</button>'
+        "</form>"
         '<form method="post" action="/admin/clientes" class="card">'
         f"{csrf_field(csrf)}"
         '<label>Usuario <input name="username" autocomplete="off" required></label>'
@@ -831,12 +1022,135 @@ def render_clients(clients, csrf: str, error: str | None = None) -> str:
         '<button type="submit">Crear cliente</button>'
         "</form>"
         + _table_wrap(
-            "<table><thead><tr><th>Usuario</th><th>Estado</th><th>Desde</th>"
-            "<th>Hasta</th><th>Días</th><th>Sesión</th><th>Aviso</th>"
+            "<table><thead><tr><th>ID de cliente</th><th>Usuario</th><th>Estado</th>"
+            "<th>Desde</th><th>Hasta</th><th>Días</th><th>Sesión</th><th>Aviso</th>"
             f"<th>Acciones</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
         )
     )
-    return render_page("Clientes", body, csrf, "/admin/clientes")
+    return render_page(
+        "Clientes", body, csrf, "/admin/clientes", copy_script=True
+    )
+
+
+IMPORT_ERROR_MESSAGES = {
+    "archivo_requerido": "Selecciona un archivo CSV.",
+    "archivo_no_utf8": "El archivo no es UTF-8 válido.",
+    "encabezado_invalido": "El encabezado del CSV no es válido.",
+    "archivo_demasiado_grande": "El archivo supera el tamaño máximo permitido.",
+    "demasiadas_filas": "El archivo tiene demasiadas filas.",
+    "vista_previa_expirada": "La vista previa caducó o no pertenece a esta sesión.",
+}
+
+
+def render_import_form(
+    csrf: str,
+    error: str | None = None,
+    error_code: str | None = None,
+    max_bytes: int = 1048576,
+    max_rows: int = 1000,
+) -> str:
+    """R1, R4, R7: formulario de importación con las columnas documentadas."""
+    error_html = ""
+    if error or error_code:
+        message = error or IMPORT_ERROR_MESSAGES.get(
+            error_code or "", "No se pudo procesar el archivo."
+        )
+        data = f' data-error="{_esc(error_code)}"' if error_code else ""
+        error_html = f'<p class="error" role="alert"{data}>{_esc(message)}</p>\n'
+    body = (
+        f"{error_html}"
+        '<section class="card">'
+        "<h3>Formato del archivo (CSV o Excel .xlsx)</h3>"
+        "<p>CSV UTF-8 con coma o punto y coma, o la primera hoja de un .xlsx. Encabezados: "
+        "<code>id</code> (opcional), <code>usuario</code> (obligatorio), "
+        "<code>correo</code> (opcional) y <code>telefono</code> (opcional). "
+        "No se admite ninguna otra columna ni contraseñas.</p>"
+        f"<p>Tamaño máximo: {_esc(max_bytes)} bytes. Filas máximas: "
+        f"{_esc(max_rows)}.</p>"
+        "</section>"
+        '<form method="post" action="/admin/clientes/importar/vista-previa" '
+        'enctype="multipart/form-data" class="card">'
+        f"{csrf_field(csrf)}"
+        '<label>Archivo CSV o Excel <input type="file" name="archivo" '
+        'accept=".csv,.xlsx,text/csv" required></label>'
+        '<button type="submit">Previsualizar</button>'
+        "</form>"
+        '<p><a href="/admin/clientes">Volver a clientes</a></p>'
+    )
+    return render_page("Importar clientes", body, csrf, "/admin/clientes")
+
+
+def render_import_preview(plan, token: str, csrf: str, policy: str = "saltar") -> str:
+    """R12, R17, R24: filas, errores por campo y política de duplicados."""
+    rows = []
+    for row in plan.rows:
+        errors = ", ".join(
+            f"{_esc(error.field)}:{_esc(error.code)}" for error in row.errors
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(row.number)}</td>"
+            f"<td>{_esc(row.id or '—')}</td>"
+            f"<td>{_esc(row.usuario or '—')}</td>"
+            f"<td>{_esc(row.correo or '—')}</td>"
+            f"<td>{_esc(row.telefono or '—')}</td>"
+            f"<td>{_esc(row.status)}</td>"
+            f"<td>{_esc(row.reason or '')}</td>"
+            f"<td>{errors}</td>"
+            "</tr>"
+        )
+    selected_skip = " selected" if policy == "saltar" else ""
+    selected_update = " selected" if policy == "actualizar" else ""
+    body = (
+        "<p>Revisa las filas antes de confirmar. La vista previa caduca y solo "
+        "se puede usar una vez.</p>"
+        '<form method="post" action="/admin/clientes/importar/confirmar" '
+        'class="card">'
+        f"{csrf_field(csrf)}"
+        f'<input type="hidden" name="token" value="{_esc(token)}">'
+        '<label>Duplicados en la base de datos '
+        '<select name="politica">'
+        f'<option value="saltar"{selected_skip}>Saltar</option>'
+        f'<option value="actualizar"{selected_update}>Actualizar correo y teléfono</option>'
+        "</select></label>"
+        '<button type="submit">Confirmar importación</button>'
+        "</form>"
+        + _table_wrap(
+            "<table><thead><tr><th>Fila</th><th>ID</th><th>Usuario</th>"
+            "<th>Correo</th><th>Teléfono</th><th>Estado</th><th>Motivo</th>"
+            f"<th>Errores</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        )
+        + '<p><a href="/admin/clientes/importar">Subir otro archivo</a></p>'
+    )
+    return render_page("Vista previa de importación", body, csrf, "/admin/clientes")
+
+
+def render_import_summary(summary, token: str, csrf: str) -> str:
+    """R30: totales y motivo de cada fila saltada o fallida."""
+    rows = "".join(
+        "<tr>"
+        f"<td>{_esc(number)}</td>"
+        f"<td>{_esc(state)}</td>"
+        f"<td>{_esc(reason)}</td>"
+        "</tr>"
+        for number, state, reason in summary.details
+    )
+    body = (
+        '<section class="card">'
+        f"<p>Creados: <strong>{_esc(summary.created)}</strong></p>"
+        f"<p>Actualizados: <strong>{_esc(summary.updated)}</strong></p>"
+        f"<p>Saltados: <strong>{_esc(summary.skipped)}</strong></p>"
+        f"<p>Fallidos: <strong>{_esc(summary.failed)}</strong></p>"
+        f'<p><a href="/admin/clientes/importar/resumen/{quote(token, safe="")}">'
+        "Descargar resumen en CSV</a></p>"
+        "</section>"
+        + _table_wrap(
+            "<table><thead><tr><th>Fila</th><th>Estado</th><th>Motivo</th>"
+            f"</tr></thead><tbody>{rows}</tbody></table>"
+        )
+        + '<p><a href="/admin/clientes">Volver a clientes</a></p>'
+    )
+    return render_page("Resumen de importación", body, csrf, "/admin/clientes")
 
 
 def render_templates(templates, csrf: str, error: str | None = None) -> str:
@@ -910,7 +1224,10 @@ def render_templates(templates, csrf: str, error: str | None = None) -> str:
 def render_settings(settings_rows, csrf: str, error: str | None = None) -> str:
     error_html = ""
     if error:
-        error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
+        error_html = (
+            '<p class="error" role="alert" data-code="validation_error">'
+            f"{_esc(error)}</p>\n"
+        )
     rows = []
     inputs = []
     for row in settings_rows:
@@ -991,6 +1308,14 @@ def render_metrics(metrics, csrf: str) -> str:
     return render_page("Métricas", body, csrf, "/admin/metricas")
 
 
+def render_dashboard(data, csrf: str | None = None) -> str:
+    """#75: dashboard del panel administrativo (solo lectura, sin JavaScript)."""
+    body = render_dashboard_body(
+        data, data.days, data.include_simulated, "/admin/dashboard"
+    )
+    return render_page("Dashboard", body, csrf, "/admin/dashboard")
+
+
 def render_error(status: int, code: str, csrf: str | None = None) -> str:
     message = ERROR_MESSAGES.get(code, "No se pudo completar la operación.")
     return render_page(f"Error {status}", f"<p>{_esc(message)}</p>", csrf)
@@ -1020,16 +1345,8 @@ document.addEventListener('click', function (event) {
 
 
 def _channel_label(info, glyph: str) -> str:
-    """R31: etiqueta SVG (sin estilos inline) con el color del canal y texto blanco."""
-    text = f"{glyph} {info.name}"
-    width = 24 + 9 * len(text)
-    return (
-        f'<svg class="channel-label" width="{width}" height="26" role="img" '
-        f'aria-label="{_esc(info.name)}">'
-        f'<rect width="{width}" height="26" rx="6" fill="{_esc(info.color)}"></rect>'
-        f'<text x="10" y="18" fill="#FFFFFF" font-size="14">{_esc(text)}</text>'
-        "</svg>"
-    )
+    """R31: delega en el componente único de etiqueta (#67)."""
+    return render_channel_label(label_from_values(info.name, glyph, info.color))
 
 
 def _copy_field(field_id: str, value: str, label: str) -> str:
@@ -1089,6 +1406,11 @@ def render_channels(
         state = "Activo" if info.active else "Inactivo"
         toggle_to = "false" if info.active else "true"
         toggle_label = "Desactivar" if info.active else "Activar"
+        public_value = str(info.config.get("public", "")).lower()
+        public_checked = (
+            " checked" if public_value in ("true", "si", "sí", "1", "on") else ""
+        )
+        contact_url = str(info.config.get("contact_url", "") or "")
         webhook_html = ""
         secret_html = ""
         credentials_html = ""
@@ -1137,6 +1459,10 @@ def render_channels(
             f'<label>Ícono <select name="icon">{_icon_options(info.icon, icons)}</select></label>'
             f'<label>Color <input name="color" value="{_esc(info.color)}" pattern="#[0-9A-Fa-f]{{6}}" required></label>'
             f'<label>Consentimiento <select name="consent_mode">{_consent_options(consent)}</select></label>'
+            f'<label><input type="checkbox" name="public" value="si"{public_checked}> '
+            "Mostrar en la bienvenida como canal público</label>"
+            '<label>Enlace de contacto (opcional, https://) '
+            f'<input name="contact_url" value="{_esc(contact_url)}" maxlength="200"></label>'
             f"{callback_html}{credentials_html}"
             '<button type="submit" class="btn-secondary">Guardar</button>'
             "</form>"
@@ -1165,6 +1491,10 @@ def render_channels(
             f'<label>Ícono <select name="icon">{_icon_options("chat", icons)}</select></label>'
             '<label>Color <input name="color" value="#1B6FA8" pattern="#[0-9A-Fa-f]{6}" required></label>'
             f'<label>Consentimiento <select name="consent_mode">{_consent_options("texto")}</select></label>'
+            '<label><input type="checkbox" name="public" value="si"> '
+            "Mostrar en la bienvenida como canal público</label>"
+            '<label>Enlace de contacto (opcional, https://) '
+            '<input name="contact_url" maxlength="200"></label>'
             '<label>URL de callback (si el adaptador la usa) '
             '<input name="callback_url" placeholder="https://"></label>'
             "<label>Credenciales (nombre=valor por línea) "

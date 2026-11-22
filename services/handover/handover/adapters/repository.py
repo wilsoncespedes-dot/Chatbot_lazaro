@@ -19,6 +19,7 @@ from ..domain import (
     Notification,
     RequestResult,
 )
+from ..strategies import ContextoAsignacion, EstrategiaAsignacion
 
 
 class CaseRepository(Protocol):
@@ -50,6 +51,10 @@ class CaseRepository(Protocol):
 
     def list_all_cases(self, limit: int) -> list[Case]: ...
 
+    def take_for_contact(
+        self, case: Case, advisor_id: str, at: datetime
+    ) -> tuple[str, bool] | None: ...
+
     def add_notification(
         self, case_id: str, advisor_id: str, reason: str, at: datetime, delivered: bool
     ) -> None: ...
@@ -68,8 +73,12 @@ class CaseRepository(Protocol):
 
     def assign_if_unassigned(self, case_id: str, advisor_id: str, at: datetime) -> bool: ...
 
-    def auto_assign_least_loaded(
-        self, case_id: str, candidate_ids: list[str], at: datetime
+    def auto_assign(
+        self,
+        case_id: str,
+        candidate_ids: list[str],
+        strategy: EstrategiaAsignacion,
+        at: datetime,
     ) -> str | None: ...
 
     def transfer_if_assigned_to(
@@ -114,6 +123,7 @@ class FakeCaseRepository:
         self.notifications: list[Notification] = []
         self.denials: list[Denial] = []
         self.auto_assignments: list[AutoAssignment] = []
+        self.pointers: dict[str, str] = {}
         self.requests: list[HandoverRequestRecord] = []
         self.timeout_claims: dict[str, datetime] = {}
         self.privacy_purge_runs: list[dict[str, Any]] = []
@@ -123,6 +133,7 @@ class FakeCaseRepository:
         self.advisor_roles: dict[str, str] = {}
         self.roster_generation = 0
         self._auto_assign_lock = threading.Lock()
+        self._take_lock = threading.Lock()
 
     def health_check(self, timeout_seconds: float) -> None:
         """healthcheck_dependencias R4, R8: fallo y timeout controlables en tests."""
@@ -269,9 +280,14 @@ class FakeCaseRepository:
         )
         return True
 
-    def auto_assign_least_loaded(
-        self, case_id: str, candidate_ids: list[str], at: datetime
+    def auto_assign(
+        self,
+        case_id: str,
+        candidate_ids: list[str],
+        strategy: EstrategiaAsignacion,
+        at: datetime,
     ) -> str | None:
+        """R6-R11, R14: elige con la estrategia y escribe caso y puntero bajo un candado."""
         with self._auto_assign_lock:
             case = self.cases.get(case_id)
             if case is None or case.status != "open" or case.advisor_id is not None:
@@ -287,16 +303,17 @@ class FakeCaseRepository:
             for stored in self.cases.values():
                 if stored.status == "assigned" and stored.advisor_id is not None:
                     loads[stored.advisor_id] = loads.get(stored.advisor_id, 0) + 1
-            chosen = min(
-                valid,
-                key=lambda candidate_id: (loads.get(candidate_id, 0), candidate_id),
+            contexto = ContextoAsignacion(
+                cargas=loads, ultimo=self.pointers.get(strategy.nombre)
             )
+            chosen = strategy.elegir(valid, contexto)
             self.cases[case_id] = case.model_copy(
                 update={"status": "assigned", "advisor_id": chosen, "assigned_at": at}
             )
             self.auto_assignments.append(
                 AutoAssignment(case_id=case_id, advisor_id=chosen, reason="auto", at=at)
             )
+            self.pointers[strategy.nombre] = chosen
             return chosen
 
     def transfer_if_assigned_to(
@@ -326,6 +343,42 @@ class FakeCaseRepository:
             self.cases.values(), key=lambda case: (case.created_at, case.case_id)
         )
         return [case.model_copy(deep=True) for case in cases[:limit]]
+
+    def take_for_contact(
+        self, case: Case, advisor_id: str, at: datetime
+    ) -> tuple[str, bool] | None:
+        """#68: crea o asigna el caso abierto del contacto bajo un candado."""
+        with self._take_lock:
+            active = [
+                stored
+                for stored in self.cases.values()
+                if stored.contact_id == case.contact_id and stored.status != "closed"
+            ]
+            active.sort(key=lambda stored: (stored.created_at, stored.case_id), reverse=True)
+            current = active[0] if active else None
+            if current is not None:
+                if current.status == "assigned" and current.advisor_id == advisor_id:
+                    return current.case_id, False
+                if current.status == "assigned" and current.advisor_id is not None:
+                    return None
+                self.cases[current.case_id] = current.model_copy(
+                    update={
+                        "status": "assigned",
+                        "advisor_id": advisor_id,
+                        "assigned_at": at,
+                    }
+                )
+                self.timeout_claims.pop(current.case_id, None)
+                return current.case_id, False
+            created = case.model_copy(
+                update={
+                    "status": "assigned",
+                    "advisor_id": advisor_id,
+                    "assigned_at": at,
+                }
+            )
+            self.cases[created.case_id] = created.model_copy(deep=True)
+            return created.case_id, True
 
     def close_if_still_allowed(
         self, case_id: str, advisor_id: str, allowed_assignee: str | None, at: datetime
@@ -449,6 +502,9 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS handover_auto_assignments ("
     "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
     "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS handover_assignment_pointer ("
+    "strategy TEXT PRIMARY KEY, last_advisor_id TEXT NOT NULL, "
+    "updated_at TIMESTAMPTZ NOT NULL)",
     "CREATE TABLE IF NOT EXISTS handover_requests ("
     "id BIGSERIAL PRIMARY KEY, requested_case_id TEXT NOT NULL, case_id TEXT NULL, "
     "contact_id TEXT NOT NULL, reason TEXT NOT NULL, received_at TIMESTAMPTZ NOT NULL, "
@@ -727,6 +783,63 @@ class PostgresCaseRepository:
         )
         return [_row_to_case(row) for row in rows]
 
+    def take_for_contact(
+        self, case: Case, advisor_id: str, at: datetime
+    ) -> tuple[str, bool] | None:
+        """#68: una sola transacción con advisory lock por contacto."""
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)",
+                    (case.contact_id,),
+                )
+                cur.execute(
+                    "SELECT case_id, status, advisor_id FROM handover_cases "
+                    "WHERE contact_id = %s AND status <> %s "
+                    "ORDER BY created_at DESC, case_id DESC LIMIT 1 FOR UPDATE",
+                    (case.contact_id, "closed"),
+                )
+                rows = list(cur.fetchall())
+                if rows:
+                    case_id, status, current_advisor = rows[0]
+                    if status == "assigned" and current_advisor == advisor_id:
+                        conn.commit()
+                        return case_id, False
+                    if status == "assigned" and current_advisor is not None:
+                        conn.commit()
+                        return None
+                    cur.execute(
+                        "UPDATE handover_cases SET status = %s, advisor_id = %s, "
+                        "assigned_at = %s, timeout_claimed_at = NULL WHERE case_id = %s",
+                        ("assigned", advisor_id, at, case_id),
+                    )
+                    conn.commit()
+                    return case_id, False
+                cur.execute(
+                    f"INSERT INTO handover_cases ({_CASE_COLUMNS}) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, CAST(%s AS JSONB), %s, %s, %s, %s)",
+                    (
+                        case.case_id,
+                        case.contact_id,
+                        case.chat_id,
+                        case.reason,
+                        "assigned",
+                        advisor_id,
+                        _dump_messages(case.last_messages),
+                        case.created_at,
+                        at,
+                        None,
+                        None,
+                    ),
+                )
+                conn.commit()
+                return case.case_id, True
+            except Exception:
+                conn.rollback()
+                raise
+
     def add_notification(
         self, case_id: str, advisor_id: str, reason: str, at: datetime, delivered: bool
     ) -> None:
@@ -831,10 +944,14 @@ class PostgresCaseRepository:
         )
         return bool(rows)
 
-    def auto_assign_least_loaded(
-        self, case_id: str, candidate_ids: list[str], at: datetime
+    def auto_assign(
+        self,
+        case_id: str,
+        candidate_ids: list[str],
+        strategy: EstrategiaAsignacion,
+        at: datetime,
     ) -> str | None:
-        """R7-R9, R13, R14, R19: elige y escribe bajo un candado de transacción."""
+        """R6-R11, R14: elige y escribe caso y puntero bajo un candado de transacción."""
         with self._lock:
             conn = self._connection()
             cur = conn.cursor()
@@ -859,10 +976,17 @@ class PostgresCaseRepository:
                     ("assigned",),
                 )
                 loads = {row[0]: int(row[1]) for row in cur.fetchall()}
-                chosen = min(
-                    valid, key=lambda candidate_id: (loads.get(candidate_id, 0),
-                                                     candidate_id)
+                cur.execute(
+                    "SELECT last_advisor_id FROM handover_assignment_pointer "
+                    "WHERE strategy = %s",
+                    (strategy.nombre,),
                 )
+                pointer = cur.fetchall()
+                contexto = ContextoAsignacion(
+                    cargas=loads,
+                    ultimo=pointer[0][0] if pointer else None,
+                )
+                chosen = strategy.elegir(valid, contexto)
 
                 cur.execute(
                     "UPDATE handover_cases SET status = %s, advisor_id = %s, "
@@ -878,6 +1002,14 @@ class PostgresCaseRepository:
                     "INSERT INTO handover_auto_assignments "
                     "(case_id, advisor_id, reason, at) VALUES (%s, %s, %s, %s)",
                     (case_id, chosen, "auto", at),
+                )
+                cur.execute(
+                    "INSERT INTO handover_assignment_pointer "
+                    "(strategy, last_advisor_id, updated_at) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (strategy) DO UPDATE "
+                    "SET last_advisor_id = EXCLUDED.last_advisor_id, "
+                    "updated_at = EXCLUDED.updated_at",
+                    (strategy.nombre, chosen, at),
                 )
                 conn.commit()
                 return chosen

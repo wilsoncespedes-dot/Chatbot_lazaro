@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from . import admin, advisor_panel
 from .accounts import hash_token
+from .client_id import normalize_public_id
 from .admin_routes import (
     LOGIN_ERROR,
     CsrfInvalid,
@@ -29,6 +30,8 @@ from .domain import (
     CaseNotFound,
     ChannelWindowClosed,
     DomainError,
+    channel_labels,
+    channel_dashboard,
     LoginThrottled,
     PanelValidationError,
     ServiceUnavailable,
@@ -43,18 +46,23 @@ from .domain import (
     advisor_send_template,
     assign_case,
     assign_case_tag,
+    conversation_view,
     delete_case_note,
     list_case_tags,
+    panel_conversations,
     remove_case_tag,
     authenticate_profile,
     close_case,
     execute_suppression_from_panel,
+    parse_dashboard_query,
     reassign_case,
     record_panel_audit,
     reply_to_case,
     return_case,
+    search_client_by_public_id,
     set_advisor_presence,
     suppression_queue,
+    take_conversation,
     transfer_case,
 )
 
@@ -136,6 +144,10 @@ def _valid_case_id(value: str) -> bool:
     return True
 
 
+def _valid_contact_id(value: str) -> bool:
+    return _valid_case_id(value)
+
+
 def _error_page(status: int, code: str, csrf: str | None) -> HTMLResponse:
     return _html(
         advisor_panel.render_advisor_error(status, code, csrf), status_code=status
@@ -166,6 +178,13 @@ def _require_csrf_audited(
     except CsrfInvalid:
         _audit(actor, action, "forbidden", adapters, **kwargs)
         raise
+
+
+def _case_channel_ids(view) -> set[str]:
+    ids = {view.client.channel}
+    ids.update(item.channel for item in view.history)
+    ids.update(summary.channel for summary in view.memory.summaries)
+    return ids
 
 
 def _presence_state(profile_id: str, settings: Settings, adapters: Adapters) -> str:
@@ -269,6 +288,142 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
             )
         )
 
+    @router.get("/asesor/clientes")
+    async def client_search_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters, ADVISOR_ROLES)
+        profile = _current_profile(session, adapters)
+        raw = request.query_params.get("q", "")
+        if not raw.strip():
+            return _html(advisor_panel.render_client_search(None, session.csrf_token))
+        normalized = normalize_public_id(raw)
+        if normalized is None:
+            _audit(profile, "client_search", "invalid", adapters)
+            return _html(
+                advisor_panel.render_client_search(
+                    None, session.csrf_token, "ID no válido", query=raw
+                )
+            )
+        view = search_client_by_public_id(normalized, settings, adapters)
+        if view is None:
+            _audit(profile, "client_search", "not_found", adapters)
+            return _html(
+                advisor_panel.render_client_search(
+                    None, session.csrf_token, "Sin resultados", query=raw
+                )
+            )
+        labels = channel_labels(adapters, {item[1] for item in view.conversations})
+        _audit(profile, "client_search", "ok", adapters)
+        return _html(
+            advisor_panel.render_client_search(
+                view, session.csrf_token, labels=labels, query=raw
+            )
+        )
+
+    @router.get("/asesor/conversaciones")
+    async def conversations_page(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters, ADVISOR_ROLES)
+        profile = _current_profile(session, adapters)
+        channel = request.query_params.get("canal")
+        status = request.query_params.get("estado")
+        try:
+            rows = panel_conversations(
+                profile, channel, status, settings, adapters
+            )
+            try:
+                channel_choices = tuple(inbox_channel_options(adapters))
+            except UpstreamError:
+                channel_choices = ()
+            labels = channel_labels(adapters, {row.channel for row in rows})
+        except DomainError as exc:
+            _audit_error(profile, "conversation_inbox_viewed", exc, adapters)
+            return _domain_error(exc, session.csrf_token)
+        _audit(profile, "conversation_inbox_viewed", "ok", adapters)
+        return _html(
+            advisor_panel.render_conversations_page(
+                rows,
+                session.csrf_token,
+                labels=labels,
+                selected_channel=channel,
+                selected_status=status,
+                channel_choices=channel_choices,
+                refresh=settings.advisor_inbox_refresh_seconds,
+                live_enabled=settings.panel_live_enabled,
+            )
+        )
+
+    @router.get("/asesor/conversaciones/{contact_id}")
+    async def conversation_page(request: Request, contact_id: str) -> HTMLResponse:
+        session = _require_session(request, adapters, ADVISOR_ROLES)
+        profile = _current_profile(session, adapters)
+        target = f"conversation:{contact_id}"
+        if not _valid_contact_id(contact_id):
+            _audit(
+                profile,
+                "conversation_read",
+                "not_found",
+                adapters,
+                target=target,
+            )
+            return _error_page(404, "not_found", session.csrf_token)
+        try:
+            view = conversation_view(contact_id, profile, settings, adapters)
+        except DomainError as exc:
+            _audit_error(
+                profile, "conversation_read", exc, adapters, target=target
+            )
+            return _domain_error(exc, session.csrf_token)
+        _audit(profile, "conversation_read", "ok", adapters, target=target)
+        if (
+            view.status == "atendida_por_asesor"
+            and view.assigned_to_me
+            and view.case_id is not None
+        ):
+            return _redirect(f"/asesor/cases/{quote(view.case_id, safe='')}")
+        channel_ids = {view.client.channel}
+        channel_ids.update(item.channel for item in view.history)
+        labels = channel_labels(adapters, channel_ids)
+        return _html(
+            advisor_panel.render_conversation_read(
+                view, session.csrf_token, labels=labels
+            )
+        )
+
+    @router.post("/asesor/conversaciones/{contact_id}/tomar")
+    async def take_conversation_action(
+        request: Request, contact_id: str
+    ) -> Response:
+        session = _require_session(request, adapters, ADVISOR_ROLES)
+        profile = _current_profile(session, adapters)
+        form = await _form(request)
+        valid = _valid_contact_id(contact_id)
+        target = f"conversation:{contact_id}" if valid else None
+        _require_csrf_audited(
+            session,
+            form,
+            profile,
+            "conversation_take",
+            adapters,
+            target=target,
+        )
+        if not valid:
+            _audit(
+                profile,
+                "conversation_take",
+                "not_found",
+                adapters,
+                target=None,
+            )
+            return _error_page(404, "not_found", session.csrf_token)
+        try:
+            case_id = take_conversation(contact_id, profile, settings, adapters)
+        except DomainError as exc:
+            _audit_error(
+                profile, "conversation_take", exc, adapters, target=target
+            )
+            return _domain_error(exc, session.csrf_token)
+        _audit(profile, "conversation_take", "ok", adapters, target=target)
+        return _redirect(f"/asesor/cases/{quote(case_id, safe='')}")
+
     @router.get("/asesor/cases")
     async def cases_page(request: Request) -> HTMLResponse:
         session = _require_session(request, adapters, ADVISOR_ROLES)
@@ -285,7 +440,11 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 advisor_id, channel, assignment, settings, adapters, tag=tag
             )
             tags = list_case_tags(adapters, only_active=True)
-            channel_choices = tuple(inbox_channel_options(adapters))
+            try:
+                channel_choices = tuple(inbox_channel_options(adapters))
+            except UpstreamError:
+                channel_choices = ()
+            labels = channel_labels(adapters, {row.channel for row in rows})
         except DomainError as exc:
             _audit_error(profile, "inbox_viewed", exc, adapters)
             return _domain_error(exc, session.csrf_token)
@@ -301,6 +460,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 selected_tag=tag,
                 live_enabled=settings.panel_live_enabled,
                 channel_choices=channel_choices,
+                labels=labels,
             )
         )
 
@@ -324,6 +484,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
             return _domain_error(exc, session.csrf_token)
         _audit(profile, "case_viewed", "ok", adapters, case_id=case_id)
         _audit(profile, "memory_viewed", "ok", adapters, case_id=case_id)
+        labels = channel_labels(adapters, _case_channel_ids(view))
         return _html(
             advisor_panel.render_advisor_case(
                 view,
@@ -331,6 +492,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 can_reassign=profile.role == "supervisor",
                 live_enabled=settings.panel_live_enabled,
                 poll_seconds=settings.advisor_inbox_refresh_seconds,
+                labels=labels,
             )
         )
 
@@ -352,8 +514,13 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
             _audit_error(profile, "memory_viewed", exc, adapters, case_id=case_id)
             return _domain_error(exc, session.csrf_token)
         _audit(profile, "memory_viewed", "ok", adapters, case_id=case_id)
+        labels = channel_labels(
+            adapters, {summary.channel for summary in view.summaries}
+        )
         return _html(
-            advisor_panel.render_advisor_memory(view, session.csrf_token)
+            advisor_panel.render_advisor_memory(
+                view, session.csrf_token, labels=labels
+            )
         )
 
     @router.post("/asesor/cases/{case_id}/notes")
@@ -693,7 +860,11 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 profile, settings, adapters
             )
             tags = list_case_tags(adapters, only_active=True)
-            channel_choices = tuple(inbox_channel_options(adapters))
+            try:
+                channel_choices = tuple(inbox_channel_options(adapters))
+            except UpstreamError:
+                channel_choices = ()
+            labels = channel_labels(adapters, {row.channel for row in rows})
         except DomainError as exc:
             _audit_error(profile, "all_cases_viewed", exc, adapters)
             return _domain_error(exc, session.csrf_token)
@@ -713,6 +884,7 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
                 selected_tag=tag,
                 live_enabled=settings.panel_live_enabled,
                 channel_choices=channel_choices,
+                labels=labels,
             )
         )
 
@@ -779,6 +951,26 @@ def create_advisor_router(settings: Settings, adapters: Adapters) -> APIRouter:
         _audit(profile, "metrics_viewed", "ok", adapters, target=str(days))
         return _html(
             advisor_panel.render_supervisor_metrics(metrics, session.csrf_token)
+        )
+
+    @router.get("/asesor/dashboard")
+    async def supervisor_dashboard(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters, SUPERVISOR_ROLES)
+        profile = _current_profile(session, adapters)
+        try:
+            days, include_simulated = parse_dashboard_query(request.query_params)
+        except PanelValidationError:
+            return _error_page(422, "validation_error", session.csrf_token)
+        data = channel_dashboard(profile, days, include_simulated, settings, adapters)
+        _audit(
+            profile,
+            "dashboard_viewed",
+            "ok",
+            adapters,
+            target=f"{data.since.isoformat()}..{data.until.isoformat()}",
+        )
+        return _html(
+            advisor_panel.render_supervisor_dashboard(data, session.csrf_token)
         )
 
     @router.get("/asesor/supresiones")

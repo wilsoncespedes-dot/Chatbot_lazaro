@@ -15,14 +15,18 @@ from urllib.parse import unquote, urlparse
 from lazaro_contracts import LastMessage
 
 from ..classifier import Category
+from ..client_id import PublicIdGenerationError, PublicIdTaken, generate_public_id
 from ..panel_live import PanelEvent
 from ..domain import (
     CaseNote,
     CaseTag,
     ClientCredential,
+    ClientHistoryMessage,
+    ClientSearchResult,
     ClientSession,
     ClientStatus,
     Contact,
+    ConversationRef,
     ConversationState,
     DedupKey,
     FailedSend,
@@ -31,6 +35,8 @@ from ..domain import (
     OutboxEntry,
     OutboxRow,
     Profile,
+    QuickReply,
+    QuickReplyImage,
     SavedReply,
     ServiceUnavailable,
     SummaryView,
@@ -131,6 +137,8 @@ class Repository(Protocol):
 
     def add_event(self, contact_id: str, type: str, reason: str, at: datetime) -> None: ...
 
+    def last_event_at(self, contact_id: str, type: str) -> datetime | None: ...
+
     def link_case(
         self,
         case_id: str,
@@ -152,6 +160,12 @@ class Repository(Protocol):
     def case_messages(
         self, contact_id: str, since: datetime, limit: int
     ) -> list[tuple[str, str, datetime]]: ...
+
+    def list_conversations(
+        self, states: Sequence[str], limit: int
+    ) -> list[ConversationRef]: ...
+
+    def conversation_ref(self, contact_id: str) -> ConversationRef | None: ...
 
     def foreign_session_windows(
         self, contact_id: str, profile_id: str | None, idle_minutes: int, now: datetime
@@ -393,6 +407,37 @@ class Repository(Protocol):
         self, channel: str, external_user_id: str
     ) -> str | None: ...
 
+    # consentimiento por cliente (#72)
+    def has_client_consent_for_identity(
+        self,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        not_before: datetime | None,
+    ) -> bool: ...
+
+    def register_client_login(
+        self,
+        cliente_id: str,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        now: datetime,
+    ) -> None: ...
+
+    def register_client_acceptance_if_linked(
+        self,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        notice_sha256: str,
+        accepted_at: datetime,
+    ) -> None: ...
+
+    def client_history(
+        self, cliente_id: str, limit: int
+    ) -> list[ClientHistoryMessage]: ...
+
     def find_channel_contact(
         self, channel: str, external_user_id: str
     ) -> Contact | None: ...
@@ -413,7 +458,12 @@ class Repository(Protocol):
         self, texts: ConversationTexts, admin_profile_id: str, at: datetime
     ) -> None: ...
 
-    def purge_personal_data(self, cutoff: datetime, ran_at: datetime) -> dict[str, int]: ...
+    def purge_personal_data(
+        self,
+        cutoff: datetime,
+        ran_at: datetime,
+        client_cutoff: datetime | None = None,
+    ) -> dict[str, int]: ...
 
     def create_client_credential(
         self,
@@ -422,7 +472,29 @@ class Repository(Protocol):
         valid_from: datetime,
         valid_until: datetime,
         now: datetime,
+        public_id: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
     ) -> Profile: ...
+
+    def find_client_id_by_email(self, email: str) -> str | None: ...
+
+    def find_client_id_by_phone(self, phone: str) -> str | None: ...
+
+    def update_client_contact(
+        self,
+        profile_id: str,
+        now: datetime,
+        *,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> bool: ...
+
+    def ensure_public_ids(self, generate: Callable[[], str]) -> int: ...
+
+    def find_client_by_public_id(
+        self, public_id: str
+    ) -> ClientSearchResult | None: ...
 
     def get_client_credential(self, profile_id: str) -> ClientCredential | None: ...
 
@@ -588,6 +660,34 @@ class Repository(Protocol):
 
     def count_saved_replies(self) -> int: ...
 
+    # respuestas rápidas del bot (#71)
+    def add_quick_reply(self, reply: QuickReply) -> None: ...
+
+    def update_quick_reply(
+        self,
+        reply_id: str,
+        name: str,
+        triggers: Sequence[str],
+        blocks: Sequence[dict],
+        image_id: str | None,
+        priority: int,
+        now: datetime,
+    ) -> bool: ...
+
+    def set_quick_reply_active(
+        self, reply_id: str, active: bool, now: datetime
+    ) -> bool: ...
+
+    def get_quick_reply(self, reply_id: str) -> QuickReply | None: ...
+
+    def list_quick_replies(self, only_active: bool = False) -> list[QuickReply]: ...
+
+    def add_quick_reply_image(self, image: QuickReplyImage) -> None: ...
+
+    def get_quick_reply_image(self, image_id: str) -> QuickReplyImage | None: ...
+
+    def delete_quick_reply_image(self, image_id: str) -> None: ...
+
     # administración y avisos (#42)
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]: ...
 
@@ -652,8 +752,17 @@ class Repository(Protocol):
     ) -> None: ...
 
     def case_first_responses(
-        self, since: datetime, until: datetime
+        self,
+        since: datetime,
+        until: datetime,
+        exclude_channels: frozenset[str] = frozenset(),
     ) -> list[tuple[datetime, datetime | None]]: ...
+
+    def dashboard_messages(
+        self, since: datetime, until: datetime
+    ) -> list[tuple[str, str, str, datetime]]: ...
+
+    def case_channels(self, since: datetime, until: datetime) -> dict[str, str]: ...
 
     def advisor_reply_contacts(
         self, since: datetime, until: datetime
@@ -706,6 +815,10 @@ class StoredProfile:
     role: str
     password_hash: str
     telegram_user_id: int | None = None
+    public_id: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    contact_updated_at: datetime | None = None
 
 
 @dataclass
@@ -909,6 +1022,28 @@ def _blocks_json(blocks: Sequence) -> list:
     return result
 
 
+def _json_value(value: object) -> object:
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _quick_reply_from_row(row: Sequence) -> QuickReply:
+    triggers = _json_value(row[2]) or []
+    blocks = _json_value(row[3]) or []
+    return QuickReply(
+        id=row[0],
+        name=row[1],
+        triggers=tuple(triggers),
+        blocks=tuple(blocks),
+        image_id=row[4],
+        active=bool(row[5]),
+        priority=int(row[6]),
+        created_at=row[7],
+        updated_at=row[8],
+    )
+
+
 class FakeRepository:
     def __init__(self) -> None:
         self.contacts: dict[object, Contact] = {}
@@ -945,6 +1080,10 @@ class FakeRepository:
         self.privacy_purge_runs: list[dict[str, Any]] = []
         self.fail_privacy_consent = False
         self.fail_privacy_consent_delete = False
+        # #72: identidad -> (cliente_id, vinculado_en) y aceptación por cliente.
+        self.identidades_cliente: dict[tuple[str, str], tuple[str, datetime]] = {}
+        self.consentimientos_cliente: dict[tuple[str, str], dict[str, Any]] = {}
+        self.fail_client_link = False
         self.conversation_states: dict[str, tuple[ConversationState, datetime]] = {}
         self.conversation_texts = ConversationTexts()
         self.client_credentials: dict[str, ClientCredential] = {}
@@ -962,6 +1101,8 @@ class FakeRepository:
         self.case_tags: dict[str, dict[str, Any]] = {}
         self.case_tag_assignments: list[tuple[str, str, str, str, datetime]] = []
         self.saved_replies: dict[str, SavedReply] = {}
+        self.quick_replies: dict[str, QuickReply] = {}
+        self.quick_reply_images: dict[str, QuickReplyImage] = {}
         self.text_versions: list[TextVersion] = []
         self.whatsapp_templates: dict[str, WhatsAppTemplate] = {}
         self.expiry_notices: dict[tuple[str, datetime], dict[str, Any]] = {}
@@ -1495,6 +1636,14 @@ class FakeRepository:
     def add_event(self, contact_id: str, type: str, reason: str, at: datetime) -> None:
         self.events.append(StoredEvent(contact_id, type, reason, at))
 
+    def last_event_at(self, contact_id: str, type: str) -> datetime | None:
+        values = [
+            event.at
+            for event in self.events
+            if event.contact_id == contact_id and event.type == type
+        ]
+        return max(values) if values else None
+
     def get_case_contact(self, case_id: str) -> Contact | None:
         contact_id = self.case_links.get(case_id)
         for contact in self.contacts.values():
@@ -1557,6 +1706,60 @@ class FakeRepository:
         return [
             (message.role, message.text, message.at) for message in selected[-limit:]
         ]
+
+    def _conversation_ref(self, contact: Contact) -> ConversationRef | None:
+        stored = self.conversation_states.get(contact.id)
+        if stored is None:
+            return None
+        messages = [
+            message for message in self.messages if message.contact_id == contact.id
+        ]
+        if not messages:
+            return None
+        user_messages = [message.at for message in messages if message.role == "user"]
+        closed = [
+            event.at
+            for event in self.events
+            if event.contact_id == contact.id and event.type == "case_closed"
+        ]
+        purchase_intent = [
+            event.at
+            for event in self.events
+            if event.contact_id == contact.id and event.type == "purchase_intent"
+        ]
+        return ConversationRef(
+            contact=contact,
+            state=stored[0],
+            last_activity_at=max(message.at for message in messages),
+            last_user_at=max(user_messages) if user_messages else None,
+            last_closed_at=max(closed) if closed else None,
+            case_id=self.latest_case_for_contact(contact.id),
+            last_purchase_intent_at=(
+                max(purchase_intent) if purchase_intent else None
+            ),
+        )
+
+    def list_conversations(
+        self, states: Sequence[str], limit: int
+    ) -> list[ConversationRef]:
+        wanted = set(states)
+        contacts = {contact.id: contact for contact in self.contacts.values()}
+        refs: list[ConversationRef] = []
+        for contact in contacts.values():
+            stored = self.conversation_states.get(contact.id)
+            if stored is None or stored[0].value not in wanted:
+                continue
+            ref = self._conversation_ref(contact)
+            if ref is not None:
+                refs.append(ref)
+        refs.sort(key=lambda ref: (ref.last_activity_at, ref.contact.id), reverse=True)
+        return refs[:limit]
+
+    def conversation_ref(self, contact_id: str) -> ConversationRef | None:
+        contact = self.get_contact(contact_id)
+        if contact is None:
+            return None
+        return self._conversation_ref(contact)
 
     def foreign_session_windows(
         self, contact_id: str, profile_id: str | None, idle_minutes: int, now: datetime
@@ -1759,6 +1962,9 @@ class FakeRepository:
             username=stored.username,
             role=stored.role,
             telegram_user_id=stored.telegram_user_id,
+            public_id=stored.public_id,
+            email=stored.email,
+            phone=stored.phone,
         )
 
     def get_profile_by_telegram_user_id(
@@ -1771,6 +1977,7 @@ class FakeRepository:
                     username=stored.username,
                     role=stored.role,
                     telegram_user_id=stored.telegram_user_id,
+                    public_id=stored.public_id,
                 )
         return None
 
@@ -2231,6 +2438,111 @@ class FakeRepository:
                 return consent.result
         return None
 
+    def has_client_consent_for_identity(
+        self,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        not_before: datetime | None,
+    ) -> bool:
+        """R4, R21: identidad vinculada -> cliente con aceptación vigente."""
+        linked = self.identidades_cliente.get((channel, external_user_id))
+        if linked is None:
+            return False
+        cliente_id, _ = linked
+        consent = self.consentimientos_cliente.get((cliente_id, notice_version))
+        if consent is None:
+            return False
+        if not_before is not None and consent["aceptado_en"] < not_before:
+            return False
+        return True
+
+    def register_client_login(
+        self,
+        cliente_id: str,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        now: datetime,
+    ) -> None:
+        """R1, R3, R13, R15: asocia la identidad y copia la evidencia si es su primer login."""
+        if self.fail_client_link:
+            raise RuntimeError("vinculación de cliente no disponible")
+        previous = self.identidades_cliente.get((channel, external_user_id))
+        reassigned = previous is not None and previous[0] != cliente_id
+        self.identidades_cliente[(channel, external_user_id)] = (cliente_id, now)
+        if reassigned or (cliente_id, notice_version) in self.consentimientos_cliente:
+            return
+        evidence = next(
+            (
+                consent
+                for consent in reversed(self.privacy_consents)
+                if consent.channel == channel
+                and consent.external_user_id == external_user_id
+                and consent.notice_version == notice_version
+                and consent.result == "accepted"
+                and consent.evidence_type in ("button", "text")
+                and consent.accepted_at is not None
+            ),
+            None,
+        )
+        if evidence is None:
+            return
+        self.consentimientos_cliente[(cliente_id, notice_version)] = {
+            "notice_sha256": evidence.notice_sha256,
+            "aceptado_en": evidence.accepted_at,
+            "canal_id": evidence.channel,
+        }
+
+    def register_client_acceptance_if_linked(
+        self,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        notice_sha256: str,
+        accepted_at: datetime,
+    ) -> None:
+        """R8, R9: solo una identidad ya vinculada cubre a su cliente."""
+        linked = self.identidades_cliente.get((channel, external_user_id))
+        if linked is None:
+            return
+        cliente_id, _ = linked
+        key = (cliente_id, notice_version)
+        if key in self.consentimientos_cliente:
+            return
+        self.consentimientos_cliente[key] = {
+            "notice_sha256": notice_sha256,
+            "aceptado_en": accepted_at,
+            "canal_id": channel,
+        }
+
+    def client_history(
+        self, cliente_id: str, limit: int
+    ) -> list[ClientHistoryMessage]:
+        """R16: mensajes de los contactos de todas las identidades del cliente."""
+        channels = {
+            self._contact_key(channel, external_user_id): channel
+            for (channel, external_user_id), (owner, _) in self.identidades_cliente.items()
+            if owner == cliente_id
+        }
+        contact_channels: dict[str, str] = {}
+        for key, channel in channels.items():
+            contact = self.contacts.get(key)
+            if contact is not None:
+                contact_channels[contact.id] = channel
+        rows = [
+            ClientHistoryMessage(
+                channel=contact_channels[message.contact_id],
+                role=message.role,
+                text=message.text,
+                at=message.at,
+            )
+            for message in self.messages
+            if message.contact_id in contact_channels
+        ]
+        rows.sort(key=lambda row: row.at)
+        return rows[-limit:] if limit > 0 else []
+
     def find_channel_contact(
         self, channel: str, external_user_id: str
     ) -> Contact | None:
@@ -2338,7 +2650,12 @@ class FakeRepository:
             )
         self.conversation_texts = texts
 
-    def purge_personal_data(self, cutoff: datetime, ran_at: datetime) -> dict[str, int]:
+    def purge_personal_data(
+        self,
+        cutoff: datetime,
+        ran_at: datetime,
+        client_cutoff: datetime | None = None,
+    ) -> dict[str, int]:
         def recent_link(contact_id: str) -> bool:
             return any(
                 linked_contact_id == contact_id
@@ -2483,6 +2800,24 @@ class FakeRepository:
             "inbox": deleted_inbox,
             "outbox": deleted_outbox,
         }
+        if client_cutoff is not None:
+            kept_client_consents = {
+                key: row
+                for key, row in self.consentimientos_cliente.items()
+                if row["aceptado_en"] >= client_cutoff
+            }
+            counts["consentimientos_cliente"] = (
+                len(self.consentimientos_cliente) - len(kept_client_consents)
+            )
+            self.consentimientos_cliente = kept_client_consents
+        for stored in self.profiles.values():
+            if (
+                stored.contact_updated_at is not None
+                and stored.contact_updated_at < cutoff
+            ):
+                stored.email = None
+                stored.phone = None
+                stored.contact_updated_at = None
         self.privacy_purge_runs.append(
             {"ran_at": ran_at, "cutoff": cutoff, "counts": dict(counts)}
         )
@@ -2495,6 +2830,9 @@ class FakeRepository:
         valid_from: datetime,
         valid_until: datetime,
         now: datetime,
+        public_id: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
     ) -> Profile:
         normalized = username.lower()
         with self._identity_lock:
@@ -2503,19 +2841,137 @@ class FakeRepository:
                 for profile in self.profiles.values()
             ):
                 raise UsernameTaken("El nombre de usuario ya existe.")
+            assigned = public_id or self._unique_public_id()
+            if any(p.public_id == assigned for p in self.profiles.values()):
+                raise PublicIdTaken("El ID de cliente ya existe.")
             profile_id = f"p{len(self.profiles) + 1}"
             self.profiles[profile_id] = StoredProfile(
                 id=profile_id,
                 username=normalized,
                 role="cliente",
                 password_hash=password_hash,
+                public_id=assigned,
+                email=email.strip().lower() if email else None,
+                phone=phone.strip() if phone else None,
+                contact_updated_at=now if email or phone else None,
             )
             self.client_credentials[profile_id] = ClientCredential(
                 profile_id=profile_id,
                 valid_from=valid_from,
                 valid_until=valid_until,
             )
-        return Profile(id=profile_id, username=normalized, role="cliente")
+        return Profile(
+            id=profile_id,
+            username=normalized,
+            role="cliente",
+            public_id=assigned,
+            email=email.strip().lower() if email else None,
+            phone=phone.strip() if phone else None,
+        )
+
+    def find_client_id_by_email(self, email: str) -> str | None:
+        normalized = email.strip().lower()
+        for stored in self.profiles.values():
+            if stored.role == "cliente" and stored.email == normalized:
+                return stored.id
+        return None
+
+    def find_client_id_by_phone(self, phone: str) -> str | None:
+        normalized = phone.strip()
+        for stored in self.profiles.values():
+            if stored.role == "cliente" and stored.phone == normalized:
+                return stored.id
+        return None
+
+    def update_client_contact(
+        self,
+        profile_id: str,
+        now: datetime,
+        *,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> bool:
+        with self._identity_lock:
+            stored = self.profiles.get(profile_id)
+            if stored is None or stored.role != "cliente":
+                return False
+            if email is not None:
+                stored.email = email.strip().lower()
+            if phone is not None:
+                stored.phone = phone.strip()
+            if email is not None or phone is not None:
+                stored.contact_updated_at = now
+            return True
+
+    def _unique_public_id(self) -> str:
+        used = {p.public_id for p in self.profiles.values() if p.public_id}
+        for _ in range(5):
+            candidate = generate_public_id()
+            if candidate not in used:
+                return candidate
+        raise PublicIdGenerationError("No se pudo asignar un ID de cliente único.")
+
+    def ensure_public_ids(self, generate: Callable[[], str]) -> int:
+        """R7: asigna ID a clientes sin él; nunca cambia uno existente."""
+        assigned = 0
+        with self._identity_lock:
+            used = {p.public_id for p in self.profiles.values() if p.public_id}
+            for stored in self.profiles.values():
+                if stored.role != "cliente" or stored.public_id:
+                    continue
+                for _ in range(5):
+                    candidate = generate()
+                    if candidate not in used:
+                        break
+                else:
+                    raise PublicIdGenerationError(
+                        "No se pudo asignar un ID de cliente único."
+                    )
+                stored.public_id = candidate
+                used.add(candidate)
+                assigned += 1
+        return assigned
+
+    def find_client_by_public_id(
+        self, public_id: str
+    ) -> ClientSearchResult | None:
+        stored = next(
+            (
+                profile
+                for profile in self.profiles.values()
+                if profile.role == "cliente" and profile.public_id == public_id
+            ),
+            None,
+        )
+        if stored is None:
+            return None
+        credential = self.client_credentials.get(stored.id)
+        if credential is None:
+            return None
+        contacts = tuple(
+            contact
+            for (channel, external_user_id), (owner, _) in (
+                self.identidades_cliente.items()
+            )
+            if owner == stored.id
+            for contact in [self.find_channel_contact(channel, external_user_id)]
+            if contact is not None
+        )
+        return ClientSearchResult(
+            profile=Profile(
+                id=stored.id,
+                username=stored.username,
+                role=stored.role,
+                telegram_user_id=stored.telegram_user_id,
+                public_id=stored.public_id,
+                email=stored.email,
+                phone=stored.phone,
+            ),
+            credential=credential,
+            has_active_session=self.get_active_session_by_profile(stored.id)
+            is not None,
+            contacts=contacts,
+        )
 
     def get_client_credential(self, profile_id: str) -> ClientCredential | None:
         return self.client_credentials.get(profile_id)
@@ -2532,6 +2988,9 @@ class FakeRepository:
                         username=stored.username,
                         role=stored.role,
                         telegram_user_id=stored.telegram_user_id,
+                        public_id=stored.public_id,
+                        email=stored.email,
+                        phone=stored.phone,
                     ),
                     stored.password_hash,
                     self.client_credentials.get(stored.id),
@@ -2810,6 +3269,13 @@ class FakeRepository:
                 for session in sessions
             ]
             session_contact_ids = {session.contact_id for session in sessions}
+            linked_identities = {
+                (channel, external_user_id)
+                for (channel, external_user_id), (owner, _) in (
+                    self.identidades_cliente.items()
+                )
+                if owner == request.profile_id
+            }
             identities = {
                 (
                     contact.channel,
@@ -2817,7 +3283,7 @@ class FakeRepository:
                 )
                 for contact in self.contacts.values()
                 if contact.id in session_contact_ids
-            }
+            } | linked_identities
             kept_consents = [
                 consent
                 for consent in self.privacy_consents
@@ -2887,12 +3353,34 @@ class FakeRepository:
 
             self.privacy_consents = kept_consents
 
+            deleted_client_consents = sum(
+                1
+                for (owner, _) in self.consentimientos_cliente
+                if owner == request.profile_id
+            )
+            self.consentimientos_cliente = {
+                key: row
+                for key, row in self.consentimientos_cliente.items()
+                if key[0] != request.profile_id
+            }
+            deleted_identities = len(linked_identities)
+            for identity in linked_identities:
+                self.identidades_cliente.pop(identity, None)
+            stored_profile = self.profiles.get(request.profile_id)
+            if stored_profile is not None:
+                stored_profile.public_id = None
+                stored_profile.email = None
+                stored_profile.phone = None
+                stored_profile.contact_updated_at = None
+
             counts = {
                 "messages": deleted_messages,
                 "conversation_summaries": deleted_summaries,
                 "client_memory": deleted_memory,
                 "case_notes": deleted_notes,
                 "privacy_consents": deleted_consents,
+                "consentimientos_cliente": deleted_client_consents,
+                "identidades_cliente": deleted_identities,
             }
             request.status = "executed"
             request.executed_at = now
@@ -3089,6 +3577,75 @@ class FakeRepository:
     def count_saved_replies(self) -> int:
         return len(self.saved_replies)
 
+    def add_quick_reply(self, reply: QuickReply) -> None:
+        self.quick_replies[reply.id] = reply
+
+    def update_quick_reply(
+        self,
+        reply_id: str,
+        name: str,
+        triggers: Sequence[str],
+        blocks: Sequence[dict],
+        image_id: str | None,
+        priority: int,
+        now: datetime,
+    ) -> bool:
+        current = self.quick_replies.get(reply_id)
+        if current is None:
+            return False
+        self.quick_replies[reply_id] = QuickReply(
+            id=current.id,
+            name=name,
+            triggers=tuple(triggers),
+            blocks=tuple(blocks),
+            image_id=image_id,
+            active=current.active,
+            priority=priority,
+            created_at=current.created_at,
+            updated_at=now,
+        )
+        return True
+
+    def set_quick_reply_active(
+        self, reply_id: str, active: bool, now: datetime
+    ) -> bool:
+        current = self.quick_replies.get(reply_id)
+        if current is None:
+            return False
+        self.quick_replies[reply_id] = QuickReply(
+            id=current.id,
+            name=current.name,
+            triggers=current.triggers,
+            blocks=current.blocks,
+            image_id=current.image_id,
+            active=active,
+            priority=current.priority,
+            created_at=current.created_at,
+            updated_at=now,
+        )
+        return True
+
+    def get_quick_reply(self, reply_id: str) -> QuickReply | None:
+        return self.quick_replies.get(reply_id)
+
+    def list_quick_replies(self, only_active: bool = False) -> list[QuickReply]:
+        replies = [
+            reply
+            for reply in self.quick_replies.values()
+            if not only_active or reply.active
+        ]
+        replies.sort(key=lambda reply: (-reply.priority, reply.created_at, reply.id))
+        return replies
+
+    def add_quick_reply_image(self, image: QuickReplyImage) -> None:
+        self.quick_reply_images[image.id] = image
+
+    def get_quick_reply_image(self, image_id: str) -> QuickReplyImage | None:
+        return self.quick_reply_images.get(image_id)
+
+    def delete_quick_reply_image(self, image_id: str) -> None:
+        self.quick_reply_images.pop(image_id, None)
+
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         merged = dict(self.identity_overrides)
         merged.update(self._app_settings)
@@ -3138,6 +3695,9 @@ class FakeRepository:
                         username=stored.username,
                         role=stored.role,
                         telegram_user_id=stored.telegram_user_id,
+                        public_id=stored.public_id,
+                        email=stored.email,
+                        phone=stored.phone,
                     ),
                     credential=credential,
                     has_active_session=self.get_active_session_by_profile(stored.id)
@@ -3292,12 +3852,17 @@ class FakeRepository:
             row["updated_at"] = now
 
     def case_first_responses(
-        self, since: datetime, until: datetime
+        self,
+        since: datetime,
+        until: datetime,
+        exclude_channels: frozenset[str] = frozenset(),
     ) -> list[tuple[datetime, datetime | None]]:
         rows: list[tuple[datetime, datetime | None]] = []
         for case_id, contact_id in self.case_links.items():
             created_at = self.case_link_created_at.get(case_id)
             if created_at is None or created_at < since or created_at >= until:
+                continue
+            if self._canal_id_of(contact_id) in exclude_channels:
                 continue
             replies = [
                 message.at
@@ -3309,6 +3874,35 @@ class FakeRepository:
             rows.append((created_at, min(replies) if replies else None))
         rows.sort(key=lambda row: row[0])
         return rows
+
+    def dashboard_messages(
+        self, since: datetime, until: datetime
+    ) -> list[tuple[str, str, str, datetime]]:
+        """R9: (contact_id, canal, rol, at) de los mensajes del intervalo."""
+        rows = [
+            (
+                message.contact_id,
+                self._canal_id_of(message.contact_id) or message.canal_id or "",
+                message.role,
+                message.at,
+            )
+            for message in self.messages
+            if since <= message.at < until
+        ]
+        rows.sort(key=lambda row: row[3])
+        return rows
+
+    def case_channels(self, since: datetime, until: datetime) -> dict[str, str]:
+        """R14: canal del contacto de cada caso creado en el intervalo."""
+        channels: dict[str, str] = {}
+        for case_id, contact_id in self.case_links.items():
+            created_at = self.case_link_created_at.get(case_id)
+            if created_at is None or created_at < since or created_at >= until:
+                continue
+            channel = self._canal_id_of(contact_id)
+            if channel is not None:
+                channels[case_id] = channel
+        return channels
 
     def advisor_reply_contacts(
         self, since: datetime, until: datetime
@@ -3518,6 +4112,14 @@ _SCHEMA = (
     "id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, "
     "active BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
     "updated_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS quick_replies ("
+    "id TEXT PRIMARY KEY, name TEXT NOT NULL, triggers JSONB NOT NULL, "
+    "blocks JSONB NOT NULL, image_id TEXT, active BOOLEAN NOT NULL, "
+    "priority INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
+    "updated_at TIMESTAMPTZ NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS quick_reply_images ("
+    "id TEXT PRIMARY KEY, content_type TEXT NOT NULL, data BYTEA NOT NULL, "
+    "size INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
     "CREATE TABLE IF NOT EXISTS panel_events ("
     "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, "
     "created_at TIMESTAMPTZ NOT NULL)",
@@ -3536,6 +4138,13 @@ _SCHEMA = (
     "attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL, "
     "locked_until TIMESTAMPTZ NULL, last_error TEXT NULL, "
     "created_at TIMESTAMPTZ NOT NULL, finished_at TIMESTAMPTZ NULL)",
+    "CREATE TABLE IF NOT EXISTS identidades_cliente ("
+    "cliente_id TEXT NOT NULL, canal_id TEXT NOT NULL, id_externo TEXT NOT NULL, "
+    "vinculado_en TIMESTAMPTZ NOT NULL, PRIMARY KEY (canal_id, id_externo))",
+    "CREATE TABLE IF NOT EXISTS consentimientos_cliente ("
+    "cliente_id TEXT NOT NULL, notice_version TEXT NOT NULL, "
+    "notice_sha256 TEXT NOT NULL, aceptado_en TIMESTAMPTZ NOT NULL, "
+    "canal_id TEXT NOT NULL, PRIMARY KEY (cliente_id, notice_version))",
 )
 
 _INDEXES = (
@@ -3584,6 +4193,8 @@ _INDEXES = (
     "CREATE INDEX IF NOT EXISTS inbox_created ON inbox (created_at)",
     "CREATE INDEX IF NOT EXISTS outbox_destination ON outbox (destination_key, id)",
     "CREATE INDEX IF NOT EXISTS outbox_status ON outbox (status, created_at)",
+    "CREATE INDEX IF NOT EXISTS identidades_cliente_cliente "
+    "ON identidades_cliente (cliente_id)",
 )
 
 # Migración aditiva e idempotente para instalaciones anteriores a #36. Se ejecuta
@@ -3630,6 +4241,17 @@ _MIGRATIONS = (
     # segundo factor del panel (#54)
     "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS enroll_only "
     "BOOLEAN NOT NULL DEFAULT FALSE",
+    # #73: ID público de cliente. El índice único permite NULL en perfiles de staff.
+    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS public_id TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS profiles_public_id_key "
+    "ON profiles (public_id)",
+    # #77: correo y teléfono del perfil, opcionales y limpiados por retención/supresión.
+    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT",
+    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS phone TEXT",
+    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS contact_updated_at TIMESTAMPTZ",
+    # #77: índices no únicos; la unicidad de correo/teléfono se decide en la aplicación.
+    "CREATE INDEX IF NOT EXISTS profiles_email ON profiles (email)",
+    "CREATE INDEX IF NOT EXISTS profiles_phone ON profiles (phone)",
     # #65: id de canal explícito en contactos y mensajes; se escribe en paralelo a
     # `contacts.channel` (que sigue siendo la fuente de lectura). Idempotente.
     "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS canal_id TEXT",
@@ -3687,6 +4309,25 @@ def _pg_connect(database_url: str, timeout: float | None = None) -> Any:
         port=parsed.port or 5432,
         database=(parsed.path or "/").lstrip("/"),
         **kwargs,
+    )
+
+
+def _row_to_conversation_ref(row: tuple) -> ConversationRef:
+    return ConversationRef(
+        contact=Contact(
+            id=row[0],
+            channel=row[1],
+            external_user_id=row[2],
+            external_chat_id=row[3],
+            telegram_user_id=row[4],
+            chat_id=row[5],
+        ),
+        state=ConversationState(row[6]),
+        last_activity_at=row[7],
+        last_user_at=row[8],
+        last_closed_at=row[9],
+        case_id=row[10],
+        last_purchase_intent_at=row[11],
     )
 
 
@@ -4327,6 +4968,14 @@ class PostgresRepository:
             (contact_id, type, reason, at),
         )
 
+    def last_event_at(self, contact_id: str, type: str) -> datetime | None:
+        rows = self._run(
+            "SELECT MAX(at) FROM events WHERE contact_id = %s AND type = %s",
+            (contact_id, type),
+            fetch=True,
+        )
+        return rows[0][0] if rows else None
+
     def link_case(
         self,
         case_id: str,
@@ -4458,6 +5107,53 @@ class PostgresRepository:
             fetch=True,
         )
         return [(row[0], row[1], row[2]) for row in rows]
+
+    def list_conversations(
+        self, states: Sequence[str], limit: int
+    ) -> list[ConversationRef]:
+        rows = self._run(
+            "SELECT c.id, c.channel, c.external_user_id, c.external_chat_id, "
+            "c.telegram_user_id, c.chat_id, cs.state, MAX(m.at), "
+            "MAX(m.at) FILTER (WHERE m.role = 'user'), "
+            "(SELECT MAX(e.at) FROM events e WHERE e.contact_id = c.id "
+            "AND e.type = 'case_closed'), "
+            "(SELECT l.case_id FROM case_links l WHERE l.contact_id = c.id "
+            "ORDER BY l.created_at DESC, l.case_id DESC LIMIT 1), "
+            "(SELECT MAX(e.at) FROM events e WHERE e.contact_id = c.id "
+            "AND e.type = 'purchase_intent') "
+            "FROM contacts c JOIN conversation_states cs ON cs.contact_id = c.id "
+            "JOIN messages m ON m.contact_id = c.id "
+            "WHERE cs.state = ANY(%s) "
+            "GROUP BY c.id, c.channel, c.external_user_id, c.external_chat_id, "
+            "c.telegram_user_id, c.chat_id, cs.state "
+            "ORDER BY MAX(m.at) DESC, c.id DESC LIMIT %s",
+            (list(states), limit),
+            fetch=True,
+        )
+        return [_row_to_conversation_ref(row) for row in rows]
+
+    def conversation_ref(self, contact_id: str) -> ConversationRef | None:
+        rows = self._run(
+            "SELECT c.id, c.channel, c.external_user_id, c.external_chat_id, "
+            "c.telegram_user_id, c.chat_id, cs.state, "
+            "(SELECT MAX(m.at) FROM messages m WHERE m.contact_id = c.id), "
+            "(SELECT MAX(m.at) FROM messages m WHERE m.contact_id = c.id "
+            "AND m.role = 'user'), "
+            "(SELECT MAX(e.at) FROM events e WHERE e.contact_id = c.id "
+            "AND e.type = 'case_closed'), "
+            "(SELECT l.case_id FROM case_links l WHERE l.contact_id = c.id "
+            "ORDER BY l.created_at DESC, l.case_id DESC LIMIT 1), "
+            "(SELECT MAX(e.at) FROM events e WHERE e.contact_id = c.id "
+            "AND e.type = 'purchase_intent') "
+            "FROM contacts c JOIN conversation_states cs ON cs.contact_id = c.id "
+            "WHERE c.id = %s AND EXISTS ("
+            "SELECT 1 FROM messages m WHERE m.contact_id = c.id)",
+            (contact_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        return _row_to_conversation_ref(rows[0])
 
     def foreign_session_windows(
         self, contact_id: str, profile_id: str | None, idle_minutes: int, now: datetime
@@ -4729,7 +5425,8 @@ class PostgresRepository:
 
     def get_profile(self, profile_id: str) -> Profile | None:
         rows = self._run(
-            "SELECT id, username, role, telegram_user_id FROM profiles WHERE id = %s",
+            "SELECT id, username, role, telegram_user_id, public_id "
+            "FROM profiles WHERE id = %s",
             (profile_id,),
             fetch=True,
         )
@@ -4737,14 +5434,18 @@ class PostgresRepository:
             return None
         row = rows[0]
         return Profile(
-            id=row[0], username=row[1], role=row[2], telegram_user_id=row[3]
+            id=row[0],
+            username=row[1],
+            role=row[2],
+            telegram_user_id=row[3],
+            public_id=row[4],
         )
 
     def get_profile_by_telegram_user_id(
         self, telegram_user_id: int
     ) -> Profile | None:
         rows = self._run(
-            "SELECT id, username, role, telegram_user_id FROM profiles "
+            "SELECT id, username, role, telegram_user_id, public_id FROM profiles "
             "WHERE telegram_user_id = %s",
             (telegram_user_id,),
             fetch=True,
@@ -4753,7 +5454,11 @@ class PostgresRepository:
             return None
         row = rows[0]
         return Profile(
-            id=row[0], username=row[1], role=row[2], telegram_user_id=row[3]
+            id=row[0],
+            username=row[1],
+            role=row[2],
+            telegram_user_id=row[3],
+            public_id=row[4],
         )
 
     def add_db_query_audit(
@@ -5322,6 +6027,133 @@ class PostgresRepository:
         )
         return rows[0][0] if rows else None
 
+    def has_client_consent_for_identity(
+        self,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        not_before: datetime | None,
+    ) -> bool:
+        """R4, R21: cobertura por cliente con filtro opcional de retención."""
+        sql = (
+            "SELECT 1 FROM identidades_cliente i "
+            "JOIN consentimientos_cliente c ON c.cliente_id = i.cliente_id "
+            "WHERE i.canal_id = %s AND i.id_externo = %s "
+            "AND c.notice_version = %s"
+        )
+        params: tuple = (channel, external_user_id, notice_version)
+        if not_before is not None:
+            sql += " AND c.aceptado_en >= %s"
+            params += (not_before,)
+        rows = self._run(sql + " LIMIT 1", params, fetch=True)
+        return bool(rows)
+
+    def register_client_login(
+        self,
+        cliente_id: str,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        now: datetime,
+    ) -> None:
+        """R1, R3, R13, R15: vinculación y evidencia por cliente en una transacción."""
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT cliente_id FROM identidades_cliente "
+                    "WHERE canal_id = %s AND id_externo = %s",
+                    (channel, external_user_id),
+                )
+                previous = list(cur.fetchall())
+                reassigned = bool(previous) and previous[0][0] != cliente_id
+                cur.execute(
+                    "INSERT INTO identidades_cliente "
+                    "(cliente_id, canal_id, id_externo, vinculado_en) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (canal_id, id_externo) DO UPDATE SET "
+                    "cliente_id = EXCLUDED.cliente_id, "
+                    "vinculado_en = EXCLUDED.vinculado_en",
+                    (cliente_id, channel, external_user_id, now),
+                )
+                if not reassigned:
+                    cur.execute(
+                        "INSERT INTO consentimientos_cliente "
+                        "(cliente_id, notice_version, notice_sha256, aceptado_en, "
+                        "canal_id) "
+                        "SELECT %s, %s, p.notice_sha256, p.accepted_at, p.channel "
+                        "FROM privacy_consents p "
+                        "WHERE p.channel = %s AND p.external_user_id = %s "
+                        "AND p.notice_version = %s AND p.result = 'accepted' "
+                        "AND p.evidence_type IN ('button', 'text') "
+                        "AND p.accepted_at IS NOT NULL "
+                        "ORDER BY p.occurred_at DESC NULLS LAST, p.id DESC LIMIT 1 "
+                        "ON CONFLICT (cliente_id, notice_version) DO NOTHING",
+                        (
+                            cliente_id,
+                            notice_version,
+                            channel,
+                            external_user_id,
+                            notice_version,
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def register_client_acceptance_if_linked(
+        self,
+        channel: str,
+        external_user_id: str,
+        notice_version: str,
+        notice_sha256: str,
+        accepted_at: datetime,
+    ) -> None:
+        """R8, R9: la aceptación de una identidad vinculada cubre a su cliente."""
+        self._run(
+            "INSERT INTO consentimientos_cliente "
+            "(cliente_id, notice_version, notice_sha256, aceptado_en, canal_id) "
+            "SELECT cliente_id, %s, %s, %s, %s FROM identidades_cliente "
+            "WHERE canal_id = %s AND id_externo = %s "
+            "ON CONFLICT (cliente_id, notice_version) DO NOTHING",
+            (
+                notice_version,
+                notice_sha256,
+                accepted_at,
+                channel,
+                channel,
+                external_user_id,
+            ),
+        )
+
+    def client_history(
+        self, cliente_id: str, limit: int
+    ) -> list[ClientHistoryMessage]:
+        """R16: mensajes de los contactos de todas las identidades del cliente."""
+        rows = self._run(
+            "SELECT channel, role, text, at FROM ("
+            "SELECT c.channel AS channel, m.role AS role, m.text AS text, "
+            "m.at AS at, m.id AS message_id "
+            "FROM messages m "
+            "JOIN contacts c ON c.id = m.contact_id "
+            "JOIN identidades_cliente i ON i.canal_id = c.channel "
+            "AND i.id_externo = COALESCE("
+            "c.external_user_id, CAST(c.telegram_user_id AS TEXT)) "
+            "WHERE i.cliente_id = %s "
+            "ORDER BY m.at DESC, m.id DESC LIMIT %s"
+            ") recent ORDER BY at, message_id",
+            (cliente_id, limit),
+            fetch=True,
+        )
+        return [
+            ClientHistoryMessage(
+                channel=row[0], role=row[1], text=row[2], at=row[3]
+            )
+            for row in rows
+        ]
+
     def find_channel_contact(
         self, channel: str, external_user_id: str
     ) -> Contact | None:
@@ -5486,17 +6318,32 @@ class PostgresRepository:
         valid_from: datetime,
         valid_until: datetime,
         now: datetime,
+        public_id: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
     ) -> Profile:
         profile_id = self._new_id()
+        assigned = public_id or generate_public_id()
         with self._lock:
             conn = self._connection()
             cur = conn.cursor()
             try:
                 cur.execute(
-                    "INSERT INTO profiles (id, username, role, password_hash, created_at) "
-                    "VALUES (%s, %s, 'cliente', %s, %s) "
+                    "INSERT INTO profiles "
+                    "(id, username, role, password_hash, created_at, public_id, "
+                    "email, phone, contact_updated_at) "
+                    "VALUES (%s, %s, 'cliente', %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (username) DO NOTHING RETURNING id",
-                    (profile_id, username.lower(), password_hash, now),
+                    (
+                        profile_id,
+                        username.lower(),
+                        password_hash,
+                        now,
+                        assigned,
+                        email.strip().lower() if email else None,
+                        phone.strip() if phone else None,
+                        now if email or phone else None,
+                    ),
                 )
                 if not list(cur.fetchall()):
                     conn.rollback()
@@ -5510,10 +6357,159 @@ class PostgresRepository:
                 conn.commit()
             except UsernameTaken:
                 raise
+            except Exception as error:
+                conn.rollback()
+                if _is_unique_violation(error):
+                    raise PublicIdTaken("El ID de cliente ya existe.") from error
+                raise
+        return Profile(
+            id=profile_id,
+            username=username.lower(),
+            role="cliente",
+            public_id=assigned,
+            email=email.strip().lower() if email else None,
+            phone=phone.strip() if phone else None,
+        )
+
+    def find_client_id_by_email(self, email: str) -> str | None:
+        rows = self._run(
+            "SELECT id FROM profiles WHERE role = 'cliente' AND email = %s "
+            "ORDER BY id LIMIT 1",
+            (email.strip().lower(),),
+            fetch=True,
+        )
+        return rows[0][0] if rows else None
+
+    def find_client_id_by_phone(self, phone: str) -> str | None:
+        rows = self._run(
+            "SELECT id FROM profiles WHERE role = 'cliente' AND phone = %s "
+            "ORDER BY id LIMIT 1",
+            (phone.strip(),),
+            fetch=True,
+        )
+        return rows[0][0] if rows else None
+
+    def update_client_contact(
+        self,
+        profile_id: str,
+        now: datetime,
+        *,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> bool:
+        rows = self._run(
+            "UPDATE profiles SET email = COALESCE(%s, email), "
+            "phone = COALESCE(%s, phone), "
+            "contact_updated_at = CASE WHEN %s OR %s THEN %s "
+            "ELSE contact_updated_at END "
+            "WHERE id = %s AND role = 'cliente' RETURNING id",
+            (
+                email.strip().lower() if email is not None else None,
+                phone.strip() if phone is not None else None,
+                email is not None,
+                phone is not None,
+                now,
+                profile_id,
+            ),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def ensure_public_ids(self, generate: Callable[[], str]) -> int:
+        """R7: rellena `profiles.public_id` en clientes anteriores, una sola vez."""
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT id FROM profiles "
+                    "WHERE role = 'cliente' AND public_id IS NULL"
+                )
+                profile_ids = [row[0] for row in cur.fetchall()]
+                assigned = 0
+                for profile_id in profile_ids:
+                    for _ in range(5):
+                        candidate = generate()
+                        try:
+                            cur.execute(
+                                "UPDATE profiles SET public_id = %s "
+                                "WHERE id = %s AND public_id IS NULL",
+                                (candidate, profile_id),
+                            )
+                        except Exception as error:
+                            if _is_unique_violation(error):
+                                conn.rollback()
+                                continue
+                            raise
+                        conn.commit()
+                        assigned += 1
+                        break
+                    else:
+                        conn.rollback()
+                        raise PublicIdGenerationError(
+                            "No se pudo asignar un ID de cliente único."
+                        )
+                conn.commit()
+                return assigned
+            except PublicIdGenerationError:
+                raise
             except Exception:
                 conn.rollback()
                 raise
-        return Profile(id=profile_id, username=username.lower(), role="cliente")
+
+    def find_client_by_public_id(
+        self, public_id: str
+    ) -> ClientSearchResult | None:
+        rows = self._run(
+            "SELECT p.id, p.username, p.role, p.telegram_user_id, p.public_id, "
+            "c.valid_from, c.valid_until, c.revoked_at, "
+            "EXISTS(SELECT 1 FROM client_sessions s "
+            "WHERE s.profile_id = p.id AND s.ended_at IS NULL) "
+            "FROM profiles p JOIN client_credentials c ON c.profile_id = p.id "
+            "WHERE p.role = 'cliente' AND p.public_id = %s",
+            (public_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        contacts = self._run(
+            "SELECT c.id, c.channel, c.external_user_id, c.external_chat_id, "
+            "c.telegram_user_id, c.chat_id FROM contacts c "
+            "JOIN identidades_cliente i ON i.canal_id = c.channel "
+            "AND i.id_externo = COALESCE("
+            "c.external_user_id, CAST(c.telegram_user_id AS TEXT)) "
+            "WHERE i.cliente_id = %s ORDER BY c.channel, c.id",
+            (row[0],),
+            fetch=True,
+        )
+        return ClientSearchResult(
+            profile=Profile(
+                id=row[0],
+                username=row[1],
+                role=row[2],
+                telegram_user_id=row[3],
+                public_id=row[4],
+            ),
+            credential=ClientCredential(
+                profile_id=row[0],
+                valid_from=row[5],
+                valid_until=row[6],
+                revoked_at=row[7],
+            ),
+            has_active_session=bool(row[8]),
+            contacts=tuple(
+                Contact(
+                    id=contact[0],
+                    channel=contact[1],
+                    external_user_id=contact[2],
+                    external_chat_id=contact[3],
+                    telegram_user_id=contact[4],
+                    chat_id=contact[5],
+                )
+                for contact in contacts
+            ),
+        )
 
     def get_client_credential(self, profile_id: str) -> ClientCredential | None:
         rows = self._run(
@@ -5537,7 +6533,7 @@ class PostgresRepository:
     ) -> tuple[Profile, str, ClientCredential | None] | None:
         rows = self._run(
             "SELECT p.id, p.username, p.role, p.telegram_user_id, p.password_hash, "
-            "c.valid_from, c.valid_until, c.revoked_at "
+            "c.valid_from, c.valid_until, c.revoked_at, p.public_id "
             "FROM profiles p LEFT JOIN client_credentials c ON c.profile_id = p.id "
             "WHERE p.username = %s",
             (username.lower(),),
@@ -5547,7 +6543,11 @@ class PostgresRepository:
             return None
         row = rows[0]
         profile = Profile(
-            id=row[0], username=row[1], role=row[2], telegram_user_id=row[3]
+            id=row[0],
+            username=row[1],
+            role=row[2],
+            telegram_user_id=row[3],
+            public_id=row[8],
         )
         credential = None
         if row[5] is not None:
@@ -5946,18 +6946,37 @@ class PostgresRepository:
                 )
                 deleted_memory = len(list(cur.fetchall()))
 
-                deleted_consents = 0
-                if session_contact_ids:
-                    cur.execute(
-                        "DELETE FROM privacy_consents p USING contacts c "
-                        "WHERE c.id = ANY(%s) "
-                        "AND p.channel = c.channel "
-                        "AND p.external_user_id = COALESCE("
-                        "c.external_user_id, CAST(c.telegram_user_id AS TEXT)) "
-                        "RETURNING p.id",
-                        (session_contact_ids,),
-                    )
-                    deleted_consents = len(list(cur.fetchall()))
+                cur.execute(
+                    "DELETE FROM privacy_consents p "
+                    "WHERE EXISTS (SELECT 1 FROM contacts c "
+                    "WHERE c.id = ANY(%s) AND p.channel = c.channel "
+                    "AND p.external_user_id = COALESCE("
+                    "c.external_user_id, CAST(c.telegram_user_id AS TEXT))) "
+                    "OR EXISTS (SELECT 1 FROM identidades_cliente i "
+                    "WHERE i.cliente_id = %s AND i.canal_id = p.channel "
+                    "AND i.id_externo = p.external_user_id) "
+                    "RETURNING p.id",
+                    (session_contact_ids, profile_id),
+                )
+                deleted_consents = len(list(cur.fetchall()))
+
+                cur.execute(
+                    "DELETE FROM consentimientos_cliente WHERE cliente_id = %s "
+                    "RETURNING cliente_id",
+                    (profile_id,),
+                )
+                deleted_client_consents = len(list(cur.fetchall()))
+                cur.execute(
+                    "DELETE FROM identidades_cliente WHERE cliente_id = %s "
+                    "RETURNING canal_id",
+                    (profile_id,),
+                )
+                deleted_identities = len(list(cur.fetchall()))
+                cur.execute(
+                    "UPDATE profiles SET public_id = NULL, email = NULL, "
+                    "phone = NULL, contact_updated_at = NULL WHERE id = %s",
+                    (profile_id,),
+                )
 
                 counts = {
                     "messages": deleted_messages,
@@ -5965,6 +6984,8 @@ class PostgresRepository:
                     "client_memory": deleted_memory,
                     "case_notes": deleted_notes,
                     "privacy_consents": deleted_consents,
+                    "consentimientos_cliente": deleted_client_consents,
+                    "identidades_cliente": deleted_identities,
                 }
                 cur.execute(
                     "UPDATE suppression_requests SET status = 'executed', "
@@ -5978,7 +6999,12 @@ class PostgresRepository:
                 conn.rollback()
                 raise
 
-    def purge_personal_data(self, cutoff: datetime, ran_at: datetime) -> dict[str, int]:
+    def purge_personal_data(
+        self,
+        cutoff: datetime,
+        ran_at: datetime,
+        client_cutoff: datetime | None = None,
+    ) -> dict[str, int]:
         with self._lock:
             conn = self._connection()
             cur = conn.cursor()
@@ -6098,6 +7124,21 @@ class PostgresRepository:
                 )
                 deleted_consents = len(cur.fetchall())
 
+                deleted_client_consents = 0
+                if client_cutoff is not None:
+                    cur.execute(
+                        "DELETE FROM consentimientos_cliente "
+                        "WHERE aceptado_en < %s RETURNING cliente_id",
+                        (client_cutoff,),
+                    )
+                    deleted_client_consents = len(cur.fetchall())
+
+                cur.execute(
+                    "UPDATE profiles SET email = NULL, phone = NULL, "
+                    "contact_updated_at = NULL "
+                    "WHERE contact_updated_at IS NOT NULL AND contact_updated_at < %s",
+                    (cutoff,),
+                )
                 cur.execute(
                     "DELETE FROM inbox WHERE created_at < %s RETURNING id",
                     (cutoff,),
@@ -6123,6 +7164,8 @@ class PostgresRepository:
                     "inbox": deleted_inbox,
                     "outbox": deleted_outbox,
                 }
+                if client_cutoff is not None:
+                    counts["consentimientos_cliente"] = deleted_client_consents
                 cur.execute(
                     "INSERT INTO privacy_purge_runs (ran_at, cutoff, counts) "
                     "VALUES (%s, %s, CAST(%s AS JSONB))",
@@ -6380,6 +7423,123 @@ class PostgresRepository:
         rows = self._run("SELECT COUNT(*) FROM saved_replies", (), fetch=True)
         return int(rows[0][0]) if rows else 0
 
+    def add_quick_reply(self, reply: QuickReply) -> None:
+        self._run(
+            "INSERT INTO quick_replies "
+            "(id, name, triggers, blocks, image_id, active, priority, "
+            "created_at, updated_at) VALUES "
+            "(%s, %s, CAST(%s AS JSONB), CAST(%s AS JSONB), %s, %s, %s, %s, %s)",
+            (
+                reply.id,
+                reply.name,
+                json.dumps(list(reply.triggers), ensure_ascii=False),
+                json.dumps(_blocks_json(reply.blocks), ensure_ascii=False),
+                reply.image_id,
+                reply.active,
+                reply.priority,
+                reply.created_at,
+                reply.updated_at,
+            ),
+        )
+
+    def update_quick_reply(
+        self,
+        reply_id: str,
+        name: str,
+        triggers: Sequence[str],
+        blocks: Sequence[dict],
+        image_id: str | None,
+        priority: int,
+        now: datetime,
+    ) -> bool:
+        rows = self._run(
+            "UPDATE quick_replies SET name = %s, triggers = CAST(%s AS JSONB), "
+            "blocks = CAST(%s AS JSONB), image_id = %s, priority = %s, "
+            "updated_at = %s WHERE id = %s RETURNING id",
+            (
+                name,
+                json.dumps(list(triggers), ensure_ascii=False),
+                json.dumps(_blocks_json(blocks), ensure_ascii=False),
+                image_id,
+                priority,
+                now,
+                reply_id,
+            ),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def set_quick_reply_active(
+        self, reply_id: str, active: bool, now: datetime
+    ) -> bool:
+        rows = self._run(
+            "UPDATE quick_replies SET active = %s, updated_at = %s "
+            "WHERE id = %s RETURNING id",
+            (active, now, reply_id),
+            fetch=True,
+        )
+        return bool(rows)
+
+    def get_quick_reply(self, reply_id: str) -> QuickReply | None:
+        rows = self._run(
+            "SELECT id, name, triggers, blocks, image_id, active, priority, "
+            "created_at, updated_at FROM quick_replies WHERE id = %s",
+            (reply_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        return _quick_reply_from_row(rows[0])
+
+    def list_quick_replies(self, only_active: bool = False) -> list[QuickReply]:
+        sql = (
+            "SELECT id, name, triggers, blocks, image_id, active, priority, "
+            "created_at, updated_at FROM quick_replies"
+        )
+        if only_active:
+            sql += " WHERE active = TRUE"
+        sql += " ORDER BY priority DESC, created_at ASC, id ASC"
+        rows = self._run(sql, (), fetch=True)
+        return [_quick_reply_from_row(row) for row in rows]
+
+    def add_quick_reply_image(self, image: QuickReplyImage) -> None:
+        self._run(
+            "INSERT INTO quick_reply_images "
+            "(id, content_type, data, size, created_at) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (
+                image.id,
+                image.content_type,
+                image.data,
+                image.size,
+                image.created_at,
+            ),
+        )
+
+    def get_quick_reply_image(self, image_id: str) -> QuickReplyImage | None:
+        rows = self._run(
+            "SELECT id, content_type, data, size, created_at "
+            "FROM quick_reply_images WHERE id = %s",
+            (image_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return QuickReplyImage(
+            id=row[0],
+            content_type=row[1],
+            data=bytes(row[2]),
+            size=int(row[3]),
+            created_at=row[4],
+        )
+
+    def delete_quick_reply_image(self, image_id: str) -> None:
+        self._run(
+            "DELETE FROM quick_reply_images WHERE id = %s",
+            (image_id,),
+        )
+
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         patterns = [f"{prefix}%" for prefix in prefixes]
         rows = self._run(
@@ -6440,7 +7600,7 @@ class PostgresRepository:
             "SELECT p.id, p.username, p.role, p.telegram_user_id, "
             "c.valid_from, c.valid_until, c.revoked_at, "
             "EXISTS(SELECT 1 FROM client_sessions s "
-            "WHERE s.profile_id = p.id AND s.ended_at IS NULL) "
+            "WHERE s.profile_id = p.id AND s.ended_at IS NULL), p.public_id "
             "FROM profiles p JOIN client_credentials c ON c.profile_id = p.id "
             "WHERE p.role = 'cliente' ORDER BY p.username",
             (),
@@ -6449,7 +7609,11 @@ class PostgresRepository:
         return [
             ClientCredentialRow(
                 profile=Profile(
-                    id=row[0], username=row[1], role=row[2], telegram_user_id=row[3]
+                    id=row[0],
+                    username=row[1],
+                    role=row[2],
+                    telegram_user_id=row[3],
+                    public_id=row[8],
                 ),
                 credential=ClientCredential(
                     profile_id=row[0],
@@ -6636,18 +7800,50 @@ class PostgresRepository:
         )
 
     def case_first_responses(
-        self, since: datetime, until: datetime
+        self,
+        since: datetime,
+        until: datetime,
+        exclude_channels: frozenset[str] = frozenset(),
     ) -> list[tuple[datetime, datetime | None]]:
-        rows = self._run(
+        sql = (
             "SELECT l.created_at, (SELECT MIN(m.at) FROM messages m "
             "WHERE m.contact_id = l.contact_id AND m.role = 'advisor' "
             "AND m.at >= l.created_at) FROM case_links l "
-            "WHERE l.created_at >= %s AND l.created_at < %s "
-            "ORDER BY l.created_at",
+        )
+        params: list[object] = [since, until]
+        if exclude_channels:
+            sql += "JOIN contacts c ON c.id = l.contact_id "
+        sql += "WHERE l.created_at >= %s AND l.created_at < %s "
+        if exclude_channels:
+            ordered = sorted(exclude_channels)
+            placeholders = ", ".join("%s" for _ in ordered)
+            sql += f"AND COALESCE(c.canal_id, c.channel) NOT IN ({placeholders}) "
+            params.extend(ordered)
+        sql += "ORDER BY l.created_at"
+        rows = self._run(sql, tuple(params), fetch=True)
+        return [(row[0], row[1]) for row in rows]
+
+    def dashboard_messages(
+        self, since: datetime, until: datetime
+    ) -> list[tuple[str, str, str, datetime]]:
+        rows = self._run(
+            "SELECT m.contact_id, COALESCE(c.canal_id, c.channel), m.role, m.at "
+            "FROM messages m JOIN contacts c ON c.id = m.contact_id "
+            "WHERE m.at >= %s AND m.at < %s ORDER BY m.at",
             (since, until),
             fetch=True,
         )
-        return [(row[0], row[1]) for row in rows]
+        return [(row[0], row[1], row[2], row[3]) for row in rows]
+
+    def case_channels(self, since: datetime, until: datetime) -> dict[str, str]:
+        rows = self._run(
+            "SELECT l.case_id, COALESCE(c.canal_id, c.channel) "
+            "FROM case_links l JOIN contacts c ON c.id = l.contact_id "
+            "WHERE l.created_at >= %s AND l.created_at < %s",
+            (since, until),
+            fetch=True,
+        )
+        return {row[0]: row[1] for row in rows}
 
     def advisor_reply_contacts(
         self, since: datetime, until: datetime

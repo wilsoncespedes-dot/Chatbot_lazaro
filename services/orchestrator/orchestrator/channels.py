@@ -12,11 +12,13 @@ from typing import Literal
 from lazaro_contracts import CONSENT_MODES, DEFAULT_CONSENT_MODE, ChannelInfo
 
 ConsentMode = Literal["texto", "boton"]
+SIMULATED_ADAPTER_TYPE = "simulado"
 
 __all__ = [
     "DEFAULT_CONSENT_MODE",
     "ChannelPolicy",
     "ConsentMode",
+    "SIMULATED_ADAPTER_TYPE",
     "consent_mode",
     "default_policy",
     "is_windowed",
@@ -33,6 +35,12 @@ class ChannelPolicy:
     active: bool
     windowed: bool
     consent_mode: ConsentMode
+    supports_images: bool = False
+    known: bool = True
+    # #73: la bienvenida solo lista canales activos y marcados como públicos.
+    public: bool = False
+    contact_url: str = ""
+    simulated: bool = False
 
     @property
     def text_consent(self) -> bool:
@@ -57,6 +65,14 @@ def consent_mode(info: ChannelInfo) -> ConsentMode:
     return DEFAULT_CONSENT_MODE  # type: ignore[return-value]
 
 
+def _config_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "si", "sí", "1", "on")
+    return False
+
+
 def policy_from_info(info: ChannelInfo) -> ChannelPolicy:
     return ChannelPolicy(
         id=info.id,
@@ -66,6 +82,12 @@ def policy_from_info(info: ChannelInfo) -> ChannelPolicy:
         active=info.active,
         windowed=is_windowed(info),
         consent_mode=consent_mode(info),
+        supports_images=bool(
+            info.capabilities is not None and info.capabilities.supports_images
+        ),
+        public=_config_flag(info.config.get("public")),
+        contact_url=str(info.config.get("contact_url", "") or ""),
+        simulated=info.adapter_type == SIMULATED_ADAPTER_TYPE,
     )
 
 
@@ -79,4 +101,6 @@ def default_policy(channel_id: str) -> ChannelPolicy:
         active=True,
         windowed=False,
         consent_mode=DEFAULT_CONSENT_MODE,  # type: ignore[arg-type]
+        supports_images=False,
+        known=False,
     )

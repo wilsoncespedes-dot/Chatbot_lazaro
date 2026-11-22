@@ -535,6 +535,31 @@ los bytes exactos del cuerpo. El secreto se lee de la variable de entorno
 argumento ni se imprime. La firma se verifica con el ejemplo firmado de la
 sección anterior usando el secreto de ejemplo `secreto-de-ejemplo`.
 
+## Media público de respuestas rápidas
+
+### GET /media/respuestas/{image_id}
+
+- **Expone:** orchestrator (desde #71)
+- **Llama:** el canal o el navegador que pinta la respuesta rápida
+- **Autenticación:** ninguna (ruta pública del mismo origen)
+
+No es una ruta entre servicios ni añade modelos al contrato. Sirve una imagen
+subida desde el panel de respuestas rápidas del bot (`ImageBlock` con `url`
+https). `image_id` es un `uuid4().hex` de 32 caracteres hex; un id con otro
+formato o inexistente responde `404`. La respuesta lleva el `Content-Type`
+detectado por la firma binaria (PNG, JPEG o WebP) y
+`X-Content-Type-Options: nosniff`.
+
+## Servidor MCP de solo lectura (#74)
+
+No añade rutas HTTP entre servicios: el protocolo es MCP por streamable HTTP en
+la red interna. `mcp_lectura` expone solo las herramientas `buscar_manuales` y
+`ofertas_demo`, ambas con `readOnlyHint=true`; toda petición exige
+`X-Service-Token` (salvo `GET /health`) y el orquestador envía `X-Cliente-Id`
+desde la sesión, fuera del esquema de la herramienta. `buscar_manuales` consume
+`POST /search` del RAG y `ofertas_demo` solo lee la tabla de DEMOSTRACIÓN. Ver
+`docs/mcp.md`.
+
 ## Canales (registro del gateway)
 
 `telegram_gateway` es propietario de la tabla `canales`. El `id` es un slug de
@@ -1051,7 +1076,7 @@ dependientes del roster exigen el encabezado `X-Advisor-Roster-Generation`.
 | `case_id` | identificador | sí | caso propuesto por el orquestador (S3) |
 | `contact_id` | identificador | sí | contacto del cliente |
 | `chat_id` | entero | sí | chat del cliente, para avisarle si vence la espera (S4) |
-| `reason` | `no_relevant_chunks` \| `user_request` \| `invalid_answer` | sí | motivo del traspaso (S5) |
+| `reason` | `no_relevant_chunks` \| `user_request` \| `invalid_answer` \| `advisor_take` | sí | motivo del traspaso (S5); `advisor_take` lo usa #68 |
 | `last_messages` | lista de `LastMessage` (máx. 10) | sí | últimos mensajes en orden cronológico (S2) |
 
 Cada elemento de `last_messages` (`LastMessage`):
@@ -1408,18 +1433,21 @@ La ruta `POST /cases/{case_id}/auto-assign` elige y asigna el caso en una sola
 transacción serializada (S16). `{id}` es el `case_id` (identificador, 1–64 caracteres).
 `candidate_ids` son los perfiles que el orquestador considera
 disponibles; handover descarta los que no son asesores atendedores del roster.
-Entre los válidos elige el de menor número de casos `assigned` y, a igual carga,
-el menor `advisor_id` lexicográfico. Solo asigna si el caso sigue `open` y sin
-asesor: si una persona lo asignó, respondió o cerró antes, no lo modifica y
-responde `skipped`. Sin candidatos válidos responde `queued` sin modificar el
-caso. Un caso cerrado responde `409` con `error` = `case_closed`. Exige
-`X-Service-Token`.
+La `strategy` elige la regla de reparto: `por_carga` (por defecto) escoge el de
+menor número de casos `assigned` y, a igual carga, el menor `advisor_id`
+lexicográfico; `round_robin` rota al siguiente asesor en orden lexicográfico y
+vuelve al inicio. Una estrategia desconocida responde `422`. Solo asigna si el
+caso sigue `open` y sin asesor: si una persona lo asignó, respondió o cerró
+antes, no lo modifica y responde `skipped`. Sin candidatos válidos responde
+`queued` sin modificar el caso. Un caso cerrado responde `409` con `error` =
+`case_closed`. Exige `X-Service-Token`.
 
 #### Request
 
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
 | `candidate_ids` | lista de identificadores (1–200) | sí | perfiles atendedores disponibles, sin repetir |
+| `strategy` | `por_carga` \| `round_robin` | no | estrategia de asignación; por defecto `por_carga` (#69) |
 
 #### Respuesta
 
@@ -1436,7 +1464,7 @@ caso. Un caso cerrado responde `409` con `error` = `case_closed`. Exige
 | HTTP | error | Cuándo |
 |------|-------|--------|
 | 401 | unauthorized | falta `X-Service-Token` o no es válido |
-| 422 | validation_error | el cuerpo no valida contra `CaseAutoAssignRequest` |
+| 422 | validation_error | el cuerpo no valida contra `CaseAutoAssignRequest` o la `strategy` no está registrada (#69) |
 | 404 | not_found | el caso no existe |
 | 409 | case_closed | el caso está cerrado |
 | 503 | roster_out_of_sync | la generación del roster no coincide con la sincronizada (S12) |
@@ -1659,7 +1687,10 @@ Borra los datos personales más antiguos que el plazo aprobado
 (R35). Los registros operativos necesarios se conservan. La evidencia mínima de
 consentimiento (`privacy_consents`: canal e id externo, versión/hash del aviso y
 fecha) sigue el mismo plazo de 30 días, se elimina antes si se ejecuta una
-supresión y se informa en `deleted` con la clave `privacy_consents`.
+supresión y se informa en `deleted` con la clave `privacy_consents`. La
+aceptación por cliente de #72 solo se purga si `CLIENT_CONSENT_RETENTION_DAYS`
+está configurado y aparece entonces en `deleted` como
+`consentimientos_cliente`.
 
 #### Request
 
@@ -1688,6 +1719,107 @@ El cuerpo es el objeto vacío `{}`.
 | 503 | `privacy_not_configured` | falta la configuración de retención; no se borra nada (R21, R32) |
 | 500 | `internal_error` | error inesperado; la transacción hace rollback |
 
+### Consentimiento por cliente (#72)
+
+El login verificado vincula la identidad del canal con el cliente y permite que
+sus términos aceptados se compartan entre todos sus canales. La evidencia por
+canal (`privacy_consents`) no cambia: se conserva como prueba de dónde y cuándo
+se aceptó. Las tablas nuevas viven en la base del **orchestrator**:
+
+| Tabla | Columnas | Clave |
+|-------|----------|-------|
+| `identidades_cliente` | `cliente_id`, `canal_id`, `id_externo`, `vinculado_en` | `(canal_id, id_externo)` |
+| `consentimientos_cliente` | `cliente_id`, `notice_version`, `notice_sha256`, `aceptado_en`, `canal_id` | `(cliente_id, notice_version)` |
+
+- `cliente_id` es `profiles.id` con rol `cliente`; las tablas no tienen clave
+  foránea a `contacts`, porque la vinculación sobrevive a la purga de inactivos.
+- La aceptación por cliente se registra en `consentimientos_cliente` al iniciar
+  sesión si la identidad tiene evidencia `accepted` (botón o texto) de la versión
+  vigente, y también cuando una identidad ya vinculada acepta una versión nueva.
+- Una identidad no vinculada sigue recibiendo el aviso antes de guardar datos
+  (#35); el login verificado sigue siendo obligatorio.
+- La cobertura entre canales se resuelve por consulta
+  (identidad → cliente → versión), sin copiar filas de `privacy_consents`.
+
+`CLIENT_CONSENT_RETENTION_DAYS` es opcional: vacío (valor por defecto) conserva
+la aceptación por cliente hasta la supresión; un entero `>= 1` hace que
+`POST /privacy/purge` borre de `consentimientos_cliente` las filas con
+`aceptado_en` anterior al plazo y las deje de contar como cobertura. Las
+identidades (`identidades_cliente`) no caducan por plazo.
+
+La supresión de un cliente borra sus filas de `consentimientos_cliente` e
+`identidades_cliente` y la evidencia `privacy_consents` de **todas** sus
+identidades vinculadas, no solo de los contactos de sus sesiones. Los conteos
+se informan en `removed_counts` con las claves nuevas
+`consentimientos_cliente` e `identidades_cliente`, además de las existentes.
+La purga por retención solo incluye `consentimientos_cliente` en `deleted`
+cuando `CLIENT_CONSENT_RETENTION_DAYS` está configurado.
+
+**Supuesto pendiente de confirmación legal:** la aceptación por cliente se
+conserva hasta la supresión del cliente; si legal exige otro plazo, se configura
+con `CLIENT_CONSENT_RETENTION_DAYS` sin cambiar el contrato.
+
+### POST /cases/take
+
+- **Expone:** handover
+- **Llama:** orchestrator (panel de asesores, #68)
+- **Modelos:** `CaseTakeRequest` → `CaseTakeResponse`
+
+Toma la conversación de un contacto en una sola operación atómica por
+`contact_id`. Si no hay caso no cerrado, crea uno `assigned` al asesor
+(`created=true`); si hay un caso `open` o `timed_out` sin asesor, lo asigna
+(`created=false`); si el caso ya está asignado al mismo asesor, lo devuelve sin
+crear otro (`created=false`); si está asignado a otro asesor responde
+`409 case_changed`. Un `advisor_id` que no es asesor registrado responde `403
+forbidden` sin crear caso. No envía avisos al cliente ni a asesores. Exige
+`X-Service-Token`.
+
+#### Request
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `case_id` | identificador | sí | caso propuesto por el orchestrator si hay que crearlo |
+| `contact_id` | identificador | sí | contacto cuya conversación se toma |
+| `chat_id` | entero | sí | chat del cliente para el caso creado |
+| `advisor_id` | identificador | sí | asesor que toma la conversación (S6) |
+| `last_messages` | lista de `LastMessage` (máx. 10) | sí | últimos mensajes en orden cronológico (S2) |
+
+```json
+{
+  "case_id": "case-200",
+  "contact_id": "contact-1",
+  "chat_id": 900,
+  "advisor_id": "222222222",
+  "last_messages": [
+    {"role": "user", "text": "Necesito ayuda", "at": "2026-01-02T02:59:00Z"}
+  ]
+}
+```
+
+#### Respuesta
+
+`200 OK`
+
+| Campo | Tipo | Obligatorio | Descripción |
+|-------|------|-------------|-------------|
+| `status` | `taken` | sí | siempre `taken` |
+| `case_id` | identificador | sí | caso creado o reutilizado |
+| `created` | booleano | sí | `true` si se creó un caso; `false` si se asignó uno abierto |
+
+```json
+{"status": "taken", "case_id": "case-200", "created": true}
+```
+
+#### Errores
+
+| HTTP | error | Cuándo |
+|------|-------|--------|
+| 401 | unauthorized | falta `X-Service-Token` o no es válido |
+| 422 | validation_error | el cuerpo no valida contra `CaseTakeRequest` |
+| 403 | forbidden | el `advisor_id` no es asesor registrado; no se crea caso |
+| 409 | case_changed | el contacto tiene un caso abierto asignado a otro asesor |
+| 500 | internal_error | error inesperado |
+
 ### GET /cases
 
 - **Expone:** handover
@@ -1699,7 +1831,9 @@ regla de huérfanos (S14). Exige `X-Service-Token`. Con `scope=mine` (por
 defecto), un `advisor_id` que no es un perfil atendedor del roster sincronizado
 recibe `200` con la lista vacía. Con `scope=all`, solo un supervisor registrado
 recibe todos los casos de cualquier estado; otro perfil recibe `403` con
-`error` = `forbidden`.
+`error` = `forbidden`. Con `scope=overview` (#68), un asesor registrado recibe
+todos los casos no cerrados (`open`, `timed_out` y `assigned`) con
+`actions` = `[]`; un perfil no registrado recibe `200` con la lista vacía.
 
 #### Request
 
@@ -1710,7 +1844,7 @@ Los parámetros viajan en la query; un parámetro no declarado se rechaza con
 | Campo | Tipo | Obligatorio | Descripción |
 |-------|------|-------------|-------------|
 | `advisor_id` | identificador (1–64) | sí | `profile_id` del asesor o supervisor que pide el listado (S6) |
-| `scope` | `mine` \| `all` | no | `mine` lista lo gestionable por el solicitante; `all` es la vista global del supervisor (S14) |
+| `scope` | `mine` \| `all` \| `overview` | no | `mine` lista lo gestionable por el solicitante; `all` es la vista global del supervisor (S14); `overview` lista los casos no cerrados sin acciones (#68) |
 
 #### Respuesta
 
@@ -1724,7 +1858,7 @@ elemento (`CaseListItem`):
 | `case_id` | identificador | sí | caso listado |
 | `status` | `open` \| `timed_out` \| `assigned` \| `closed` | sí | estado actual del caso |
 | `created_at` | fecha ISO 8601 con zona | sí | fecha de creación del caso |
-| `actions` | lista no vacía y sin repetidos de `reply` \| `assign` \| `close` \| `reassign` | sí | acciones que el solicitante puede hacer hoy; `reassign` solo aparece en la vista global del supervisor (S14) |
+| `actions` | lista sin repetidos de `reply` \| `assign` \| `close` \| `reassign`; puede ser `[]` | sí | acciones que el solicitante puede hacer hoy; `reassign` solo aparece en la vista global del supervisor (S14); `overview` siempre la devuelve vacía (#68) |
 | `advisor_id` | identificador o `null` | no | asesor actualmente asignado; `null` si no hay ninguno (S14) |
 
 #### Errores

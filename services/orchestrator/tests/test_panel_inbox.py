@@ -34,9 +34,9 @@ def test_inbox_shows_both_channels_and_respects_role(env_factory, panel):
     assert env.handover.listed == ["700"]
     for text in (
         "case-tg",
-        "telegram",
+        "Telegram",
         "case-wa",
-        "whatsapp",
+        "WhatsApp",
         "Sin asignar",
         "Mío",
         "10 min",

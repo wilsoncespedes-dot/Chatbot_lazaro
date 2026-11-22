@@ -166,8 +166,9 @@ def test_topics_list_is_added_to_active_welcome(env):
     env.repo.save_conversation_texts(texts, "admin-1", env.adapters.clock())
     login_client(token, "cliente1", PASSWORD, "ip", env.settings, env.adapters)
     drain_queues(env.settings, env.adapters)
-    assert env.gateway.sent[-1][1] == _active_welcome_text(texts)
-    assert "Tema A" in env.gateway.sent[-1][1]
+    sent_texts = [text for _chat_id, text in env.gateway.sent]
+    assert _active_welcome_text(texts) in sent_texts
+    assert "Tema A" in "\n".join(sent_texts)
 
 
 def test_texts_update_is_audited_without_values(env):

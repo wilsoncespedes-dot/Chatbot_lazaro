@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import html
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from urllib.parse import quote, urlencode
 
 from . import admin
+from .channel_label import ChannelLabel, render_channel_label, unknown_label
+from .copy_button import copy_button
+from .dashboard import render_dashboard_body
 
 ERROR_MESSAGES = {
     "forbidden": "No tienes permiso para realizar esa acción.",
@@ -39,6 +43,19 @@ OK_MESSAGES = {
     "suppression": "Solicitud de supresión ejecutada.",
 }
 
+CONVERSATION_STATUS_LABELS = {
+    "atendida_por_bot": "Atendida por bot",
+    "atendida_por_asesor": "Atendida por asesor",
+    "pendiente": "Pendiente",
+    "cerrada": "Cerrada",
+}
+CONVERSATION_STATUS_CLASSES = {
+    "atendida_por_bot": "badge badge-ok",
+    "atendida_por_asesor": "badge badge-info",
+    "pendiente": "badge badge-warn",
+    "cerrada": "badge",
+}
+
 WINDOW_LABELS = {
     "open": "Abierta",
     "closed": "Cerrada",
@@ -54,6 +71,27 @@ ROLE_CLASSES = {
 
 def _esc(value: object) -> str:
     return html.escape(str(value), quote=True)
+
+
+def _client_identity(name: str | None, public_id: str | None) -> str:
+    """R16: nombre y ID copiable en la misma celda; sin ID muestra solo el nombre."""
+    label = _esc(name or "Sin autenticar")
+    if not public_id:
+        return label
+    return (
+        f"{label}<br>"
+        f'<span class="client-id">ID {_esc(public_id)}</span> '
+        f"{copy_button(public_id)}"
+    )
+
+
+def _label(
+    labels: Mapping[str, ChannelLabel] | None, channel_id: str
+) -> ChannelLabel:
+    """R6: una etiqueta ausente del mapa se pinta como «Canal desconocido»."""
+    if labels and channel_id in labels:
+        return labels[channel_id]
+    return unknown_label()
 
 
 def _chat_datetime(at: datetime) -> datetime:
@@ -77,9 +115,13 @@ def _page(
     script: str = "",
     current_path: str | None = None,
     wide: bool = False,
+    copy_script: bool = False,
 ) -> str:
     logout = ""
     navigation = ""
+    copy_tag = (
+        '<script src="/panel/copiar.js" defer></script>\n' if copy_script else ""
+    )
     if csrf is not None:
         logout = (
             '<form method="post" action="/asesor/logout">'
@@ -89,7 +131,9 @@ def _page(
         )
         links = nav_links or [
             ("/asesor", "Inicio"),
+            ("/asesor/conversaciones", "Conversaciones"),
             ("/asesor/cases", "Casos"),
+            ("/asesor/clientes", "Buscar cliente"),
             ("/asesor/supresiones", "Supresiones"),
         ]
         # #56: se reutilizan a propósito los helpers privados de `admin` para
@@ -112,6 +156,7 @@ def _page(
         f"{meta}{script}"
         f"<title>{_esc(title)}</title>\n"
         '<link rel="stylesheet" href="/admin/static/admin.css">\n'
+        f"{copy_tag}"
         "</head>\n"
         "<body>\n"
         f"{admin._skip_link()}\n"
@@ -214,6 +259,13 @@ def render_advisor_home(
         '<button type="submit" class="btn-danger">Resolver</button>'
         "</form>"
     )
+    inbox = (
+        '<h3>Bandeja</h3>'
+        '<ul>'
+        '<li><a href="/asesor/conversaciones">Conversaciones</a></li>'
+        '<li><a href="/asesor/cases">Casos</a></li>'
+        "</ul>"
+    )
     supervisor = ""
     if role == "supervisor":
         supervisor = (
@@ -221,11 +273,12 @@ def render_advisor_home(
             '<ul>'
             '<li><a href="/asesor/todos">Todos los casos</a></li>'
             '<li><a href="/asesor/metricas">Métricas</a></li>'
+            '<li><a href="/asesor/dashboard">Dashboard</a></li>'
             "</ul>"
         )
     return _page(
         "Inicio",
-        f"{ok_html}{presence_form}\n{reply}\n{assign}\n{close}\n{supervisor}",
+        f"{ok_html}{inbox}\n{presence_form}\n{reply}\n{assign}\n{close}\n{supervisor}",
         csrf,
         current_path="/asesor",
     )
@@ -237,6 +290,7 @@ def render_inbox_table(
     show_advisor: bool = False,
     all_view: bool = False,
     reassign_targets: tuple[tuple[str, str, str], ...] = (),
+    labels: Mapping[str, ChannelLabel] | None = None,
 ) -> str:
     """R23, R30: solo la tabla de casos, para reemplazarla sin duplicar filas."""
     table_rows = []
@@ -253,7 +307,7 @@ def render_inbox_table(
         )
         window = WINDOW_LABELS.get(row.window, "—") if row.window else "—"
         assignment = "Mío" if row.assignment == "mine" else "Sin asignar"
-        client = row.client_name if row.client_name else "Sin autenticar"
+        client = _client_identity(row.client_name, row.public_id)
         conversation = row.conversation_state or "—"
         advisor_cell = (
             f"<td>{_esc(row.assigned_advisor or '—')}</td>"
@@ -275,7 +329,7 @@ def render_inbox_table(
         table_rows.append(
             "<tr>"
             f"<td>{_esc(row.case_id)}</td>"
-            f"<td>{_esc(row.channel)}</td>"
+            f"<td>{render_channel_label(_label(labels, row.channel))}</td>"
             f"<td>{_badge(row.status)}</td>"
             f"<td>{_esc(row.created_at.isoformat())}</td>"
             f"<td>{_esc(conversation)}</td>"
@@ -283,7 +337,7 @@ def render_inbox_table(
             f"{advisor_cell}"
             f"<td>{_esc(wait)}</td>"
             f"<td>{_esc(window)}</td>"
-            f"<td>{_esc(client)}</td>"
+            f"<td>{client}</td>"
             f"<td>{_esc(', '.join(row.tags))}</td>"
             f"<td>{_esc(', '.join(row.actions))}</td>"
             '<td><a href="/asesor/cases/'
@@ -311,6 +365,8 @@ def _live_inbox_src(
     selected_channel: str | None,
     selected_assignment: str | None,
     selected_tag: str | None,
+    base: str = "/asesor/live/inbox",
+    selected_status: str | None = None,
 ) -> str:
     params: list[tuple[str, str]] = []
     if selected_channel:
@@ -319,10 +375,12 @@ def _live_inbox_src(
         params.append(("asignacion", selected_assignment))
     if selected_tag:
         params.append(("tag", selected_tag))
+    if selected_status:
+        params.append(("estado", selected_status))
     if all_view:
         params.append(("scope", "all"))
     query = urlencode(params)
-    return "/asesor/live/inbox" + (f"?{query}" if query else "")
+    return base + (f"?{query}" if query else "")
 
 
 def render_advisor_cases(
@@ -339,6 +397,7 @@ def render_advisor_cases(
     selected_tag: str | None = None,
     live_enabled: bool = False,
     channel_choices: tuple[tuple[str, str], ...] = (),
+    labels: Mapping[str, ChannelLabel] | None = None,
 ) -> str:
     filters_action = "/asesor/todos" if all_view else "/asesor/cases"
     channel_options = "".join(
@@ -377,6 +436,7 @@ def render_advisor_cases(
         show_advisor=show_advisor,
         all_view=all_view,
         reassign_targets=reassign_targets,
+        labels=labels,
     )
     live_src = _esc(
         _live_inbox_src(
@@ -403,16 +463,204 @@ def render_advisor_cases(
         script=script,
         current_path="/asesor/todos" if all_view else "/asesor/cases",
         wide=True,
+        copy_script=any(row.public_id for row in rows),
     )
 
 
-def render_history_fragment(history) -> str:
+def _conversation_status_badge(status: str) -> str:
+    label = CONVERSATION_STATUS_LABELS.get(status, status)
+    css = CONVERSATION_STATUS_CLASSES.get(status, "badge")
+    return f'<span class="{css}">{_esc(label)}</span>'
+
+
+def _take_conversation_form(contact_id: str, csrf: str) -> str:
+    path = _esc(quote(contact_id, safe=""))
+    return (
+        '<form method="post" class="inline" action="/asesor/conversaciones/'
+        f'{path}/tomar">'
+        f"{admin.csrf_field(csrf)}"
+        '<button type="submit">Tomar conversación</button>'
+        "</form>"
+    )
+
+
+def render_conversations_table(
+    rows,
+    csrf: str,
+    labels: Mapping[str, ChannelLabel] | None = None,
+) -> str:
+    """R1, R3: tabla de conversaciones para la carga inicial y el refresco en vivo."""
+    table_rows = []
+    for row in rows:
+        path = _esc(quote(row.contact_id, safe=""))
+        take = (
+            _take_conversation_form(row.contact_id, csrf)
+            if row.status in ("atendida_por_bot", "pendiente", "cerrada")
+            else ""
+        )
+        interest = (
+            f'<span class="badge badge-warn">{_esc("Interés de compra")}</span>'
+            if row.purchase_intent
+            else "—"
+        )
+        table_rows.append(
+            "<tr>"
+            f"<td>{_esc(row.contact_id)}</td>"
+            f"<td>{render_channel_label(_label(labels, row.channel))}</td>"
+            f"<td>{_conversation_status_badge(row.status)}</td>"
+            f"<td>{interest}</td>"
+            f"<td>{_esc(_chat_time(row.last_activity_at))}</td>"
+            f"<td>{_client_identity(row.client_name, row.public_id)}</td>"
+            f"<td>{_esc(row.assigned_advisor or '—')}</td>"
+            f'<td><a href="/asesor/conversaciones/{path}">Abrir</a></td>'
+            f"<td>{take}</td>"
+            "</tr>"
+        )
+    table = (
+        "<table><thead><tr><th>Conversación</th><th>Canal</th><th>Estado</th>"
+        "<th>Interés</th><th>Última actividad</th><th>Cliente</th><th>Asesor</th>"
+        "<th>Abrir</th><th>Acción</th></tr></thead>"
+        f"<tbody>{''.join(table_rows)}</tbody></table>"
+    )
+    return admin._table_wrap(table)
+
+
+def render_conversations_page(
+    rows,
+    csrf: str,
+    labels: Mapping[str, ChannelLabel] | None = None,
+    selected_channel: str | None = None,
+    selected_status: str | None = None,
+    channel_choices: tuple[tuple[str, str], ...] = (),
+    refresh: int = 0,
+    live_enabled: bool = False,
+) -> str:
+    """R1: bandeja de todos los canales con filtros de canal y estado."""
+    channel_options = "".join(
+        f'<option value="{_esc(value)}"'
+        f'{" selected" if selected_channel == value else ""}>{_esc(label)}</option>'
+        for value, label in (("", "Todos"), *channel_choices)
+    )
+    status_options = "".join(
+        f'<option value="{_esc(value)}"'
+        f'{" selected" if selected_status == value else ""}>{_esc(label)}</option>'
+        for value, label in (("", "Todos"), *CONVERSATION_STATUS_LABELS.items())
+    )
+    filters = (
+        '<form method="get" action="/asesor/conversaciones" class="card">'
+        f'<label>Canal <select name="canal">{channel_options}</select></label>'
+        f'<label>Estado <select name="estado">{status_options}</select></label>'
+        '<button type="submit" class="btn-secondary">Filtrar</button>'
+        "</form>"
+    )
+    table = render_conversations_table(rows, csrf, labels)
+    live_src = _esc(
+        _live_inbox_src(
+            False,
+            selected_channel,
+            None,
+            None,
+            base="/asesor/live/conversaciones",
+            selected_status=selected_status,
+        )
+    )
+    live_region = (
+        '<div id="live-region" '
+        f'data-live-src="{live_src}" data-ws="/asesor/ws?scope=mine" '
+        f'data-poll="{int(refresh)}" data-case-id="">'
+        f"{table}</div>"
+    )
+    script = (
+        '<script src="/asesor/static/panel_live.js" defer></script>\n'
+        if live_enabled
+        else ""
+    )
+    return _page(
+        "Conversaciones",
+        f"{filters}\n{live_region}",
+        csrf,
+        refresh=refresh,
+        script=script,
+        current_path="/asesor/conversaciones",
+        wide=True,
+        copy_script=any(row.public_id for row in rows),
+    )
+
+
+def render_conversation_read(
+    view,
+    csrf: str,
+    labels: Mapping[str, ChannelLabel] | None = None,
+) -> str:
+    """R2, R3, R4: lectura sin compositor, tomar y devolver al bot."""
+    path = _esc(quote(view.contact.id, safe=""))
+    name = view.client.username or "Cliente sin autenticar"
+    header = (
+        f"{_esc(name)} · "
+        f"{render_channel_label(_label(labels, view.client.channel))} · "
+        f"{_conversation_status_badge(view.status)}"
+    )
+    if view.client.public_id:
+        header += (
+            f" · ID {_esc(view.client.public_id)} "
+            f"{copy_button(view.client.public_id)}"
+        )
+    live_region = (
+        '<div id="live-region" class="chat-log" role="log" '
+        'aria-label="Mensajes de la conversación" tabindex="0" '
+        f'data-live-src="/asesor/live/conversaciones/{path}" '
+        'data-ws="/asesor/ws?scope=mine" data-poll="0" data-case-id="">'
+        f"{render_history_fragment(view.history, labels)}</div>"
+    )
+    actions = ""
+    if view.status in ("atendida_por_bot", "pendiente", "cerrada"):
+        actions += (
+            '<section class="card"><h3>Tomar conversación</h3>'
+            f"{_take_conversation_form(view.contact.id, csrf)}</section>"
+        )
+    case_link = ""
+    if view.case_id is not None:
+        case_path = _esc(quote(view.case_id, safe=""))
+        case_link = f'<p><a href="/asesor/cases/{case_path}">Abrir el caso</a></p>'
+        if view.status == "atendida_por_asesor" and view.assigned_to_me:
+            actions += (
+                '<section class="card"><h3>Devolver al bot</h3>'
+                '<form method="post" action="/asesor/return">'
+                f"{admin.csrf_field(csrf)}"
+                f'<input type="hidden" name="case_id" value="{_esc(view.case_id)}">'
+                '<button type="submit" class="btn-secondary">Devolver al bot</button>'
+                "</form></section>"
+            )
+    body = (
+        f'<p><a href="/asesor/conversaciones">Volver a la bandeja</a> · '
+        f"Conversación {_esc(view.contact.id)}</p>"
+        f'<section class="chat" aria-label="Conversación">'
+        f'<div class="chat-header"><h3>Historial</h3>'
+        f'<p class="chat-title">{header}</p></div>'
+        f"{live_region}</section>"
+        f"{case_link}{actions}"
+    )
+    return _page(
+        f"Conversación {view.contact.id}",
+        body,
+        csrf,
+        script='<script src="/asesor/static/panel_live.js" defer></script>\n',
+        current_path="/asesor/conversaciones",
+        wide=True,
+        copy_script=bool(view.client.public_id),
+    )
+
+
+def render_history_fragment(
+    history, labels: Mapping[str, ChannelLabel] | None = None
+) -> str:
     """R1-R6: historial como burbujas de chat, para reemplazar sin anexar."""
     if not history:
         return '<p class="chat-empty">Sin mensajes en el periodo visible.</p>'
     bubbles = "".join(
         f'<li class="chat-msg {ROLE_CLASSES.get(item.role, "chat-msg-other")}">'
         f'<span class="chat-author">{_esc(ROLE_LABELS.get(item.role, item.role))}</span>'
+        f"{render_channel_label(_label(labels, item.channel))}"
         f'<p class="chat-text">{_esc(item.text)}</p>'
         f'<time class="chat-time" '
         f'datetime="{_esc(_chat_datetime(item.at).isoformat())}">'
@@ -423,11 +671,92 @@ def render_history_fragment(history) -> str:
     return f'<ol class="chat-messages">{bubbles}</ol>'
 
 
-def _chat_block(view, csrf: str, poll_seconds: int) -> str:
+def render_client_search(
+    view,
+    csrf: str,
+    message: str | None = None,
+    labels: Mapping[str, ChannelLabel] | None = None,
+    query: str = "",
+) -> str:
+    """R19, R22, R23: búsqueda por ID con enlaces a las conversaciones del cliente."""
+    notice = (
+        f'<p class="error" role="alert">{_esc(message)}</p>\n' if message else ""
+    )
+    form = (
+        '<form method="get" action="/asesor/clientes" class="card">'
+        f'<label>ID de cliente <input name="q" value="{_esc(query)}" '
+        'autocomplete="off" required></label>'
+        '<button type="submit">Buscar</button>'
+        "</form>"
+    )
+    result = ""
+    if view is not None:
+        if view.conversations:
+            conversation_rows = "".join(
+                "<tr>"
+                f"<td>{render_channel_label(_label(labels, channel))}</td>"
+                f"<td>{_esc(masked_external_id)}</td>"
+                f'<td><a href="/asesor/conversaciones/'
+                f'{_esc(quote(contact_id, safe=""))}">Abrir conversación</a></td>'
+                "</tr>"
+                for contact_id, channel, masked_external_id in view.conversations
+            )
+            conversations = admin._table_wrap(
+                "<table><thead><tr><th>Canal</th><th>Identificador</th>"
+                f"<th>Conversación</th></tr></thead><tbody>{conversation_rows}"
+                "</tbody></table>"
+            )
+        else:
+            conversations = "<p>Sin conversaciones vinculadas.</p>"
+        result = (
+            "<section class=\"card\"><h3>Cliente encontrado</h3>"
+            + admin._table_wrap(
+                "<table><tbody>"
+                f"<tr><th>ID de cliente</th>"
+                f"<td>{_esc(view.public_id)} {copy_button(view.public_id)}</td></tr>"
+                f"<tr><th>Usuario</th><td>{_esc(view.username)}</td></tr>"
+                f"<tr><th>Credencial</th>"
+                f"<td>{_esc(view.credential_status)} "
+                f"({_esc(view.days_remaining)} días)</td></tr>"
+                f"<tr><th>Sesión activa</th>"
+                f"<td>{_esc('Sí' if view.has_active_session else 'No')}</td></tr>"
+                "</tbody></table>"
+            )
+            + conversations
+            + "</section>"
+        )
+    return _page(
+        "Buscar cliente",
+        f"{notice}{form}{result}",
+        csrf,
+        nav_links=[
+            ("/asesor", "Inicio"),
+            ("/asesor/conversaciones", "Conversaciones"),
+            ("/asesor/clientes", "Buscar cliente"),
+        ],
+        current_path="/asesor/clientes",
+        copy_script=view is not None,
+    )
+
+
+def _chat_block(
+    view,
+    csrf: str,
+    poll_seconds: int,
+    labels: Mapping[str, ChannelLabel] | None = None,
+) -> str:
     """R8-R18: cabecera, región en vivo y compositor en un único bloque."""
     case_path = _esc(quote(view.case_id, safe=""))
     name = view.client.username or "Cliente sin autenticar"
-    title = f"{name} · {view.client.channel}"
+    title = (
+        f"{_esc(name)} · "
+        f"{render_channel_label(_label(labels, view.client.channel))}"
+    )
+    if view.client.public_id:
+        title += (
+            f" · ID {_esc(view.client.public_id)} "
+            f"{copy_button(view.client.public_id)}"
+        )
     live_region = (
         '<div id="live-region" class="chat-log" role="log" '
         'aria-label="Mensajes de la conversación" tabindex="0" '
@@ -435,7 +764,7 @@ def _chat_block(view, csrf: str, poll_seconds: int) -> str:
         'data-ws="/asesor/ws?scope=mine" '
         f'data-poll="{int(poll_seconds)}" '
         f'data-case-id="{_esc(view.case_id)}">'
-        f"{render_history_fragment(view.history)}</div>"
+        f"{render_history_fragment(view.history, labels)}</div>"
     )
     tools = ""
     if view.window == "closed":
@@ -492,26 +821,29 @@ def _chat_block(view, csrf: str, poll_seconds: int) -> str:
     return (
         '<section class="chat" aria-label="Conversación del caso">'
         f'<div class="chat-header"><h3>Historial</h3>'
-        f'<p class="chat-title">{_esc(title)}</p></div>'
+        f'<p class="chat-title">{title}</p></div>'
         f"{live_region}{tools}{composer}</section>"
     )
 
 
-def _client_section(view) -> str:
+def _client_section(
+    view, labels: Mapping[str, ChannelLabel] | None = None
+) -> str:
     client = view.client
     if client.username is None:
         return (
             "<h3>Cliente</h3>"
             '<p role="status">Sin cliente autenticado</p>'
-            f"<p>Canal: {_esc(client.channel)} · Identificador: "
-            f"{_esc(client.masked_external_id)} · Conversación: "
+            f"<p>Canal: {render_channel_label(_label(labels, client.channel))} · "
+            f"Identificador: {_esc(client.masked_external_id)} · Conversación: "
             f"{_esc(client.conversation_state or '—')}</p>"
         )
     return (
         "<h3>Cliente</h3>"
         + admin._table_wrap(
             "<table><tbody>"
-            f"<tr><th>Canal</th><td>{_esc(client.channel)}</td></tr>"
+            f"<tr><th>Canal</th>"
+            f"<td>{render_channel_label(_label(labels, client.channel))}</td></tr>"
             f"<tr><th>Identificador</th><td>{_esc(client.masked_external_id)}</td></tr>"
             f"<tr><th>Conversación</th>"
             f"<td>{_esc(client.conversation_state or '—')}</td></tr>"
@@ -523,6 +855,9 @@ def _client_section(view) -> str:
             f"<td>{_esc(client.consent_at.isoformat() if client.consent_at else '—')}"
             "</td></tr>"
             f"<tr><th>Usuario</th><td>{_esc(client.username)}</td></tr>"
+            f"<tr><th>ID de cliente</th>"
+            f"<td>{_esc(client.public_id or '—')} "
+            f"{copy_button(client.public_id or '')}</td></tr>"
             f"<tr><th>Credencial</th>"
             f"<td>{_esc(client.credential_status or '—')}</td></tr>"
             f"<tr><th>Días restantes</th>"
@@ -535,7 +870,9 @@ def _client_section(view) -> str:
     )
 
 
-def _memory_section(view) -> str:
+def _memory_section(
+    view, labels: Mapping[str, ChannelLabel] | None = None
+) -> str:
     if view.client.username is None:
         return ""
     memory = view.memory
@@ -545,7 +882,7 @@ def _memory_section(view) -> str:
         items = "<p>Sin elementos de memoria.</p>"
     summary_rows = "".join(
         "<tr>"
-        f"<td>{_esc(item.channel)}</td>"
+        f"<td>{render_channel_label(_label(labels, item.channel))}</td>"
         f"<td>{_esc(item.updated_at.isoformat())}</td>"
         f"<td>{_esc(item.trigger)}</td>"
         f"<td>{_esc(item.summary)}</td>"
@@ -641,9 +978,10 @@ def render_advisor_case(
     can_reassign: bool = False,
     live_enabled: bool = False,
     poll_seconds: int = 0,
+    labels: Mapping[str, ChannelLabel] | None = None,
 ) -> str:
     case_path = _esc(quote(view.case_id, safe=""))
-    chat_block = _chat_block(view, csrf, poll_seconds)
+    chat_block = _chat_block(view, csrf, poll_seconds, labels)
     targets = "".join(
         f'<option value="{_esc(profile_id)}">{_esc(username)} '
         f"({_esc(presence)})</option>"
@@ -703,10 +1041,10 @@ def render_advisor_case(
         f"{_badge(view.client.conversation_state)}"
         f" · Ventana: {_esc(WINDOW_LABELS.get(view.window, view.window))}</p>"
         f"{chat_block}"
-        f"{_client_section(view)}"
+        f"{_client_section(view, labels)}"
         f"{_notes_section(view, csrf)}"
         f"{_tags_section(view, csrf)}"
-        f"{_memory_section(view)}"
+        f"{_memory_section(view, labels)}"
         f"{transfer_form}\n{resolve_form}\n{return_form}\n{reassign_form}"
     )
     return _page(
@@ -716,6 +1054,7 @@ def render_advisor_case(
         refresh=0,
         script=script,
         current_path="/asesor/cases",
+        copy_script=bool(view.client.public_id),
     )
 
 
@@ -782,7 +1121,11 @@ def render_suppression_queue(
     )
 
 
-def render_advisor_memory(view, csrf: str) -> str:
+def render_advisor_memory(
+    view,
+    csrf: str,
+    labels: Mapping[str, ChannelLabel] | None = None,
+) -> str:
     if not view.authenticated:
         body = (
             '<p class="error" role="status">Sin cliente autenticado</p>'
@@ -805,7 +1148,7 @@ def render_advisor_memory(view, csrf: str) -> str:
         memory = "<p>Sin elementos de memoria.</p>"
     summary_rows = "".join(
         "<tr>"
-        f"<td>{_esc(item.channel)}</td>"
+        f"<td>{render_channel_label(_label(labels, item.channel))}</td>"
         f"<td>{_esc(item.updated_at.isoformat())}</td>"
         f"<td>{_esc(item.trigger)}</td>"
         f"<td>{_esc(item.summary)}</td>"
@@ -857,6 +1200,14 @@ def render_supervisor_metrics(metrics, csrf: str) -> str:
         f"<ul>{samples}</ul>"
     )
     return _page("Métricas", body, csrf, current_path="/asesor/metricas")
+
+
+def render_supervisor_dashboard(data, csrf: str) -> str:
+    """#75: mismo dashboard de solo lectura para el supervisor."""
+    body = render_dashboard_body(
+        data, data.days, data.include_simulated, "/asesor/dashboard"
+    )
+    return _page("Dashboard", body, csrf, current_path="/asesor/dashboard")
 
 
 def render_advisor_error(status: int, code: str, csrf: str | None = None) -> str:

@@ -38,6 +38,7 @@ from .adapters.db_query import PostgresReadOnlyQuery, UnavailableDbQuery
 from .adapters.gateway import HttpGatewayClient
 from .adapters.handover import HttpHandoverClient
 from .adapters.llm import HttpLLMClient
+from .adapters.mcp import FakeMcpClient, HttpMcpClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
 from .adapters.simulator import HttpSimulatorClient
@@ -45,6 +46,7 @@ from .adapters.channel_admin import HttpChannelAdminClient
 from .adapters.channels import HttpChannelDirectory
 from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
 from .advisor_routes import AdvisorAccessDenied, create_advisor_router
+from .client_id import generate_public_id
 from .config import Settings
 from .envios_routes import create_envios_router
 from .admin_channels_routes import create_admin_channels_router
@@ -61,7 +63,6 @@ from .domain import (
     consent_configured,
     consent_text_pending,
     conversation_key,
-    conversation_texts,
     create_client,
     create_profile,
     get_client_status,
@@ -78,6 +79,7 @@ from .domain import (
 from .identity_routes import create_identity_router
 from .legacy import LEGACY_CHANNEL, legacy_from_normalized
 from .panel_live_routes import create_panel_live_router
+from .quick_replies_routes import create_quick_replies_router
 from .simulator_routes import create_simulator_router
 
 logger = logging.getLogger(__name__)
@@ -238,6 +240,15 @@ def build_default_adapters(settings: Settings) -> Adapters:
             settings.channel_directory_ttl_seconds,
             timeout,
         ),
+        mcp=(
+            HttpMcpClient(
+                settings.mcp_url,
+                settings.service_token,
+                settings.mcp_timeout_seconds,
+            )
+            if settings.mcp_enabled
+            else FakeMcpClient()
+        ),
         clock=lambda: datetime.now(timezone.utc),
         new_id=lambda: uuid.uuid4().hex,
     )
@@ -251,6 +262,12 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await run_in_threadpool(publish_advisor_roster, adapters)
+        try:
+            await run_in_threadpool(
+                adapters.repository.ensure_public_ids, generate_public_id
+            )
+        except Exception:  # noqa: BLE001 - el arranque no debe quedar bloqueado
+            logger.error("public_id_backfill_failed")
         yield
 
     app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
@@ -265,6 +282,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             or path.startswith("/admin/")
             or path == "/asesor"
             or path.startswith("/asesor/")
+            or path.startswith("/media/")
+            or path.startswith("/panel/")
         ):
             return await call_next(request)
         token = request.headers.get(SERVICE_TOKEN_HEADER)
@@ -368,6 +387,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     app.router.routes.extend(create_identity_router(settings, adapters).routes)
     app.router.routes.extend(create_envios_router(settings, adapters).routes)
     app.router.routes.extend(create_admin_channels_router(settings, adapters).routes)
+    app.router.routes.extend(create_quick_replies_router(settings, adapters).routes)
 
     def _mark_dedup(dedup: DedupKey) -> bool:
         if dedup.kind == "update":
@@ -409,13 +429,13 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             # R7: sin consentimiento vigente no se persiste la clave del mensaje;
             # el gateway ya deduplica con TTL. Tras consentir, la clave compuesta
             # vuelve a ser la barrera persistente.
-            consent_ready = (
-                consent_configured(settings, adapters)
-                and adapters.repository.has_channel_privacy_consent(
-                    normalized.channel,
-                    normalized.external_user_id,
-                    conversation_texts(settings, adapters).notice_version,
-                )
+            consent_ready = consent_configured(
+                settings, adapters
+            ) and _has_current_consent(
+                normalized.channel,
+                normalized.external_user_id,
+                settings,
+                adapters,
             )
             # R46 R16, #65 R24: la frase de un canal en modo `texto` se procesa igual.
             pending = consent_button_pending(body) or (

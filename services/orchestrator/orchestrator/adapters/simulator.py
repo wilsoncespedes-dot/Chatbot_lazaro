@@ -14,9 +14,8 @@ from lazaro_contracts import (
 )
 from pydantic import ValidationError
 
+from ..channels import SIMULATED_ADAPTER_TYPE
 from ..domain import ServiceUnavailable
-
-SIMULATED_ADAPTER_TYPE = "simulado"
 
 
 class SimulatorUnavailable(ServiceUnavailable):

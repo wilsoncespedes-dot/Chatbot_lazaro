@@ -147,3 +147,69 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Panel `/admin/canales` (solo admin):** listar, crear y editar canales (nombre, ícono de lista cerrada, color `#RRGGBB` con contraste ≥ 4.5 frente a blanco, tipo de adaptador registrado, consentimiento, credenciales, URL de callback); activar y desactivar. URL del webhook (`GATEWAY_PUBLIC_BASE_URL/webhooks/{id}`) y secreto, solo tras acción explícita, con botón copiar (`/admin/static/canales.js`, sin cambiar la CSP). Ver y regenerar el secreto quedan en auditoría, sin el valor.
 - **Credenciales:** el gateway guarda solo pistas (`…` + últimos 4) en `pistas_credenciales`. Cada cambio invalida el directorio de canales del orquestador.
 - **Resultado:** `./init.sh` verde: 4302 passed, 1 skipped. Informe R→test en `progress/impl_panel_administracion_canales.md`.
+
+## 2026-11-21 — Feature #67 etiqueta_origen_canal (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Etiqueta de origen:** componente único (`channel_label.py`) con ícono, nombre y color del canal, contraste AA y escape, usado en la bandeja, `/todos`, encabezado del chat, cada mensaje, historial, ficha del cliente y vistas en vivo. Canal inactivo conserva su etiqueta; canal desconocido o directorio caído muestra «Canal desconocido» neutro.
+- **Filtro por canal:** cualquier canal registrado (incluye inactivos), combinable con asignación y etiqueta; valor inválido da 422.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4330 passed, 1 skipped. Revisión de código `APPROVED`. Informe R→test en `progress/impl_etiqueta_origen_canal.md`.
+
+## 2026-11-21 — Feature #68 bandeja_unificada_tomar_control (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Bandeja unificada:** `/asesor/conversaciones` lista todas las conversaciones de todos los canales con estado derivado (`atendida_por_bot`, `atendida_por_asesor`, `pendiente`, `cerrada`), filtros por canal y estado, pendientes primero y límite configurable (`PANEL_CONVERSATIONS_LIMIT`). Visibilidad de las atendidas por el bot configurable (`PANEL_BOT_CONVERSATIONS_VISIBLE`).
+- **Lectura en vivo:** vista de solo lectura de cualquier conversación, con auditoría `conversation_read`; el refresco no audita de nuevo.
+- **Tomar conversación:** `POST /asesor/conversaciones/{id}/tomar` (CSRF, auditoría `conversation_take`) crea el caso si no existe y lo asigna en una operación atómica (`POST /cases/take` en handover, con bloqueo por contacto); 409 si otro asesor lo tomó. El bot calla desde ese momento. «Devolver al bot» reutiliza `/asesor/return`.
+- **Contrato:** `CaseTakeRequest`, `CaseTakeResponse`, `scope=overview` y razón `advisor_take`.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4403 passed, 1 skipped. Revisión de código `APPROVED`. Informe R→test en `progress/impl_bandeja_unificada_tomar_control.md`.
+
+## 2026-11-22 — Feature #69 estrategias_asignacion (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Estrategia intercambiable:** interfaz `EstrategiaAsignacion` en handover con `por_carga` (comportamiento de #52) y `round_robin` (puntero persistente con actualización atómica), registradas sin `if/else` en el flujo. Elegible en los ajustes operativos del panel sin redeploy; `manual` sigue disponible y el valor por defecto es el actual. Ambas respetan las reglas de #52.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4423 passed, 1 skipped. Revisión de código `APPROVED`. Informe R→test en `progress/impl_estrategias_asignacion.md`.
+
+## 2026-11-22 — Feature #70 aviso_intencion_compra (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Detección:** frases de intención de compra configurables desde el panel (valores iniciales «me interesa», «quiero reservar», «quiero comprar») y motivo `purchase_intent` del router de IA (solo con `buscar_base_conocimiento`). Pedir un humano sigue escalando como antes.
+- **Aviso:** el bot sigue respondiendo; la conversación se marca «Interés de compra» en la bandeja, sube de prioridad y se emite un evento en vivo. Crear caso automáticamente es un ajuste (apagado por defecto). Cada detección queda en eventos con su motivo (sin texto del cliente) y no se repite dentro de un intervalo configurable.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4485 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_aviso_intencion_compra.md`.
+
+## 2026-11-22 — Feature #71 respuestas_rapidas_bot (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Respuestas rápidas:** tabla `respuestas_rapidas` administrable desde el panel (disparador normalizado, bloques de texto, opciones, enlace e imagen, activa y prioridad). Se evalúan antes del RAG solo donde el bot responde (nunca en consentimiento ni con asesor); si coincide, responde sin llamar al modelo y registra evento `quick_reply`. Imagen subida (tipo y tamaño validados, mismo origen) o url https; degrada a enlace en canales sin imágenes. No se siembra contenido de negocio. Compatible con el aviso de intención de compra (#70).
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4556 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_respuestas_rapidas_bot.md`.
+
+## 2026-11-22 — Feature #72 consentimiento_unico_por_cliente (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Consentimiento por cliente:** al login verificado se registra la aceptación vigente por cliente (versión, fecha y canal) y se puebla `identidades_cliente`. Una identidad vinculada a un cliente que aceptó la versión vigente no vuelve a recibir el aviso en otro canal vinculado ni tras cerrar sesión; si cambia la versión se pide una sola vez y cubre todos sus canales. Identidades nunca vinculadas siguen recibiendo el aviso antes de guardar datos (#35). Login obligatorio sin cambios; la supresión borra la aceptación y las identidades.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4582 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_consentimiento_unico_por_cliente.md`.
+
+## 2026-11-22 — Feature #73 id_cliente_y_bienvenida_canales (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **ID de cliente:** ID corto, único y estable (sin caracteres ambiguos, no secuencial), con reintento ante colisión y relleno de clientes existentes; se borra con la supresión. El cliente lo recibe en un mensaje propio tras el login y al pedirlo; el panel lo muestra con botón copiar y permite buscar por ID. Escribir un ID en el chat no identifica ni da acceso a datos.
+- **Bienvenida con canales:** lista los canales activos públicos (nombre, ícono y enlace opcional); los simulados solo con el ajuste de demostración.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4618 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_id_cliente_y_bienvenida_canales.md`.
+
+## 2026-11-22 — Feature #74 servidor_mcp_lectura (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Servidor MCP de solo lectura:** herramientas solo de lectura, orquestador como cliente MCP con autorización por estado (`TOOL_MATRIX`) y `cliente_id` tomado de la sesión, `X-Service-Token`, auditoría por llamada, modelo configurable por variables de entorno y degradación al comportamiento actual si el MCP cae. Ofertas de demostración marcadas como tales.
+- **Limitación conocida:** el paquete `mcp` no estaba instalado en el `.venv`, por lo que el binding real con el SDK no está probado; las pruebas usan un MCP falso.
+- **Resultado:** writer OpenCode/DeepSeek; revisión `APPROVED`. Informe R→test en `progress/impl_servidor_mcp_lectura.md` y revisión en `progress/review_servidor_mcp_lectura.md`.
+
+## 2026-11-22 — Feature #75 dashboard_canales_svg (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Dashboard SVG:** mensajes por canal (con etiqueta de #67), conversaciones por estado y tiempo de respuesta (primera respuesta y de asesor: mediana y p90) en un rango de fechas, para supervisor y admin. Gráficos SVG generados en el servidor, sin JS de terceros ni cambios en la CSP, con título, texto alternativo y tabla de datos accesible. Canales simulados distinguidos y excluibles con filtro; reutiliza los cálculos de métricas existentes.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4710 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_dashboard_canales_svg.md`.
+
+## 2026-11-22 — Feature #76 fuente_clientes_y_futuro_lazaro (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Puerto de clientes:** el orquestador define `FuenteDeClientes` (buscar por ID, listar, crear y actualizar) con la implementación `FuenteClientesLocal`; la creación manual en `/admin/clientes` pasa por el puerto. La sección Clientes muestra una tarjeta «a futuro» sobre una posible conexión con la API de Lazaro, y la documentación describe el adaptador `LazaroClientSource` solo como posibilidad. No se simula ninguna conexión.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4724 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_fuente_clientes_y_futuro_lazaro.md`.
+
+## 2026-11-22 — Feature #77 importacion_clientes (done)
+- **Modo:** nocturno (spec auto-aprobado por reviewer, pendiente de revisión humana)
+- **Importación de clientes:** botón «Importar clientes» en `/admin/clientes` (solo admin) para CSV UTF-8 (coma o punto y coma) con vista previa y errores por fila y campo, detección de duplicados por ID, correo o teléfono (contra la base y dentro del archivo) con elección de actualizar o saltar, y resumen de creados, actualizados, saltados y fallidos con motivo. Escribe a través de `FuenteDeClientes` (#76); sin contraseñas (clientes sin credencial activa), límites configurables, archivo no guardado y protección contra inyección de fórmulas. Correo y teléfono sujetos a retención y supresión.
+- **Resultado:** writer OpenCode/DeepSeek; `./init.sh` verde: 4760 passed, 1 skipped. Revisión `APPROVED`. Informe R→test en `progress/impl_importacion_clientes.md`.
+
+## 2026-11-22 — Feature #78 readme_multicanal (done)
+- **Modo:** nocturno (sin spec; README revisado y aprobado por reviewer, pendiente de revisión humana)
+- **README:** documenta la plataforma multicanal: diagrama de arquitectura (núcleo, puertos, adaptadores, cola y workers), cómo agregar un canal con adaptador propio o con el webhook genérico, formato del webhook y del callback con firma, configuración de cola, servidor MCP y modelo de IA (incluido Ollama), sección «Posibilidades a futuro» (`LazaroClientSource`, datos de negocios por API, login configurable; nada presentado como implementado) y resumen honesto de lo real, lo simulado y lo propuesto. Sin cambios de código. Revisión en `progress/review_readme_multicanal.md`: `APPROVED`.

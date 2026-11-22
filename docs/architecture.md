@@ -17,6 +17,7 @@ services/
 ├── orchestrator/          # Cerebro: contacto, conversación, decide qué hacer;
 │                          # incluye el módulo de identidad de clientes (#38)
 ├── rag/                   # Manuales: ingesta, fragmentos, búsqueda pgvector
+├── mcp_lectura/           # Servidor MCP de solo lectura (#74): herramientas, auditoría
 └── handover/              # Traspaso a asesor: casos, avisos, tiempo de espera
 eval/                      # Evaluación con preguntas de ejemplo y casos de ataque
 scripts/                   # Utilidades y workers (cargar_manual, configurar_webhook, vencer_casos, purgar_datos…)
@@ -69,6 +70,20 @@ feature queda `done`. Detalle de producto en `docs/especificacion.md`,
   color de `canales`) que reutilizan bandeja, encabezado del chat, cada
   mensaje, ficha del cliente y dashboard.
 
+### Servidor MCP de solo lectura (#74)
+
+`services/mcp_lectura/` es un servicio interno (SDK oficial `mcp`, licencia MIT)
+que expone exactamente `buscar_manuales` y `ofertas_demo`, ambas con
+`readOnlyHint=true`. `buscar_manuales` solo llama a `POST /search` del RAG y
+`ofertas_demo` solo hace `SELECT` parametrizados en una transacción `READ ONLY`.
+No publica puertos en compose, exige `X-Service-Token` en todas las rutas salvo
+`GET /health` y audita cada llamada en `mcp_auditoria` (herramienta, `sha256`
+de argumentos, filas, estado y fecha; nunca valores ni contenido). El
+orquestador se conecta como cliente MCP por streamable HTTP solo en estado
+`active` y con `MCP_ENABLED=true`; el `cliente_id` sale de la sesión y viaja en
+`X-Cliente-Id`, nunca como argumento del modelo. Las ofertas de demostración se
+marcan `es_demo=true` y `DEMOSTRACIÓN`. Detalle en `docs/mcp.md`.
+
 ### Panel de asesores multicanal (#41)
 
 La bandeja, la vista de conversación, las plantillas WhatsApp, la presencia y la
@@ -101,6 +116,42 @@ operativos y métricas vive en el orchestrator (`admin_routes.py`,
 `administration.py`), sin JavaScript ni CDN. Un worker externo
 (`scripts/avisar_vencimientos.py`) ejecuta la pasada de avisos de vencimiento
 contra `POST /credentials/expiry-notices`.
+
+**Importación de clientes desde CSV (#77).** El admin sube un archivo UTF-8
+(con o sin BOM) con separador coma o punto y coma y encabezados `id`
+(opcional), `usuario` (obligatorio), `correo` y `telefono` (opcionales); no se
+admiten otras columnas ni contraseñas. Después de una vista previa en memoria
+(errores por fila y campo, duplicados de base y de archivo), la confirmación
+crea o actualiza solo correo y teléfono a través de `FuenteDeClientes`. Los
+clientes importados nacen sin credencial activa; el archivo nunca se guarda y
+las filas con errores o conflictos se informan en un resumen sin correo ni
+teléfono. Límites y TTL son configurables (`CLIENT_IMPORT_MAX_BYTES`,
+`CLIENT_IMPORT_MAX_ROWS`, `CLIENT_IMPORT_PREVIEW_TTL_SECONDS`; por defecto
+1 MiB, 1000 filas y 900 s). Supuestos S1-S7 de `specs/importacion_clientes/`
+(«nombre» es `usuario`, política única con «Saltar» por defecto, actualizar
+solo contacto, staging en un proceso, sin flujo nuevo de habilitación de
+contraseña, retención con `PRIVACY_RETENTION_DAYS`).
+
+### Fuente de clientes y adaptador LazaroClientSource (solo a futuro)
+
+El orquestador define el puerto `FuenteDeClientes` (`buscar_por_id`, `listar`,
+`crear`, `actualizar` y `obtener_credencial`) y su implementación local
+`FuenteClientesLocal` sobre el repositorio actual. La creación y administración
+de clientes y las rutas internas `/clients` pasan por ese puerto.
+
+**Posibilidad a futuro, no implementada.** No hay acceso a la API de Lázaro y no
+se simula; lo siguiente describe solo cómo podría hacerse y no es un
+compromiso:
+
+- `LazaroClientSource` implementaría `FuenteDeClientes`: `buscar_por_id`
+  consultaría a la API de Lázaro por el ID de cliente; `listar` paginaría
+  clientes; una sincronización copiaría altas y bajas hacia la base local.
+- **Duplicados:** la clave de cruce sería el ID de cliente de Lázaro. Si el
+  cliente ya existe localmente se actualizaría; nunca se crearía otro. Un
+  conflicto de usuario se reportaría para resolverlo a mano.
+- **Borrados:** un cliente que desaparece en Lázaro se marcaría como revocado,
+  sin borrar el historial; uno borrado solo en local se reportaría y no se
+  eliminaría en Lázaro.
 
 ### Hoja de estilos compartida (#56)
 

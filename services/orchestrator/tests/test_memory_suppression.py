@@ -190,6 +190,8 @@ def test_r40_r41_r42_r43_r44_r45_only_the_requested_client_is_deleted(env_factor
         "client_memory": 1,
         "case_notes": 0,
         "privacy_consents": 0,
+        "consentimientos_cliente": 0,
+        "identidades_cliente": 0,
     }
     assert [m.text for m in env.repo.messages] == [
         "antes del login",
@@ -404,6 +406,8 @@ def test_r44_postgres_suppression_is_parameterized_and_atomic():
         "client_memory": 1,
         "case_notes": 0,
         "privacy_consents": 0,
+        "consentimientos_cliente": 0,
+        "identidades_cliente": 0,
     }
     assert conn.rollbacks == 0 and conn.commits >= 2
     statements = [(sql, params) for sql, params in conn.log]

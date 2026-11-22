@@ -155,6 +155,10 @@ def test_requirements_txt_matches_design():
     assert names == [
         "fastapi",
         "httpx",
+        # Feature 74: SDK oficial de MCP como cliente del orquestador (design §2).
+        "mcp",
+        # Feature 77: lectura de .xlsx en la importación de clientes (aprobada 2026-11-22).
+        "openpyxl",
         "pg8000",
         "pydantic",
         "pydantic-settings",

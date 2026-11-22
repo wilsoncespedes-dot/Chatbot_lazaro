@@ -15,8 +15,13 @@ from .common import (
     MessageText,
 )
 
-# S5: invalid_answer queda reservado para la feature 6.
-HandoverReason = Literal["no_relevant_chunks", "user_request", "invalid_answer"]
+# S5: invalid_answer queda reservado para la feature 6; advisor_take lo usa #68.
+HandoverReason = Literal[
+    "no_relevant_chunks", "user_request", "invalid_answer", "advisor_take"
+]
+
+# #69: estrategias de asignación automática que el orquestador puede pedir.
+ASSIGNMENT_STRATEGIES = ("por_carga", "round_robin")
 
 
 class LastMessage(ContractModel):
@@ -120,9 +125,11 @@ class CaseAssignResponse(ContractModel):
 
 
 class CaseAutoAssignRequest(ContractModel):
-    """Candidatos disponibles para asignar un caso por carga (#52)."""
+    """Candidatos disponibles y estrategia para asignar un caso (#52, #69)."""
 
     candidate_ids: Annotated[list[Identifier], Field(min_length=1, max_length=200)]
+    # #69: `por_carga` conserva el comportamiento de #52.
+    strategy: str = Field(default="por_carga", pattern=r"^[a-z_]{1,32}$")
 
 
 class CaseAutoAssignResponse(ContractModel):
@@ -213,10 +220,35 @@ class CaseClientMessageResponse(ContractModel):
     case_id: Identifier
 
 
+class CaseTakeRequest(ContractModel):
+    """Un asesor toma la conversación de un contacto (#68).
+
+    `case_id` es el caso propuesto: handover lo crea o reutiliza el abierto del
+    contacto en una sola operación atómica.
+    """
+
+    case_id: Identifier
+    contact_id: Identifier
+    chat_id: int
+    advisor_id: Identifier
+    last_messages: Annotated[list[LastMessage], Field(max_length=MAX_LAST_MESSAGES)]
+
+
+class CaseTakeResponse(ContractModel):
+    """Respuesta 200 de POST /cases/take (#68).
+
+    `created=true` si se creó un caso; `false` si se asignó uno abierto.
+    """
+
+    status: Literal["taken"]
+    case_id: Identifier
+    created: bool
+
+
 # S14: acciones que el panel puede ofrecer para un caso listado.
 CaseListAction = Literal["reply", "assign", "close", "reassign"]
 CaseListStatus = Literal["open", "timed_out", "assigned", "closed"]
-CaseListScope = Literal["mine", "all"]
+CaseListScope = Literal["mine", "all", "overview"]
 
 
 class CaseListQuery(ContractModel):
@@ -232,7 +264,8 @@ class CaseListItem(ContractModel):
     case_id: Identifier
     status: CaseListStatus
     created_at: AwareDatetime
-    actions: Annotated[list[CaseListAction], Field(min_length=1)]
+    # #68: `scope=overview` lista sin acciones.
+    actions: list[CaseListAction]
     advisor_id: Identifier | None = None
 
     @field_validator("actions")

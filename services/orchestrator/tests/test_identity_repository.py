@@ -236,7 +236,7 @@ def test_postgres_identity_sql_is_parameterized():
     )
     repo.add_identity_audit("p1", "c1", "login", "vigente", NOW)
     repo.record_identity_login_failure(
-        "ana", "1.1.1.1", NOW, NOW - timedelta(minutes=15)
+        "usuario-x", "1.1.1.1", NOW, NOW - timedelta(minutes=15)
     )
     repo.get_login_link("h1", NOW)
 
@@ -245,7 +245,7 @@ def test_postgres_identity_sql_is_parameterized():
     assert "identity_login_attempts" in joined
     assert "login_links" in joined
     assert "%s" in joined
-    assert "ana" not in joined
+    assert "usuario-x" not in joined
 
 
 def test_postgres_start_session_only_maps_unique_violation_to_conflict():

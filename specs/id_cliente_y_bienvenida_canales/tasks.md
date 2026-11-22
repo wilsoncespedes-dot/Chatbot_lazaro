@@ -1,0 +1,22 @@
+# Tasks — id_cliente_y_bienvenida_canales (#73)
+
+- [x] T1 — Crear `orchestrator/client_id.py` (`ALPHABET`, `generate_public_id`, `normalize_public_id`, excepciones). Cubre: R1, R2, R21, R22.
+- [x] T2 — Esquema y repositorio (protocolo, memoria, Postgres): columna `public_id`, índice único, `create_client_credential(public_id)`, `PublicIdTaken`, `ensure_public_ids`, `find_client_by_public_id`, `public_id` en modelos de lectura; llamar `ensure_public_ids` al arrancar; la supresión borra el ID con el perfil. Cubre: R3, R7, R8, R19, R20.
+- [x] T3 — `create_client` con reintento (5) y `PublicIdGenerationError`. Cubre: R3, R4, R5, R6.
+- [x] T4 — `identity.is_client_id_command`, ajustes `IDENTITY_CLIENT_ID_COMMANDS` y `CONVERSATION_CLIENT_ID_INTRO` en `config.py` y `.env.example`. Cubre: R10, R11.
+- [x] T5 — Mensaje solo-ID tras el login y rama del comando de ID con sesión activa en `domain.py`; sin sesión sigue el flujo normal. Cubre: R9, R10, R12.
+- [x] T6 — Garantizar que el chat no resuelve IDs (sin llamadas a `find_client_by_public_id`, sin cambio de estado ni vínculo). Cubre: R13, R14.
+- [x] T7 — Crear `orchestrator/copy_button.py`, ruta `GET /panel/copiar.js` e inclusión del script en las páginas del panel. Cubre: R18.
+- [x] T8 — Mostrar ID + botón en ficha, bandeja de casos y conversaciones, encabezado de conversación, caso y lista de Clientes del admin. Cubre: R15, R16, R17.
+- [x] T9 — Ruta `GET /asesor/clientes?q=` con `render_client_search` y filtro `q` en `GET /admin/clientes`; roles, mensajes «ID no válido»/«Sin resultados», resultado sin secretos. Cubre: R19, R20, R22, R23, R24, R25.
+- [x] T10 — Ampliar `ChannelPolicy` (`public`, `contact_url`, `simulated`) y `policy_from_info`. Cubre: R28, R29.
+- [x] T11 — Crear `orchestrator/welcome.py` y anexar el bloque al saludo de primer contacto con tolerancia a fallo del directorio, `CHANNELS_WELCOME_INCLUDE_SIMULATED` y `CONVERSATION_CHANNELS_INTRO`. Cubre: R26, R27, R28, R29, R30, R31, R32, R33, R36.
+- [x] T12 — Formulario de canales: campos `public` y `contact_url` con validación en `admin_channels.channel_form` y render en `admin.py`. Cubre: R34, R35.
+- [x] T13 — Actualizar `docs/especificacion.md` (login configurable como posibilidad, ID de cliente, bienvenida con canales). Cubre: R37.
+- [x] T14 — Actualizar `tests/fakes.py` y `conftest.py` para `public_id` y canales públicos. Cubre: R3, R26.
+- [x] T15 — `test_id_cliente.py`: formato, alfabeto, sin argumentos y con `secrets`, unicidad con colisión simulada, agotamiento, estabilidad, backfill, supresión. Cubre: R1, R2, R3, R4, R5, R6, R7, R8, R21.
+- [x] T16 — `test_id_cliente_chat.py`: mensaje solo-ID tras login (acceso y sin acceso), comando con sesión, comando exacto, comando sin sesión, ID escrito no identifica, no consulta el repositorio ni llega al harness. Cubre: R9, R10, R11, R12, R13, R14.
+- [x] T17 — `test_id_cliente_panel.py`: botón copiar en ficha, bandeja, conversaciones, encabezado, caso y admin; `/panel/copiar.js` sin inline; búsqueda por rol, normalización, inválido, sin resultados, sin sesión, sin secretos. Cubre: R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25.
+- [x] T18 — `test_bienvenida_canales.py`: lista pública y activa, nombre + ícono + enlace, exclusión de inactivos/no públicos/simulados, ajuste de demostración, lista vacía, directorio caído, tope y orden, formulario y `contact_url` inválido. Cubre: R26, R27, R28, R29, R30, R31, R32, R33, R34, R35, R36.
+- [x] T19 — `test_docs_login_configurable.py`: la subsección existe en `docs/especificacion.md`. Cubre: R37.
+- [ ] T20 — Regresión de #35, #37, #46 y #72 (`test_consent_before_data`, `test_conversation_texts`, `test_memory_suppression`, `test_consentimiento_unico_cliente`) y `./init.sh` verde. Cubre: R9, R13, R26.

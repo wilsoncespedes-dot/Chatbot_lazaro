@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import Callable, Protocol
 from urllib.parse import quote
@@ -26,6 +27,8 @@ from lazaro_contracts import (
     CaseListResponse,
     CaseReassignRequest,
     CaseReassignResponse,
+    CaseTakeRequest,
+    CaseTakeResponse,
     CaseTransferRequest,
     CaseTransferResponse,
     ErrorResponse,
@@ -59,7 +62,7 @@ class HandoverClient(Protocol):
     def try_assign(self, case_id: str, advisor_id: str) -> CaseAssignResponse: ...
 
     def auto_assign(
-        self, case_id: str, candidate_ids: list[str]
+        self, case_id: str, candidate_ids: list[str], strategy: str = "por_carga"
     ) -> CaseAutoAssignResponse: ...
 
     def authorize(
@@ -84,6 +87,7 @@ class HandoverClient(Protocol):
 
     def close(self, case_id: str, advisor_id: str) -> CaseCloseResponse: ...
 
+    def take(self, req: CaseTakeRequest) -> CaseTakeResponse: ...
 
 
 class HttpHandoverClient:
@@ -192,10 +196,10 @@ class HttpHandoverClient:
         raise ServiceUnavailable("Handover no disponible.")
 
     def auto_assign(
-        self, case_id: str, candidate_ids: list[str]
+        self, case_id: str, candidate_ids: list[str], strategy: str = "por_carga"
     ) -> CaseAutoAssignResponse:
         try:
-            body = CaseAutoAssignRequest(candidate_ids=candidate_ids)
+            body = CaseAutoAssignRequest(candidate_ids=candidate_ids, strategy=strategy)
             response = httpx.post(
                 f"{self._base_url}/cases/{quote(case_id, safe='')}/auto-assign",
                 content=body.model_dump_json(),
@@ -409,6 +413,41 @@ class HttpHandoverClient:
         logger.error("handover_client_message_error code=%s", response.status_code)
         raise ServiceUnavailable("Handover no disponible.")
 
+    def take(self, req: CaseTakeRequest) -> CaseTakeResponse:
+        try:
+            response = httpx.post(
+                f"{self._base_url}/cases/take",
+                content=req.model_dump_json(),
+                headers=self._headers(content_type=True),
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("handover_take_error code=%s", type(exc).__name__)
+            raise ServiceUnavailable("Handover no disponible.") from None
+
+        if response.status_code in (403, 409):
+            try:
+                error = ErrorResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_take_error code=%s", response.status_code)
+                raise ServiceUnavailable("Handover no disponible.") from None
+            expected = {403: {"forbidden"}, 409: {"case_changed"}}
+            if error.error not in expected[response.status_code]:
+                logger.error("handover_take_error code=%s", response.status_code)
+                raise ServiceUnavailable("Handover no disponible.") from None
+            raise AuthorizationDenied(error.error)
+
+        if response.status_code == 200:
+            try:
+                parsed = CaseTakeResponse.model_validate(response.json())
+            except (ValueError, ValidationError):
+                logger.error("handover_take_error code=invalid_response")
+                raise ServiceUnavailable("Handover no disponible.") from None
+            return parsed
+
+        logger.error("handover_take_error code=%s", response.status_code)
+        raise ServiceUnavailable("Handover no disponible.")
+
     def close(self, case_id: str, advisor_id: str) -> CaseCloseResponse:
         try:
             body = CaseCloseRequest(advisor_id=advisor_id)
@@ -475,6 +514,10 @@ class FakeHandoverClient:
         fail_sync: bool = False,
         reassign_error: str | None = None,
         fail_reassign: bool = False,
+        take_created: bool = True,
+        take_case_id: str | None = None,
+        take_error: str | None = None,
+        fail_take: bool = False,
     ) -> None:
         self.requests: list[HandoverRequest] = []
         self.roster_syncs: list[AdvisorRosterSyncRequest] = []
@@ -482,9 +525,12 @@ class FakeHandoverClient:
         self.assigned: list[tuple[str, str]] = []
         self.try_assigned: list[tuple[str, str]] = []
         self.auto_assigned: list[tuple[str, tuple[str, ...]]] = []
+        self.auto_assign_strategies: list[str] = []
         self.authorized: list[tuple[str, str, str]] = []
         self.listed: list[str] = []
         self.listed_all: list[str] = []
+        self.listed_overview: list[str] = []
+        self.taken: list[CaseTakeRequest] = []
         self.transferred: list[tuple[str, str, str]] = []
         self.reassigned: list[tuple[str, str, str]] = []
         self.client_messages: list[tuple[str, str, datetime]] = []
@@ -511,6 +557,12 @@ class FakeHandoverClient:
         self.fail_list_cases = fail_list_cases
         self.reassign_error = reassign_error
         self.fail_reassign = fail_reassign
+        self.take_created = take_created
+        self.take_case_id = take_case_id
+        self.take_error = take_error
+        self.fail_take = fail_take
+        self._take_assignments: dict[str, tuple[str, str]] = {}
+        self._take_lock = threading.Lock()
 
     def request(self, req: HandoverRequest) -> HandoverResponse:
         self.requests.append(req)
@@ -550,9 +602,10 @@ class FakeHandoverClient:
         return CaseAssignResponse(status="assigned", case_id=case_id)
 
     def auto_assign(
-        self, case_id: str, candidate_ids: list[str]
+        self, case_id: str, candidate_ids: list[str], strategy: str = "por_carga"
     ) -> CaseAutoAssignResponse:
         self.auto_assigned.append((case_id, tuple(candidate_ids)))
+        self.auto_assign_strategies.append(strategy)
         if self.fail_auto_assign:
             raise ServiceUnavailable("Handover caído")
         advisor_id = self.auto_assign_advisor_id
@@ -569,6 +622,8 @@ class FakeHandoverClient:
     ) -> CaseListResponse:
         if scope == "all":
             self.listed_all.append(advisor_id)
+        elif scope == "overview":
+            self.listed_overview.append(advisor_id)
         else:
             self.listed.append(advisor_id)
         if self.fail_list_cases:
@@ -629,6 +684,27 @@ class FakeHandoverClient:
             status=self.client_message_status,  # type: ignore[arg-type]
             case_id=case_id,
         )
+
+    def take(self, req: CaseTakeRequest) -> CaseTakeResponse:
+        self.taken.append(req)
+        if self.fail_take:
+            raise ServiceUnavailable("Handover caído")
+        if self.take_error:
+            raise AuthorizationDenied(self.take_error)
+        with self._take_lock:
+            assigned = self._take_assignments.get(req.contact_id)
+            if assigned is not None:
+                case_id, advisor_id = assigned
+                if advisor_id != req.advisor_id:
+                    raise AuthorizationDenied("case_changed")
+                return CaseTakeResponse(
+                    status="taken", case_id=case_id, created=False
+                )
+            case_id = self.take_case_id or req.case_id
+            self._take_assignments[req.contact_id] = (case_id, req.advisor_id)
+            return CaseTakeResponse(
+                status="taken", case_id=case_id, created=self.take_created
+            )
 
     def close(self, case_id: str, advisor_id: str) -> CaseCloseResponse:
         self.closed.append((case_id, advisor_id))

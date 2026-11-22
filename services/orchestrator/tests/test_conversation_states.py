@@ -110,6 +110,20 @@ def _state(env, contact_id: str) -> ConversationState | None:
 # --- R1: estados y transiciones ----------------------------------------------------------
 
 
+def test_advisor_taken_moves_listable_states_to_with_advisor():
+    """R17: ADVISOR_TAKEN lleva a with_advisor desde los estados con contenido."""
+    for state in (
+        ConversationState.ACTIVE,
+        ConversationState.AWAITING_LOGIN,
+        ConversationState.NO_ACCESS,
+        ConversationState.WITH_ADVISOR,
+    ):
+        assert (
+            transition_state(state, ConversationEvent.ADVISOR_TAKEN)
+            == ConversationState.WITH_ADVISOR
+        )
+
+
 def test_all_seven_states_exist():
     """R1: el vocabulario tiene los siete estados del documento."""
     assert {state.value for state in ConversationState} == {

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta
 
+from lazaro_contracts import ASSIGNMENT_STRATEGIES
 from lazaro_contracts.production import (
     ProductionConfigError,
     normalize_service_url,
@@ -14,6 +16,7 @@ from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .privacy import normalize_privacy_text
+from .purchase_intent import parse_phrases, phrases_valid
 
 DEFAULT_HANDOVER_KEYWORDS = (
     "hablar con una persona,hablar con un asesor,hablar con un humano,"
@@ -127,6 +130,12 @@ class Settings(BaseSettings):
     admin_login_window_minutes: int = Field(default=15, ge=1, le=1440)
     admin_trust_proxy_headers: bool = False
     admin_manual_max_bytes: int = Field(default=20971520, ge=1, le=104857600)
+    # importación de clientes desde CSV (#77)
+    client_import_max_bytes: int = Field(default=1048576, ge=1, le=104857600)
+    client_import_max_rows: int = Field(default=1000, ge=1, le=100000)
+    client_import_preview_ttl_seconds: int = Field(
+        default=900, ge=1, le=86400
+    )
     classifier_default_threshold: float = Field(default=0.6, ge=0, le=1)
     db_query_enabled: bool = False
     db_query_database_url: str = ""
@@ -185,6 +194,14 @@ class Settings(BaseSettings):
         "Registramos tu solicitud de supresión de datos con el número {request_id}. "
         "Una persona autorizada la atenderá y te informará el resultado."
     )
+    # servidor MCP de solo lectura (#74)
+    mcp_enabled: bool = False
+    mcp_url: str = "http://mcp_lectura:8000/mcp"
+    mcp_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    mcp_max_tool_steps: int = Field(default=3, ge=1, le=6)
+    mcp_demo_notice: str = (
+        "Ejemplo de DEMOSTRACIÓN: no son ofertas reales de Lázaro Software."
+    )
     # datos propios del cliente (#39)
     client_data_enabled: bool = False
     client_data_database_url: str = ""
@@ -235,6 +252,8 @@ class Settings(BaseSettings):
     )
     privacy_accepted_reply: str = ""
     privacy_retention_days: str = ""
+    # #72: plazo opcional de la aceptación por cliente. Vacío = hasta la supresión.
+    client_consent_retention_days: str = ""
     conversation_greeting: str = (
         "Hola. Antes de continuar necesitamos tu consentimiento para tratar tus datos."
     )
@@ -252,6 +271,13 @@ class Settings(BaseSettings):
     conversation_active_welcome: str = (
         "Bienvenido. Puedes preguntarme sobre los temas disponibles."
     )
+    conversation_client_id_intro: str = (
+        "Este es tu ID de cliente. Guárdalo para soporte; no identifica a nadie "
+        "si lo escribes en el chat."
+    )
+    conversation_channels_intro: str = (
+        "También puedes escribirnos por estos canales:"
+    )
     conversation_confirm_button_reply: str = (
         "Para aceptar el tratamiento de tus datos, pulsa el botón Acepto."
     )
@@ -265,6 +291,8 @@ class Settings(BaseSettings):
     credential_validity_days: int = Field(default=30, ge=1, le=366)
     credential_expiry_notice_days: int = Field(default=5, ge=0, le=60)
     identity_logout_commands: str = "/salir,cerrar sesion,cerrar sesión"
+    identity_client_id_commands: str = "/id,mi id,mi id de cliente"
+    channels_welcome_include_simulated: bool = False
     password_scrypt_n: int = Field(default=32768, ge=16384)
     # panel de asesores multicanal (#41)
     # Horas de ventana de texto libre de los canales con ventana (#65); conserva
@@ -286,6 +314,15 @@ class Settings(BaseSettings):
     advisor_history_max_messages: int = Field(default=100, ge=10, le=500)
     advisor_presence_ttl_minutes: int = Field(default=15, ge=1, le=240)
     advisor_inbox_refresh_seconds: int = Field(default=30, ge=0, le=600)
+    # bandeja unificada de conversaciones (#68)
+    panel_bot_conversations_visible: bool = True
+    panel_conversations_limit: int = Field(default=200, ge=1, le=1000)
+    # intención de compra (#70)
+    purchase_intent_enabled: bool = True
+    purchase_intent_phrases: str = "me interesa,quiero reservar,quiero comprar"
+    purchase_intent_interval_minutes: int = Field(default=60, ge=1, le=1440)
+    purchase_intent_create_case: bool = False
+    purchase_intent_mark_hours: int = Field(default=72, ge=1, le=720)
     # panel de asesores en tiempo real (#53)
     panel_live_enabled: bool = True
     panel_ws_allowed_origins: str = ""
@@ -310,6 +347,7 @@ class Settings(BaseSettings):
     business_hours_days: str = "1,2,3,4,5,6,7"
     business_hours_utc_offset_minutes: int = Field(default=-300, ge=-720, le=840)
     assignment_mode: str = "manual"
+    assignment_strategy: str = "por_carga"
     expiry_notice_enabled: bool = True
     expiry_notice_max_attempts: int = Field(default=3, ge=1, le=10)
     expiry_notice_interval_seconds: int = Field(default=3600, ge=1)
@@ -325,6 +363,10 @@ class Settings(BaseSettings):
     saved_reply_title_max_chars: int = Field(default=80, ge=1, le=200)
     saved_reply_text_max_chars: int = Field(default=1000, ge=1, le=4096)
     saved_replies_max: int = Field(default=100, ge=1, le=500)
+    # respuestas rápidas del bot (#71)
+    quick_reply_image_max_bytes: int = Field(
+        default=2097152, ge=1024, le=5242880
+    )
     # cola de entrada y outbox (#64)
     inbox_max_attempts: int = 3
     inbox_backoff_base_seconds: float = 5
@@ -348,6 +390,16 @@ class Settings(BaseSettings):
         text = value.strip()
         if text not in ASSIGNMENT_MODES:
             raise ValueError("ASSIGNMENT_MODE debe ser manual o automatica")
+        return text
+
+    @field_validator("assignment_strategy")
+    @classmethod
+    def _validate_assignment_strategy(cls, value: str) -> str:
+        text = value.strip()
+        if text not in ASSIGNMENT_STRATEGIES:
+            raise ValueError(
+                "ASSIGNMENT_STRATEGY debe ser por_carga o round_robin"
+            )
         return text
 
     @field_validator("business_hours_days")
@@ -452,6 +504,24 @@ class Settings(BaseSettings):
             raise ValueError("PRIVACY_RETENTION_DAYS debe ser un entero >= 1")
         return text
 
+    @field_validator("client_consent_retention_days")
+    @classmethod
+    def _validate_client_consent_retention_days(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            days = int(text)
+        except ValueError:
+            raise ValueError(
+                "CLIENT_CONSENT_RETENTION_DAYS debe ser un entero >= 1"
+            ) from None
+        if days < 1:
+            raise ValueError(
+                "CLIENT_CONSENT_RETENTION_DAYS debe ser un entero >= 1"
+            )
+        return text
+
     @field_validator("memory_sensitive_keywords")
     @classmethod
     def _validate_memory_keywords(cls, value: str) -> str:
@@ -459,6 +529,13 @@ class Settings(BaseSettings):
         if not tokens:
             raise ValueError("MEMORY_SENSITIVE_KEYWORDS no puede estar vacío")
         return ",".join(dict.fromkeys(tokens))
+
+    @field_validator("purchase_intent_phrases")
+    @classmethod
+    def _validate_purchase_phrases(cls, value: str) -> str:
+        if not phrases_valid(value):
+            raise ValueError("PURCHASE_INTENT_PHRASES contiene frases inválidas")
+        return ",".join(parse_phrases(value))
 
     @field_validator("advisor_whatsapp_templates")
     @classmethod
@@ -585,6 +662,14 @@ class Settings(BaseSettings):
         )
 
     @property
+    def identity_client_id_command_list(self) -> tuple[str, ...]:
+        return tuple(
+            command.strip()
+            for command in self.identity_client_id_commands.split(",")
+            if command.strip()
+        )
+
+    @property
     def auto_handover_failure_reason_set(self) -> set[str]:
         return {
             reason.strip()
@@ -604,6 +689,13 @@ class Settings(BaseSettings):
         if not self.privacy_retention_days.strip():
             return None
         return int(self.privacy_retention_days)
+
+    def client_consent_not_before(self, now: datetime) -> datetime | None:
+        """R20, R21: corte de la aceptación por cliente; None = sin caducidad."""
+        text = self.client_consent_retention_days.strip()
+        if not text:
+            return None
+        return now - timedelta(days=int(text))
 
     @property
     def consent_accept_phrase(self) -> str:
@@ -653,6 +745,10 @@ class Settings(BaseSettings):
             for token in self.memory_sensitive_keywords.split(",")
             if token.strip()
         )
+
+    @property
+    def purchase_intent_phrase_list(self) -> tuple[str, ...]:
+        return parse_phrases(self.purchase_intent_phrases)
 
     @property
     def advisor_whatsapp_template_list(self) -> tuple[str, ...]:

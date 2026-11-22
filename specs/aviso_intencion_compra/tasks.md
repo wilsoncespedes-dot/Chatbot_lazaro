@@ -1,0 +1,17 @@
+# Tasks — #70 aviso_intencion_compra
+
+- [x] T1 — Crear `services/orchestrator/orchestrator/purchase_intent.py` con `parse_phrases`, `phrases_valid`, `matches_purchase_phrase`, `within_interval`, `has_purchase_interest`. Cubre: R2, R5, R13, R19, R20, R22.
+- [x] T2 — Tests puros en `services/orchestrator/tests/test_purchase_intent_pure.py` (frases normalizadas con tildes y mayúsculas, límites de validación, intervalo, ventana de marca, `cerrada`). Cubre: R2, R5, R13, R19, R20.
+- [x] T3 — Añadir las cinco variables a `config.py`, `.env.example` y `render.yaml` con validación de rangos y de frases; test en `tests/test_config.py`. Cubre: R1, R25.
+- [x] T4 — Extender `administration.py` (kind `phrases`, cuatro `SettingSpec`, prefijo, campos de `OperationalSettings`, resolución con fallback) y `admin_routes.py` (prefijo, valor efectivo, rango). Cubre: R1, R2, R3, R4.
+- [x] T5 — Tests en `tests/test_purchase_intent_settings.py`: valores iniciales, formulario válido/ inválido sin guardar nada, fallback por valor guardado inválido, efecto inmediato, solo admin y escape HTML. Cubre: R1, R2, R3, R4, R24.
+- [x] T6 — `harness.py`: `parse_router_answer` acepta `motivo=purchase_intent` solo en `buscar_base_conocimiento`, `RouterDecision.purchase_intent`, texto del prompt. Cubre: R6, R7, R8.
+- [x] T7 — Tests de harness en `tests/test_purchase_intent_flow.py`: parser acepta y rechaza (con `escalar_a_asesor` y otras herramientas), prompt contiene el motivo solo en la herramienta correcta, `escalar_a_asesor` mantiene sus motivos. Cubre: R6, R7, R8, R22.
+- [x] T8 — Repositorio: `last_event_at` y `last_purchase_intent_at` en `ConversationRef` (Protocol, Fake en `tests/fakes.py`/`adapters/repository.py` y Postgres). Cubre: R13, R19.
+- [x] T9 — Integrar `_notify_purchase_intent` y el envoltorio posterior a la herramienta en `domain.py::_resolve_and_run`; evento `purchase_intent` con motivo, publicación en vivo, tolerancia a fallos. Cubre: R5, R6, R9, R10, R11, R12, R15, R19, R20, R21, R23.
+- [x] T10 — Caso automático opcional tras responder en `domain.py` (`_handover` con `user_request`, `ack=False`), solo con `create_case`, estado `active`/`no_access` y sin caso abierto. Cubre: R17, R18.
+- [x] T11 — Tests de flujo en `tests/test_purchase_intent_flow.py`: detección por frase y por router (evento con motivo, sin texto), respuesta del bot sigue enviándose, deshabilitada, traspaso humano gana, anti-repetición dentro del intervalo y nueva detección tras él, fallo del repositorio no corta la respuesta, injection + frase sin router, `create_case` activado y apagado. Cubre: R5, R6, R9, R10, R11, R12, R17, R18, R19, R20, R21, R23.
+- [x] T12 — Bandeja: `ConversationRow.purchase_intent`, orden en `panel_conversations` e insignia «Interés de compra» en `advisor_panel.py` con escape. Cubre: R13, R14, R24.
+- [x] T13 — Eventos en vivo: `PanelEventKind`, `panel_live_js.py::relevant`, clave caso/contacto. Cubre: R15, R16.
+- [x] T14 — Tests en `tests/test_purchase_intent_panel.py`: marca visible, expira por ventana y por `case_closed`, orden (pendiente, interés, resto), insignia con texto y escapada, evento en vivo con payload mínimo, el JS lista `purchase_intent`, fragmento en vivo igual a la carga inicial. Cubre: R13, R14, R15, R16, R24.
+- [ ] T15 — Ejecutar `./init.sh`, escribir `progress/impl_aviso_intencion_compra.md` con el mapa R→test y marcar todas las tasks. Cubre: R1–R25.

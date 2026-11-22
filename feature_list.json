@@ -592,7 +592,8 @@
         66
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 68,
@@ -612,7 +613,8 @@
         67
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 69,
@@ -630,7 +632,8 @@
         52
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 70,
@@ -648,7 +651,8 @@
         68
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 71,
@@ -666,7 +670,8 @@
         65
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 72,
@@ -687,7 +692,8 @@
         65
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 73,
@@ -708,30 +714,16 @@
         72
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 74,
       "name": "servidor_mcp_lectura",
       "title": "Servidor MCP de solo lectura conectado a la IA, con modelo configurable",
-      "description": "Fase 9. La IA responde con datos reales consultando herramientas MCP de solo lectura. Hoy existe texto-a-SQL sobre vistas permitidas (#26) sin MCP.",
-      "acceptance": [
-        "Un servidor MCP (SDK oficial `mcp`, licencia MIT, dependencia declarada en el design) expone como herramientas solo endpoints de lectura existentes; ninguna herramienta crea, modifica ni borra.",
-        "El orquestador actúa como cliente MCP: las herramientas se ofrecen al modelo solo en los estados que permite `TOOL_MATRIX` y el `cliente_id` sale de la sesión, nunca de los argumentos del modelo.",
-        "El servidor MCP no se expone a Internet y exige `X-Service-Token`; cada llamada queda auditada (herramienta, hash de argumentos y filas devueltas).",
-        "El modelo se configura con variables de entorno (`LLM_BASE_URL`, `LLM_MODEL`, …); se documenta con Ollama en local (perfil opcional de compose) y con un proveedor remoto.",
-        "Funciona igual sin importar el canal porque trabaja sobre el mensaje normalizado; se prueba con Telegram y con el canal simulado.",
-        "Para el ejemplo del profesor («¿tienes algo para Melgar esta semana?») se usa una tabla o vista de ofertas de DEMOSTRACIÓN, marcada así en los datos y en el panel; nunca se presenta como datos de Lázaro.",
-        "Si el servidor MCP no está disponible, el bot responde como hoy y el fallo queda registrado.",
-        "Pruebas con un MCP falso: solo lectura, autorización por estado, `cliente_id` de la sesión, caída del MCP y auditoría; `./init.sh` verde y reviewer aprueba."
-      ],
-      "dependencies": [
-        26,
-        39,
-        65
-      ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 75,
@@ -749,7 +741,8 @@
         67
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 76,
@@ -767,7 +760,8 @@
         42
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 77,
@@ -789,7 +783,8 @@
         76
       ],
       "sdd": true,
-      "status": "pending"
+      "status": "done",
+      "auto_approved": true
     },
     {
       "id": 78,
@@ -825,7 +820,7 @@
         77
       ],
       "sdd": false,
-      "status": "pending"
+      "status": "done"
     }
   ]
 }

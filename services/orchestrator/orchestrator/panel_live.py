@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from typing import Literal, MutableSet, Sequence
 from urllib.parse import urlsplit
 
-PanelEventKind = Literal["message", "case_created", "case_updated"]
+PanelEventKind = Literal[
+    "message", "case_created", "case_updated", "purchase_intent"
+]
 
 # R20: ventana de solape para no perder eventos con ids confirmados fuera de orden.
 PANEL_EVENT_OVERLAP_SECONDS = 5

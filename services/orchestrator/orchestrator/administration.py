@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Literal, Sequence
 
+from lazaro_contracts import ASSIGNMENT_STRATEGIES
+
 from .config import Settings
 from .identity import POLICY_FIELDS, IdentityPolicy, resolve_identity_policy
+from .purchase_intent import parse_phrases, phrases_valid
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +58,7 @@ class SettingsFormInvalid(ValueError):
 @dataclass(frozen=True)
 class SettingSpec:
     key: str
-    kind: Literal["int", "bool", "time", "days", "enum"]
+    kind: Literal["int", "bool", "time", "days", "enum", "phrases"]
     minimum: int | None
     maximum: int | None
     default_attr: str
@@ -99,6 +103,28 @@ OPERATIONAL_SETTINGS: tuple[SettingSpec, ...] = tuple(
         "assignment_mode",
         ("manual", "automatica"),
     ),
+    SettingSpec(
+        "assignment.strategy",
+        "enum",
+        None,
+        None,
+        "assignment_strategy",
+        ASSIGNMENT_STRATEGIES,
+    ),
+    SettingSpec(
+        "purchase_intent.phrases", "phrases", None, None, "purchase_intent_phrases"
+    ),
+    SettingSpec("purchase_intent.enabled", "bool", None, None, "purchase_intent_enabled"),
+    SettingSpec(
+        "purchase_intent.interval_minutes",
+        "int",
+        1,
+        1440,
+        "purchase_intent_interval_minutes",
+    ),
+    SettingSpec(
+        "purchase_intent.create_case", "bool", None, None, "purchase_intent_create_case"
+    ),
 )
 
 OPERATIONAL_SETTINGS_BY_KEY = {spec.key: spec for spec in OPERATIONAL_SETTINGS}
@@ -108,6 +134,7 @@ OPERATIONAL_PREFIXES = (
     "business_hours.",
     "suppression.",
     "assignment.",
+    "purchase_intent.",
 )
 
 
@@ -128,6 +155,11 @@ class OperationalSettings:
     suppression_deadline_business_days: int
     suppression_due_soon_business_days: int
     assignment_mode: str
+    assignment_strategy: str
+    purchase_intent_phrases: tuple[str, ...]
+    purchase_intent_enabled: bool
+    purchase_intent_interval_minutes: int
+    purchase_intent_create_case: bool
 
 
 def _default_value(spec: SettingSpec, settings: Settings) -> str:
@@ -167,6 +199,8 @@ def _valid_value(spec: SettingSpec, raw: str) -> bool:
         return _valid_time(value)
     if spec.kind == "days":
         return _valid_days(value)
+    if spec.kind == "phrases":
+        return phrases_valid(value)
     try:
         number = int(value)
     except (TypeError, ValueError):
@@ -184,6 +218,8 @@ def _normalized_value(spec: SettingSpec, raw: str) -> str:
         return value.lower()
     if spec.kind == "days":
         return ",".join(str(int(token)) for token in value.split(",") if token.strip())
+    if spec.kind == "phrases":
+        return ",".join(parse_phrases(value))
     return value
 
 
@@ -254,6 +290,36 @@ def resolve_operational_settings(
         "assignment.mode",
         _default_value(OPERATIONAL_SETTINGS_BY_KEY["assignment.mode"], settings),
     )
+    assignment_strategy = valid.get(
+        "assignment.strategy",
+        _default_value(OPERATIONAL_SETTINGS_BY_KEY["assignment.strategy"], settings),
+    )
+    phrases_raw = valid.get(
+        "purchase_intent.phrases", settings.purchase_intent_phrases
+    )
+    if not phrases_valid(phrases_raw):
+        phrases_raw = settings.purchase_intent_phrases
+    purchase_enabled = valid.get(
+        "purchase_intent.enabled",
+        _default_value(
+            OPERATIONAL_SETTINGS_BY_KEY["purchase_intent.enabled"], settings
+        ),
+    ) == "true"
+    purchase_interval = int(
+        valid.get(
+            "purchase_intent.interval_minutes",
+            _default_value(
+                OPERATIONAL_SETTINGS_BY_KEY["purchase_intent.interval_minutes"],
+                settings,
+            ),
+        )
+    )
+    purchase_create_case = valid.get(
+        "purchase_intent.create_case",
+        _default_value(
+            OPERATIONAL_SETTINGS_BY_KEY["purchase_intent.create_case"], settings
+        ),
+    ) == "true"
     return OperationalSettings(
         identity=identity,
         expiry_notice_enabled=expiry_enabled,
@@ -261,6 +327,11 @@ def resolve_operational_settings(
         suppression_deadline_business_days=deadline,
         suppression_due_soon_business_days=due_soon,
         assignment_mode=assignment_mode,
+        assignment_strategy=assignment_strategy,
+        purchase_intent_phrases=parse_phrases(phrases_raw),
+        purchase_intent_enabled=purchase_enabled,
+        purchase_intent_interval_minutes=purchase_interval,
+        purchase_intent_create_case=purchase_create_case,
     )
 
 
@@ -272,7 +343,19 @@ def validate_settings_form(
     deletes: list[str] = []
     invalid: list[str] = []
     for spec in OPERATIONAL_SETTINGS:
-        raw = form.get(spec.key, "")
+        raw = form.get(spec.key)
+        if spec.kind == "phrases":
+            # R2: una lista de frases no se puede vaciar para volver al entorno;
+            # vacía tras normalizar invalida todo el formulario.
+            if raw is None:
+                continue
+            raw = str(raw)
+            if not _valid_value(spec, raw):
+                invalid.append(spec.key)
+                continue
+            upserts[spec.key] = _normalized_value(spec, raw)
+            continue
+        raw = "" if raw is None else raw
         if isinstance(raw, str) and not raw.strip():
             deletes.append(spec.key)
             continue
@@ -379,6 +462,17 @@ def median_minutes(values: Sequence[float]) -> float | None:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
+def percentile_minutes(values: Sequence[float], pct: float) -> float | None:
+    """R17: percentil por rango más cercano (nearest-rank) en minutos."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    bounded = min(max(pct, 0.0), 100.0)
+    rank = math.ceil(bounded / 100 * len(ordered))
+    rank = min(max(rank, 1), len(ordered))
+    return float(ordered[rank - 1])
+
+
 @dataclass(frozen=True)
 class FirstResponseSummary:
     cases: int
@@ -386,6 +480,8 @@ class FirstResponseSummary:
     unanswered: int
     avg_minutes: float | None
     median_minutes: float | None
+    # R17: se añade sin cambiar el significado de las columnas anteriores.
+    p90_minutes: float | None = None
 
 
 def first_response_summary(
@@ -406,4 +502,5 @@ def first_response_summary(
         unanswered=cases - answered,
         avg_minutes=average,
         median_minutes=median_minutes(durations),
+        p90_minutes=percentile_minutes(durations, 90),
     )

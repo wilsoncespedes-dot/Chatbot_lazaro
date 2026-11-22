@@ -114,6 +114,167 @@ en [`docs/despliegue.md`](docs/despliegue.md) §4.
 | El puerto 8001–8004 está ocupado | Cierra el programa que lo usa o cambia el puerto en `docker-compose.yml` |
 | Faltan archivos o funciones recientes | Estás en una rama vieja: `git fetch` y `git switch <rama>` |
 
+## Plataforma multicanal
+
+El núcleo (orquestador) no conoce nombres de canal: trabaja con un mensaje
+normalizado (`NormalizedMessage`) y una respuesta abstracta (`ResponseBlocks`).
+Cada canal vive en un adaptador del `telegram_gateway`.
+
+```
+ Canal externo ──► [gateway: adaptador del canal] ──► cola de entrada (Postgres)
+ (Telegram, WhatsApp,        │  puerto Canal                    │
+  webhook, simulado)         │                          worker procesar_entrantes
+        ▲                    │                                  ▼
+        │                    │                      NÚCLEO (orquestador)
+        │                    │                      RAG · handover · MCP · IA
+        │                    │                                  │
+        └── POST /send ◄─ worker enviar_salientes ◄── outbox (Postgres)
+```
+
+- **Puerto:** `Canal` (`services/telegram_gateway/telegram_gateway/ports/canal.py`):
+  `recibir_mensaje`, `enviar_mensaje`, `identificar_usuario`, `capacidades`.
+- **Adaptadores:** un módulo por tipo en `telegram_gateway/adapters/channels/`
+  (`telegram`, `whatsapp_cloud`, `webhook_generico`, `simulado`), registrados en
+  `ChannelRegistry` sin `if/else` por canal.
+- **Cola y workers:** los mensajes entrantes y salientes pasan por tablas de
+  Postgres con reintentos y backoff; los workers son `procesar_entrantes` y
+  `enviar_salientes` (`python -m orchestrator.workers …`, ver `docker-compose.yml`).
+- Contrato completo: [`contracts/CONTRATOS.md`](contracts/CONTRATOS.md).
+
+### Agregar un canal nuevo
+
+**Opción A — webhook genérico (sin código).** Sirve para n8n, Zapier, Make,
+Twilio u otro puente.
+
+1. En `/admin` (sección de canales) crea un canal de tipo `webhook_generico`
+   con un id (por ejemplo `canal-externo`), su `callback_url` `https` (opcional:
+   sin ella el canal recibe pero no puede responder) y un secreto propio.
+2. Haz que tu sistema firme y envíe los mensajes a
+   `POST /webhooks/{canal_id}` (formato abajo).
+3. Recibe las respuestas de la plataforma en tu `callback_url`.
+4. Prueba sin sistema externo con el canal simulado y
+   `scripts/simular_canal.py`.
+
+**Opción B — adaptador propio (con código).**
+
+1. Crea un módulo en `services/telegram_gateway/telegram_gateway/adapters/channels/`
+   con una clase que cumpla el puerto `Canal`.
+2. Crea su factory (`managed_by_environment`, `is_available`,
+   `default_capabilities`, `build`) y regístrala con
+   `@CHANNEL_REGISTRY.register("<tipo_adaptador>")`.
+3. Declara en `capacidades` lo que soporta (texto libre, botones, adjuntos…);
+   la plataforma degrada la respuesta a lo que el canal pueda enviar.
+4. Añade pruebas con adaptadores falsos y crea el canal desde `/admin`.
+
+El núcleo no cambia en ninguno de los dos casos.
+
+### Webhook de entrada y callback
+
+Entrada: `POST /webhooks/{canal_id}`. Encabezados `X-Lazaro-Timestamp` (segundos
+Unix) y `X-Lazaro-Signature` (HMAC-SHA256 en hexadecimal de
+`<timestamp>.<cuerpo>`, con el secreto del canal, sobre los bytes exactos del
+cuerpo). Ventana anti-repetición de 300 s por defecto
+(`WEBHOOK_SIGNATURE_WINDOW_SECONDS`).
+
+```json
+{
+  "channel": "canal-externo",
+  "external_user_id": "usuario-123",
+  "external_chat_id": "usuario-123",
+  "external_message_id": "msg-0001",
+  "kind": "text",
+  "text": "Hola, necesito ayuda con mi pedido",
+  "received_at": "2026-11-21T15:00:00Z"
+}
+```
+
+Respuesta `200 {"status": "accepted"}` (o `"duplicate"`; es idempotente por
+`channel` + `external_message_id`). Errores: `401` firma o ventana, `404` canal
+inexistente o inactivo, `413` cuerpo grande, `422` cuerpo inválido.
+
+Callback saliente: la plataforma hace `POST` a tu `callback_url` con el mismo
+formato (`"direction": "outbound"`) y los mismos encabezados de firma. Responde
+`2xx` para confirmar; la entrega es al menos una vez, así que deduplica por
+`external_message_id`.
+
+```json
+{
+  "channel": "canal-externo",
+  "external_user_id": "usuario-123",
+  "external_chat_id": "usuario-123",
+  "external_message_id": "out-0001",
+  "kind": "text",
+  "text": "Hola, con gusto te ayudo. Escribe tu numero de pedido.",
+  "received_at": "2026-11-21T15:00:05Z",
+  "direction": "outbound"
+}
+```
+
+Validar la firma (receptor, Python):
+
+```python
+import hashlib, hmac, time
+
+def firma_valida(secreto: str, timestamp: str, cuerpo: bytes, firma: str, ventana=300) -> bool:
+    if not timestamp.isdigit() or abs(time.time() - int(timestamp)) > ventana:
+        return False
+    esperada = hmac.new(secreto.encode(), timestamp.encode() + b"." + cuerpo, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(esperada, firma)
+```
+
+Los secretos de canal se guardan cifrados (`CHANNEL_SECRETS_KEY`) y no viajan
+en el cuerpo ni en logs. Más ejemplos (con adjuntos) en `contracts/CONTRATOS.md`.
+
+### Configurar la cola
+
+Variables de `.env.example` (sección «cola de entrada y outbox»):
+`INBOX_MAX_ATTEMPTS`, `INBOX_BACKOFF_BASE_SECONDS`, `OUTBOX_MAX_ATTEMPTS`,
+`OUTBOX_BACKOFF_BASE_SECONDS`, `OUTBOX_BACKOFF_MAX_SECONDS`,
+`OUTBOX_BACKOFF_JITTER`, `WORKER_POLL_SECONDS`, `WORKER_LEASE_SECONDS`. No hace
+falta un broker externo: la cola es Postgres.
+
+### Servidor MCP y modelo de IA
+
+- **MCP de solo lectura:** `MCP_ENABLED=true` en `.env` y el servicio
+  `mcp_lectura`. Herramientas: `buscar_manuales` y `ofertas_demo` (datos de
+  DEMOSTRACIÓN, `MCP_DEMO_SEED=true` para cargarlos). Detalle y seguridad en
+  [`docs/mcp.md`](docs/mcp.md).
+- **Modelo:** cualquier API compatible con chat completions:
+  `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`.
+- **Ollama (local):**
+
+```bash
+docker compose --profile ollama up -d ollama
+docker compose exec ollama ollama pull <modelo-con-soporte-de-tools>
+# en .env:
+# LLM_BASE_URL=http://ollama:11434/v1
+# LLM_API_KEY=ollama
+# LLM_MODEL=<modelo>
+```
+
+### Posibilidades a futuro (no implementadas)
+
+Nada de esto existe en el código ni se simula:
+
+- **Clientes desde la API de Lázaro:** un adaptador `LazaroClientSource` que
+  implemente el puerto `FuenteDeClientes` (p. ej. `buscar_por_id` y `listar`);
+  una sincronización de altas y bajas sería parte del adaptador, no del puerto.
+  Hoy solo existe `FuenteClientesLocal`.
+- **Datos de los negocios de Lázaro (hoteles, restaurantes):** que la IA los
+  consulte mediante su API, como una herramienta MCP más.
+- **Login configurable según la empresa.**
+
+Descripción de diseño en [`docs/architecture.md`](docs/architecture.md).
+
+### Resumen honesto
+
+| Estado | Qué |
+|---|---|
+| **Funciona de verdad** (probado con adaptadores falsos y tests; en producción solo con tus claves) | Núcleo sin nombres de canal, registro de canales y secretos cifrados, webhook genérico firmado con callback, cola de entrada y outbox con reintentos, RAG con manuales, traspaso a asesor y panel, bandeja unificada, asignación de asesores, importación de clientes, servidor MCP de solo lectura, panel de administración de canales |
+| **Real pero depende de credenciales externas** | Telegram y WhatsApp Cloud API: requieren tokens y URL pública `https`; no se han verificado aquí contra las plataformas reales |
+| **Simulado / DEMOSTRACIÓN** | Canal `simulado` (buzón y `scripts/simular_canal.py`) y ofertas `demo_ofertas` del MCP: datos ficticios etiquetados |
+| **Solo propuesta** | `LazaroClientSource`, consulta de datos de negocios de Lázaro por API, login por empresa |
+
 ## Estructura
 
 ```

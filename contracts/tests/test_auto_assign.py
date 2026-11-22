@@ -1,4 +1,4 @@
-"""Contrato de POST /cases/{id}/auto-assign (feature #52)."""
+"""Contrato de POST /cases/{id}/auto-assign (features #52 y #69)."""
 from __future__ import annotations
 
 import re
@@ -8,7 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 import lazaro_contracts
-from lazaro_contracts import CaseAutoAssignRequest, CaseAutoAssignResponse
+from lazaro_contracts import (
+    ASSIGNMENT_STRATEGIES,
+    CaseAutoAssignRequest,
+    CaseAutoAssignResponse,
+)
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent
 DOC_PATH = CONTRACTS_DIR / "CONTRATOS.md"
@@ -65,11 +69,14 @@ def test_route_documents_exposer_caller_models_and_token() -> None:
 
 
 def test_request_table_lists_candidate_ids() -> None:
-    """R24: el request documenta candidate_ids (1–200)."""
+    """R24, R20: el request documenta candidate_ids (1–200) y strategy."""
     table = _subsection("Request")
     assert TABLE_HEADER in table
     assert "candidate_ids" in _first_column_cells(table)
+    assert "strategy" in _first_column_cells(table)
     assert "1–200" in table
+    assert "por_carga" in table
+    assert "round_robin" in table
 
 
 def test_response_table_lists_status_case_id_and_advisor_id() -> None:
@@ -128,11 +135,12 @@ def test_response_rejects_status_outside_the_three_values() -> None:
 
 
 def test_examples_validate_against_their_models() -> None:
-    """R24: los ejemplos del contrato validan contra sus modelos."""
+    """R24, R20: los ejemplos del contrato validan contra sus modelos."""
     request = CaseAutoAssignRequest.model_validate_json(
         (EXAMPLES_DIR / "case_auto_assign_request.json").read_text(encoding="utf-8")
     )
     assert request.candidate_ids == ["222222222", "333333333"]
+    assert request.strategy == "por_carga"
     assigned = CaseAutoAssignResponse.model_validate_json(
         (EXAMPLES_DIR / "case_auto_assign_response.json").read_text(encoding="utf-8")
     )
@@ -143,3 +151,26 @@ def test_examples_validate_against_their_models() -> None:
         )
     )
     assert queued.status == "queued" and queued.advisor_id is None
+
+
+def test_strategy_defaults_to_por_carga_and_is_backwards_compatible() -> None:
+    """R20: sin `strategy` la petición sigue siendo válida y usa `por_carga`."""
+    request = CaseAutoAssignRequest(candidate_ids=["111", "222"])
+    assert request.strategy == "por_carga"
+    explicit = CaseAutoAssignRequest(candidate_ids=["111"], strategy="round_robin")
+    assert explicit.strategy == "round_robin"
+
+
+def test_strategy_rejects_invalid_format() -> None:
+    """R20: `strategy` solo admite minúsculas y guiones bajos (1–32)."""
+    for value in ("Round-Robin", "por carga", "", "a" * 33, "round.robin"):
+        with pytest.raises(ValidationError):
+            CaseAutoAssignRequest.model_validate(
+                {"candidate_ids": ["111"], "strategy": value}
+            )
+
+
+def test_assignment_strategies_constant_is_exported() -> None:
+    """R20: la constante de estrategias válidas se exporta desde lazaro_contracts."""
+    assert "ASSIGNMENT_STRATEGIES" in lazaro_contracts.__all__
+    assert ASSIGNMENT_STRATEGIES == ("por_carga", "round_robin")

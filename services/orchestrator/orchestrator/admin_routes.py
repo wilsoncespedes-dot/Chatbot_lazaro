@@ -14,11 +14,24 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from . import admin, advisor_panel
 from .accounts import ROLES, USERNAME_PATTERN, hash_token
 from .administration import (
+    OPERATIONAL_PREFIXES,
     OPERATIONAL_SETTINGS,
     OPERATIONAL_SETTINGS_BY_KEY,
     resolve_operational_settings,
 )
 from .classifier import parse_threshold, validate_category_fields
+from .client_id import normalize_public_id
+from .client_import import (
+    ImportFileError,
+    ImportStaging,
+    build_plan,
+    parse_upload,
+    preview_audit_result,
+    run_import,
+    summary_audit_result,
+    summary_to_csv,
+)
+from .purchase_intent import parse_phrases
 from .config import Settings
 from .domain import (
     Adapters,
@@ -30,6 +43,7 @@ from .domain import (
     LastAdmin,
     LoginThrottled,
     NoticeVersionRequired,
+    PanelValidationError,
     ProfileNotFound,
     RagRejected,
     ServiceUnavailable,
@@ -42,7 +56,9 @@ from .domain import (
     authenticate_admin,
     change_role,
     change_template_status,
+    channel_dashboard,
     classifier_threshold,
+    client_source_of,
     conversation_texts,
     create_client,
     create_case_tag,
@@ -62,6 +78,7 @@ from .domain import (
     set_saved_reply_active,
     update_saved_reply,
     operational_settings,
+    parse_dashboard_query,
     recent_events,
     record_panel_audit,
     renew_credential,
@@ -77,6 +94,7 @@ from .domain import (
     update_template,
 )
 from .privacy import CONVERSATION_TEXT_FIELDS, ConversationTexts
+from .mcp_admin import render_mcp_page
 
 SESSION_COOKIE = "admin_session"
 LOGIN_ERROR = "Usuario o contraseña incorrectos."
@@ -262,6 +280,16 @@ def _effective_setting_value(key: str, operational) -> str:
         return str(operational.suppression_deadline_business_days)
     if key == "assignment.mode":
         return operational.assignment_mode
+    if key == "assignment.strategy":
+        return operational.assignment_strategy
+    if key == "purchase_intent.phrases":
+        return ",".join(operational.purchase_intent_phrases)
+    if key == "purchase_intent.enabled":
+        return "true" if operational.purchase_intent_enabled else "false"
+    if key == "purchase_intent.interval_minutes":
+        return str(operational.purchase_intent_interval_minutes)
+    if key == "purchase_intent.create_case":
+        return "true" if operational.purchase_intent_create_case else "false"
     return str(operational.suppression_due_soon_business_days)
 
 
@@ -281,13 +309,13 @@ def _setting_range(spec) -> str:
         return "1-7 separados por comas"
     if spec.kind == "enum":
         return " | ".join(spec.choices)
+    if spec.kind == "phrases":
+        return "1-30 frases separadas por comas"
     return f"{spec.minimum}..{spec.maximum}"
 
 
 def _settings_view(settings: Settings, adapters: Adapters) -> list[dict[str, str]]:
-    overrides = adapters.repository.get_app_settings(
-        ("identity.", "expiry_notice.", "business_hours.", "suppression.", "assignment.")
-    )
+    overrides = adapters.repository.get_app_settings(OPERATIONAL_PREFIXES)
     operational = resolve_operational_settings(settings, overrides)
     rows = []
     for spec in OPERATIONAL_SETTINGS:
@@ -318,6 +346,8 @@ def _raw_matches_effective(spec, raw: str, effective: str) -> bool:
             ",".join(token.strip() for token in value.split(",") if token.strip())
             == ",".join(sorted(effective.split(","), key=int))
         )
+    if spec.kind == "phrases":
+        return ",".join(parse_phrases(value)) == ",".join(parse_phrases(effective))
     try:
         return str(int(value)) == effective
     except ValueError:
@@ -329,6 +359,9 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
     # versión de FastAPI instalada envuelve `include_router` en un objeto sin
     # `path`, y el test de superficie exige ver las rutas como `APIRoute`.
     router = APIRouter()
+    import_staging = ImportStaging(
+        settings.client_import_preview_ttl_seconds, adapters.clock
+    )
 
     def _category_page(session, status_code: int = 200, error: str | None = None):
         threshold = classifier_threshold(settings, adapters)
@@ -1118,10 +1151,41 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
             return _category_page(session, 404, "category_not_found")
         return _redirect("/admin/categories")
 
-    def _clients_page(session, status_code: int = 200, error: str | None = None):
+    def _clients_page(
+        session,
+        status_code: int = 200,
+        error: str | None = None,
+        q: str | None = None,
+    ):
+        query = (q or "").strip()
+        normalized = None
+        if query:
+            normalized = normalize_public_id(query)
+            if normalized is None:
+                return _html(
+                    admin.render_clients(
+                        [],
+                        session.csrf_token,
+                        error,
+                        notice="ID no válido",
+                        query=query,
+                    ),
+                    status_code=status_code,
+                )
+        clients = list_clients_admin(settings, adapters)
+        notice = None
+        if normalized is not None:
+            clients = [
+                client
+                for client in clients
+                if client.public_id
+                and normalize_public_id(client.public_id) == normalized
+            ]
+            if not clients:
+                notice = "Sin resultados"
         return _html(
             admin.render_clients(
-                list_clients_admin(settings, adapters), session.csrf_token, error
+                clients, session.csrf_token, error, notice=notice, query=query
             ),
             status_code=status_code,
         )
@@ -1129,7 +1193,7 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
     @router.get("/admin/clientes")
     async def clients_page(request: Request) -> HTMLResponse:
         session = _require_session(request, adapters)
-        return _clients_page(session)
+        return _clients_page(session, q=request.query_params.get("q"))
 
     @router.post("/admin/clientes")
     async def create_client_page(request: Request) -> Response:
@@ -1218,6 +1282,123 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
             return _clients_page(session, 404, "client_not_found")
         _audit(actor, "client_close_session", "ok", adapters, target=profile_id)
         return _redirect("/admin/clientes")
+
+    def _import_form(
+        session, status_code: int = 200, error_code: str | None = None
+    ) -> HTMLResponse:
+        return _html(
+            admin.render_import_form(
+                session.csrf_token,
+                error_code=error_code,
+                max_bytes=settings.client_import_max_bytes,
+                max_rows=settings.client_import_max_rows,
+            ),
+            status_code=status_code,
+        )
+
+    @router.get("/admin/clientes/importar")
+    async def import_clients_form(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters)
+        return _import_form(session)
+
+    @router.post("/admin/clientes/importar/vista-previa")
+    async def import_clients_preview(request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await request.form()
+        csrf_value = form.get("csrf_token")
+        actor = _actor(session, adapters)
+        _require_csrf_audited(
+            session,
+            {"csrf_token": csrf_value if isinstance(csrf_value, str) else ""},
+            actor,
+            "client_import_preview",
+            adapters,
+        )
+        upload = form.get("archivo")
+        if not isinstance(upload, StarletteUploadFile):
+            _audit(actor, "client_import_preview", "archivo_requerido", adapters)
+            return _import_form(session, 422, "archivo_requerido")
+        data = await upload.read(settings.client_import_max_bytes + 1)
+        if len(data) > settings.client_import_max_bytes:
+            _audit(actor, "client_import_preview", "archivo_demasiado_grande", adapters)
+            return _import_form(session, 422, "archivo_demasiado_grande")
+        try:
+            rows = parse_upload(
+                data,
+                max_bytes=settings.client_import_max_bytes,
+                max_rows=settings.client_import_max_rows,
+            )
+        except ImportFileError as exc:
+            _audit(actor, "client_import_preview", exc.code, adapters)
+            return _import_form(session, 422, exc.code)
+        plan = build_plan(rows, client_source_of(adapters))
+        token = import_staging.put(session.token_hash, plan)
+        _audit(
+            actor, "client_import_preview", preview_audit_result(plan), adapters
+        )
+        return _html(
+            admin.render_import_preview(plan, token, session.csrf_token, "saltar")
+        )
+
+    @router.post("/admin/clientes/importar/confirmar")
+    async def import_clients_confirm(request: Request) -> Response:
+        session = _require_session(request, adapters)
+        form = await _form(request)
+        actor = _actor(session, adapters)
+        _require_csrf_audited(
+            session, form, actor, "client_import", adapters
+        )
+        policy = form.get("politica", "saltar")
+        if policy not in ("actualizar", "saltar"):
+            _audit(actor, "client_import", "validation_error", adapters)
+            return _html(
+                admin.render_message(
+                    "Importación no válida",
+                    "La política de duplicados no es válida.",
+                    session.csrf_token,
+                ),
+                status_code=422,
+            )
+        plan = import_staging.pop(session.token_hash, form.get("token", ""))
+        if plan is None:
+            _audit(actor, "client_import", "vista_previa_expirada", adapters)
+            return _html(
+                admin.render_message(
+                    "Vista previa expirada",
+                    "La vista previa caducó o no pertenece a esta sesión.",
+                    session.csrf_token,
+                ),
+                status_code=409,
+            )
+        summary = run_import(
+            plan, policy, client_source_of(adapters), adapters.clock()
+        )
+        summary_token = import_staging.put_summary(session.token_hash, summary)
+        _audit(actor, "client_import", summary_audit_result(summary), adapters)
+        return _html(
+            admin.render_import_summary(summary, summary_token, session.csrf_token)
+        )
+
+    @router.get("/admin/clientes/importar/resumen/{token}")
+    async def import_clients_summary_csv(token: str, request: Request) -> Response:
+        session = _require_session(request, adapters)
+        summary = import_staging.get_summary(session.token_hash, token)
+        if summary is None:
+            return _html(
+                admin.render_message(
+                    "Resumen no disponible",
+                    "El resumen caducó o no pertenece a esta sesión.",
+                    session.csrf_token,
+                ),
+                status_code=409,
+            )
+        headers = admin.security_headers()
+        headers["Content-Disposition"] = 'attachment; filename="resumen_importacion.csv"'
+        return Response(
+            content=summary_to_csv(summary),
+            media_type="text/csv",
+            headers=headers,
+        )
 
     def _templates_page(session, status_code: int = 200, error: str | None = None):
         return _html(
@@ -1324,9 +1505,7 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
         form = await _form(request)
         _require_csrf(session, form)
         actor = _actor(session, adapters)
-        before = adapters.repository.get_app_settings(
-            ("identity.", "expiry_notice.", "business_hours.", "suppression.", "assignment.")
-        )
+        before = adapters.repository.get_app_settings(OPERATIONAL_PREFIXES)
         try:
             save_operational_settings(form, actor, settings, adapters)
         except SettingsInvalid:
@@ -1357,5 +1536,56 @@ def create_admin_router(settings: Settings, adapters: Adapters) -> APIRouter:
         metrics = admin_metrics(days, settings, adapters)
         _audit(actor, "metrics_viewed", "ok", adapters, target=str(days))
         return _html(admin.render_metrics(metrics, session.csrf_token))
+
+    @router.get("/admin/dashboard")
+    async def dashboard_page(request: Request) -> HTMLResponse:
+        session, profile = _require_any_session(request, adapters)
+        if profile.role != "admin":
+            return HTMLResponse(
+                content=admin.render_error(403, "forbidden", session.csrf_token),
+                status_code=403,
+                headers=admin.panel_security_headers(),
+            )
+        try:
+            days, include_simulated = parse_dashboard_query(request.query_params)
+        except PanelValidationError:
+            return HTMLResponse(
+                content=admin.render_error(
+                    422, "validation_error", session.csrf_token
+                ),
+                status_code=422,
+                headers=admin.panel_security_headers(),
+            )
+        data = channel_dashboard(profile, days, include_simulated, settings, adapters)
+        _audit(
+            profile,
+            "dashboard_viewed",
+            "ok",
+            adapters,
+            target=f"{data.since.isoformat()}..{data.until.isoformat()}",
+        )
+        return HTMLResponse(
+            content=admin.render_dashboard(data, session.csrf_token),
+            headers=admin.panel_security_headers(),
+        )
+
+    @router.get("/admin/mcp")
+    async def mcp_page(request: Request) -> HTMLResponse:
+        session, _profile = _require_any_session(
+            request, adapters, frozenset({"admin"})
+        )
+        try:
+            tools = adapters.mcp.list_tools() if adapters.mcp is not None else []
+            listed = {tool.name for tool in tools}
+            if "ofertas_demo" not in listed:
+                raise ServiceUnavailable("Herramienta no publicada.")
+            result = adapters.mcp.call_tool("ofertas_demo", {}, "admin-panel")
+        except ServiceUnavailable:
+            return _html(
+                render_mcp_page([], available=False, csrf=session.csrf_token)
+            )
+        return _html(
+            render_mcp_page(result.rows, available=True, csrf=session.csrf_token)
+        )
 
     return router

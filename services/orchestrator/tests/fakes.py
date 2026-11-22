@@ -41,15 +41,25 @@ def channel_info(
     capabilities: ChannelCapabilities | None | str = "auto",
     active: bool = True,
     adapter_type: str | None = None,
+    icon: str = "chat",
+    color: str = "#1B6FA8",
+    public: bool = False,
+    contact_url: str = "",
 ) -> ChannelInfo:
     """`ChannelInfo` de prueba como lo publicaría `GET /channels` del gateway."""
-    config = {} if consent_mode is None else {"consent_mode": consent_mode}
+    config: dict[str, object] = (
+        {} if consent_mode is None else {"consent_mode": consent_mode}
+    )
+    if public:
+        config["public"] = True
+    if contact_url:
+        config["contact_url"] = contact_url
     return ChannelInfo(
         id=channel_id,
         name=name or channel_id,
         adapter_type=adapter_type or channel_id,
-        icon="chat",
-        color="#1B6FA8",
+        icon=icon,
+        color=color,
         config=config,
         active=active,
         configured=True,

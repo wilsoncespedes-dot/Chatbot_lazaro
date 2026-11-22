@@ -522,3 +522,31 @@ def test_notice_version_change_blocks_new_data(env):
     assert env.repo.events == []
     assert env.repo.db_query_audits == []
     assert [consent.notice_version for consent in env.repo.privacy_consents] == ["v0"]
+
+
+def test_post_messages_dedup_uses_client_coverage(env):
+    """#72 R6: con cobertura por cliente la clave de deduplicación se aplica."""
+    version = env.repo.get_conversation_texts().notice_version
+    env.repo.identidades_cliente[("simulado", "u1")] = ("cliente-1", FIXED_NOW)
+    env.repo.consentimientos_cliente[("cliente-1", version)] = {
+        "notice_sha256": "sha",
+        "aceptado_en": FIXED_NOW,
+        "canal_id": "telegram",
+    }
+    body = {
+        "channel": "simulado",
+        "external_user_id": "u1",
+        "external_chat_id": "chat-1",
+        "external_message_id": "m-1",
+        "kind": "text",
+        "text": "Hola",
+        "received_at": "2026-01-02T03:04:00+00:00",
+    }
+    headers = {"X-Service-Token": env.settings.service_token}
+
+    first = env.client.post("/messages", json=body, headers=headers)
+    second = env.client.post("/messages", json=body, headers=headers)
+
+    assert first.json()["status"] == "accepted"
+    assert second.json()["status"] == "duplicate"
+    assert len(env.repo.inbox) == 1

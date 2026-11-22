@@ -202,14 +202,16 @@ def test_chat_header_shows_client_or_unauthenticated(env_factory, panel):
     panel.link_case(env, "case-1", profile_id=client.id)
     html = env.client.get("/asesor/cases/case-1").text
     assert '<p class="chat-title">' in html
-    assert "&lt;b&gt;cli · telegram" in html
+    assert "&lt;b&gt;cli · <svg class=\"channel-label\"" in html
+    assert "Telegram" in html
     assert "<b>cli" not in html
 
     anonymous = env_factory()
     panel.login(anonymous)
     panel.link_case(anonymous, "case-1", profile_id=None)
     html = anonymous.client.get("/asesor/cases/case-1").text
-    assert "Cliente sin autenticar · telegram" in html
+    assert "Cliente sin autenticar · <svg class=\"channel-label\"" in html
+    assert "Telegram" in html
 
 
 def test_live_region_is_accessible_log_and_keeps_data_attributes(env_factory, panel):

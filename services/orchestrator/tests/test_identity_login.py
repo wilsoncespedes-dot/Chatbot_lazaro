@@ -85,7 +85,11 @@ def test_valid_credential_creates_session_and_activates_contact(env_factory):
     assert session.profile_id == profile.profile_id
     assert env.repo.get_login_link(hash_token(token), NOW) is None
     assert env.repo.get_conversation_state(contact.id) == ConversationState.ACTIVE
-    assert env.gateway.sent[-1] == (100, env.repo.get_conversation_texts().active_welcome)
+    assert env.gateway.sent[-2] == (
+        100,
+        env.repo.get_conversation_texts().active_welcome,
+    )
+    assert env.gateway.sent[-1] == (100, profile.public_id)
     assert any(audit.action == "login" for audit in env.repo.identity_audits)
 
 
@@ -105,7 +109,7 @@ def test_expiring_credential_still_activates(env_factory):
 def test_expired_credential_creates_session_but_denies_access(env_factory):
     """R34: vencida → LOGIN_EXPIRED, `no_access` y aviso de suspensión."""
     env = _env(env_factory)
-    _client(env, valid_from=NOW - timedelta(days=60), valid_until=NOW - timedelta(days=1))
+    profile = _client(env, valid_from=NOW - timedelta(days=60), valid_until=NOW - timedelta(days=1))
     contact, token = _link(env)
 
     outcome = _login(env, token)
@@ -113,10 +117,11 @@ def test_expired_credential_creates_session_but_denies_access(env_factory):
     assert outcome.status == "ok_no_access"
     assert env.repo.get_active_session_by_contact(contact.id) is not None
     assert env.repo.get_conversation_state(contact.id) == ConversationState.NO_ACCESS
-    assert env.gateway.sent[-1] == (
+    assert env.gateway.sent[-2] == (
         100,
         env.repo.get_conversation_texts().suspended_reply,
     )
+    assert env.gateway.sent[-1] == (100, profile.public_id)
 
 
 @pytest.mark.parametrize("mode", ["revoked", "not_started", "no_credential"])

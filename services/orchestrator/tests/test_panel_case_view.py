@@ -114,7 +114,7 @@ def test_memory_and_summaries_are_shown_and_client_data_is_masked(env_factory, p
     )
     response = env.client.get("/asesor/cases/case-1")
     assert response.status_code == 200
-    for text in ("Prefiere correo", "Resumen visible", "cliente1", "…1234", "whatsapp"):
+    for text in ("Prefiere correo", "Resumen visible", "cliente1", "…1234", "WhatsApp"):
         assert text in response.text
     assert "573001234" not in response.text
     assert contact.external_user_id == "573001234"
@@ -170,4 +170,4 @@ def test_memory_route_and_whatsapp_contact_remain_available(env_factory, panel):
     assert memory.status_code == 200
     view = env.client.get("/asesor/cases/case-1")
     assert view.status_code == 200
-    assert "whatsapp" in view.text
+    assert "WhatsApp" in view.text

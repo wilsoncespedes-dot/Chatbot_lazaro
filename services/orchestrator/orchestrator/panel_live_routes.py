@@ -32,6 +32,9 @@ from .domain import (
     advisor_case_history,
     advisor_inbox,
     advisor_reassign_targets,
+    channel_labels,
+    conversation_history,
+    panel_conversations,
     visible_case_ids,
 )
 from .panel_live import (
@@ -42,6 +45,7 @@ from .panel_live import (
     origin_allowed,
 )
 from .panel_live_js import PANEL_LIVE_JS
+from .copy_button import COPY_JS
 
 logger = logging.getLogger(__name__)
 
@@ -221,14 +225,55 @@ def create_panel_live_router(settings: Settings, adapters: Adapters) -> APIRoute
                 show_advisor = False
         except DomainError as exc:
             return _domain_error(exc, session.csrf_token)
+        labels = channel_labels(adapters, {row.channel for row in rows})
         table = advisor_panel.render_inbox_table(
             rows,
             session.csrf_token,
             show_advisor=show_advisor,
             all_view=scope == SCOPE_ALL,
             reassign_targets=targets,
+            labels=labels,
         )
         return _html(table)
+
+    @router.get("/asesor/live/conversaciones")
+    async def live_conversations(request: Request) -> HTMLResponse:
+        session = _require_session(request, adapters, ADVISOR_ROLES)
+        profile = adapters.repository.get_profile(session.profile_id)
+        if profile is None:
+            raise AdvisorAccessDenied()
+        channel = request.query_params.get("canal")
+        status = request.query_params.get("estado")
+        try:
+            rows = panel_conversations(
+                profile, channel, status, settings, adapters
+            )
+        except DomainError as exc:
+            return _domain_error(exc, session.csrf_token)
+        labels = channel_labels(adapters, {row.channel for row in rows})
+        table = advisor_panel.render_conversations_table(
+            rows, session.csrf_token, labels
+        )
+        return _html(table)
+
+    @router.get("/asesor/live/conversaciones/{contact_id}")
+    async def live_conversation(
+        request: Request, contact_id: str
+    ) -> HTMLResponse:
+        session = _require_session(request, adapters, ADVISOR_ROLES)
+        profile = adapters.repository.get_profile(session.profile_id)
+        if profile is None:
+            raise AdvisorAccessDenied()
+        if not _valid_case_id(contact_id):
+            return _error_page(422, "validation_error", session.csrf_token)
+        try:
+            history = conversation_history(
+                contact_id, profile, settings, adapters
+            )
+        except DomainError as exc:
+            return _domain_error(exc, session.csrf_token)
+        labels = channel_labels(adapters, {item.channel for item in history})
+        return _html(advisor_panel.render_history_fragment(history, labels))
 
     @router.get("/asesor/live/cases/{case_id}")
     async def live_case(request: Request, case_id: str) -> HTMLResponse:
@@ -242,12 +287,21 @@ def create_panel_live_router(settings: Settings, adapters: Adapters) -> APIRoute
             history = advisor_case_history(case_id, profile, settings, adapters)
         except DomainError as exc:
             return _domain_error(exc, session.csrf_token)
-        return _html(advisor_panel.render_history_fragment(history))
+        labels = channel_labels(adapters, {item.channel for item in history})
+        return _html(advisor_panel.render_history_fragment(history, labels))
 
     @router.get("/asesor/static/panel_live.js")
     async def panel_live_script() -> Response:
         return Response(
             content=PANEL_LIVE_JS,
+            media_type="text/javascript",
+            headers=admin.panel_security_headers(),
+        )
+
+    @router.get("/panel/copiar.js")
+    async def copy_script() -> Response:
+        return Response(
+            content=COPY_JS,
             media_type="text/javascript",
             headers=admin.panel_security_headers(),
         )

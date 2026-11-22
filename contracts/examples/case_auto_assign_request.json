@@ -1,3 +1,4 @@
 {
-  "candidate_ids": ["222222222", "333333333"]
+  "candidate_ids": ["222222222", "333333333"],
+  "strategy": "por_carga"
 }

@@ -70,7 +70,7 @@ PANEL_LIVE_JS = r"""
     if (!event || typeof event !== "object") { return false; }
     if (event.type === "hello") { return true; }
     if (event.type !== "message" && event.type !== "case_created" &&
-        event.type !== "case_updated") {
+        event.type !== "case_updated" && event.type !== "purchase_intent") {
       return false;
     }
     if (!caseId) { return true; }

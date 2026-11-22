@@ -237,11 +237,13 @@ def test_item_rejects_status_outside_the_four_values() -> None:
     assert CaseListItem.model_validate({**VALID_ITEM, "status": "closed"}).status == "closed"
 
 
-def test_item_rejects_empty_unknown_or_repeated_actions() -> None:
-    """R3: actions es una lista no vacía, sin repetidos y solo de acciones conocidas."""
-    for actions in ([], ["reply", "reply"], ["reply", "cerrar"]):
+def test_item_rejects_unknown_or_repeated_actions() -> None:
+    """R3, #68: actions no repite ni admite acciones desconocidas; vacía es overview."""
+    for actions in (["reply", "reply"], ["reply", "cerrar"]):
         with pytest.raises(ValidationError):
             CaseListItem.model_validate({**VALID_ITEM, "actions": actions})
+    overview = CaseListItem.model_validate({**VALID_ITEM, "actions": []})
+    assert overview.actions == []
 
 
 @pytest.mark.parametrize(

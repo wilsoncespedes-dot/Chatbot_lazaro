@@ -1,0 +1,412 @@
+── 1. Verificando entorno ─────────────────────────────
+[0;32m[OK][0m    Python -> .venv/Scripts/python.exe (Python 3.14.7)
+[0;32m[OK][0m    Versión de Python compatible
+[0;32m[OK][0m    pytest disponible
+
+── 2. Verificando archivos base del arnés ──────────────
+[0;32m[OK][0m    Existe AGENTS.md
+[0;32m[OK][0m    Existe feature_list.json
+[0;32m[OK][0m    Existe progress/current.md
+[0;32m[OK][0m    Existe docs/proyecto.md
+[0;32m[OK][0m    Existe docs/architecture.md
+[0;32m[OK][0m    Existe docs/conventions.md
+[0;32m[OK][0m    Existe docs/verification.md
+[0;32m[OK][0m    Existe docs/specs.md
+[0;32m[OK][0m    Existe CHECKPOINTS.md
+[0;32m[OK][0m    Existe .env.example
+
+── 3. Secretos ─────────────────────────────────────────
+[0;32m[OK][0m    Ningún .env está en git
+
+── 4. Validando feature_list.json y specs ─────────────
+[OK]    feature_list.json válido (78 features)
+[OK]    Specs presentes para features sdd en spec_ready o in_progress
+
+── 5. Ejecutando tests (pytest) ────────────────────────
+........................................................................ [  1%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 25%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+..........................................................FF.F.........F [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 40%]
+...F.................................................................... [ 42%]
+........................................................................ [ 43%]
+........................................................................ [ 45%]
+........................................................................ [ 47%]
+........................................................................ [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 51%]
+........................................................................ [ 53%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 59%]
+........................................................................ [ 61%]
+........................................................................ [ 62%]
+........................................................................ [ 64%]
+........................................................................ [ 65%]
+........................................................................ [ 67%]
+.........................s.............................................. [ 69%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 84%]
+........................................................................ [ 86%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 94%]
+........................................................................ [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 98%]
+...............................................                          [100%]
+================================== FAILURES ===================================
+___________ test_linked_identity_on_other_channel_not_asked_notice ____________
+
+env_factory = <function make_env at 0x000001BDE0F80E00>
+
+    def test_linked_identity_on_other_channel_not_asked_notice(env_factory):
+        """R4: el canal B vinculado sin fila propia recibe el flujo de login, no el aviso."""
+        env = _env(env_factory)
+>       telegram = _login_contact(env)
+                   ^^^^^^^^^^^^^^^^^^^
+
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:162: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:93: in _login_contact
+    outcome = _login(env, token, username)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:69: in _login
+    outcome = login_client(token, username, PASSWORD, "1.1.1.1", env.settings, env.adapters)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+token = 'bCHCfZ90gN7emsaMVg_orx_JdBto8W3Hsn_Stk6Ov5o.a88f063fb23f8b34077b36426c75faa4b3b89331eb82585aa4ff3bb07ec18ff5'
+username = 'cliente1', password = 'clave-segura-123', client_ip = '1.1.1.1'
+settings = Settings(app_env='development', service_token='svc-token', database_url='', rag_url='', handover_url='', telegram_gate...=2.0, outbox_backoff_max_seconds=300.0, outbox_backoff_jitter=0.2, worker_poll_seconds=1.0, worker_lease_seconds=120.0)
+adapters = Adapters(repository=<orchestrator.adapters.repository.FakeRepository object at 0x000001BDE456D6A0>, rag=<orchestrator....01BDE3ADAAC0>, channel_admin=<orchestrator.adapters.channel_admin.FakeChannelAdminClient object at 0x000001BDE369C350>)
+
+    def login_client(
+        token: str,
+        username: str,
+        password: str,
+        client_ip: str,
+        settings: Settings,
+        adapters: Adapters,
+    ) -> LoginOutcome:
+        """R12–R16, R21–R24, R26, R30, R34, R36, R37, R48: orden fijo del design."""
+        repo = adapters.repository
+        now = adapters.clock()
+        if not verify_login_token_signature(
+            token, settings.identity_link_signing_key.strip()
+        ):
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        link = repo.get_login_link(hash_token(token), now)
+        if link is None:
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        policy = resolve_identity_policy(settings, repo.get_identity_overrides())
+        normalized = username.strip().lower()
+        since = now - timedelta(minutes=policy.lockout_minutes)
+        by_username, by_ip = repo.count_identity_login_failures(
+            normalized, client_ip, since
+        )
+        if (
+            by_username >= policy.login_max_attempts
+            or by_ip >= policy.login_max_attempts
+        ):
+            raise LoginThrottled("Demasiados intentos fallidos. Inténtalo más tarde.")
+    
+        credentials = repo.get_client_credentials_by_username(normalized)
+        if credentials is None:
+            verify_password(password, _fake_scrypt_hash(settings))
+            repo.record_identity_login_failure(normalized, client_ip, now, since)
+>           raise ClientLoginFailed("Usuario o contraseña incorrectos.")
+E           orchestrator.domain.ClientLoginFailed: Usuario o contraseña incorrectos.
+
+services\orchestrator\orchestrator\domain.py:1475: ClientLoginFailed
+_________________________ test_not_asked_after_logout _________________________
+
+env_factory = <function make_env at 0x000001BDE0F80E00>
+
+    def test_not_asked_after_logout(env_factory):
+        """R5, R18: tras cerrar sesión el texto vuelve al login, no al aviso."""
+        env = _env(env_factory)
+>       contact = _login_contact(env)
+                  ^^^^^^^^^^^^^^^^^^^
+
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:186: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:93: in _login_contact
+    outcome = _login(env, token, username)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:69: in _login
+    outcome = login_client(token, username, PASSWORD, "1.1.1.1", env.settings, env.adapters)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+token = 'fBpL6yTZlsFdXA6DlwBevgvNEUy00jlRun2lyup7ZIc.a466a74397f8fb1adf4a895e2e7a4a942e8bf9c57a62f39e7a526b0df18bc61a'
+username = 'cliente1', password = 'clave-segura-123', client_ip = '1.1.1.1'
+settings = Settings(app_env='development', service_token='svc-token', database_url='', rag_url='', handover_url='', telegram_gate...=2.0, outbox_backoff_max_seconds=300.0, outbox_backoff_jitter=0.2, worker_poll_seconds=1.0, worker_lease_seconds=120.0)
+adapters = Adapters(repository=<orchestrator.adapters.repository.FakeRepository object at 0x000001BDE2A03380>, rag=<orchestrator....01BDDFB10B40>, channel_admin=<orchestrator.adapters.channel_admin.FakeChannelAdminClient object at 0x000001BDE16C92D0>)
+
+    def login_client(
+        token: str,
+        username: str,
+        password: str,
+        client_ip: str,
+        settings: Settings,
+        adapters: Adapters,
+    ) -> LoginOutcome:
+        """R12–R16, R21–R24, R26, R30, R34, R36, R37, R48: orden fijo del design."""
+        repo = adapters.repository
+        now = adapters.clock()
+        if not verify_login_token_signature(
+            token, settings.identity_link_signing_key.strip()
+        ):
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        link = repo.get_login_link(hash_token(token), now)
+        if link is None:
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        policy = resolve_identity_policy(settings, repo.get_identity_overrides())
+        normalized = username.strip().lower()
+        since = now - timedelta(minutes=policy.lockout_minutes)
+        by_username, by_ip = repo.count_identity_login_failures(
+            normalized, client_ip, since
+        )
+        if (
+            by_username >= policy.login_max_attempts
+            or by_ip >= policy.login_max_attempts
+        ):
+            raise LoginThrottled("Demasiados intentos fallidos. Inténtalo más tarde.")
+    
+        credentials = repo.get_client_credentials_by_username(normalized)
+        if credentials is None:
+            verify_password(password, _fake_scrypt_hash(settings))
+            repo.record_identity_login_failure(normalized, client_ip, now, since)
+>           raise ClientLoginFailed("Usuario o contraseña incorrectos.")
+E           orchestrator.domain.ClientLoginFailed: Usuario o contraseña incorrectos.
+
+services\orchestrator\orchestrator\domain.py:1475: ClientLoginFailed
+__________________ test_unlinked_identity_still_gets_notice ___________________
+
+env_factory = <function make_env at 0x000001BDE0F80E00>
+
+    def test_unlinked_identity_still_gets_notice(env_factory):
+        """R10: una identidad nunca vinculada recibe el aviso aunque el cliente aceptó."""
+        env = _env(env_factory)
+>       _login_contact(env)
+
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:240: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:93: in _login_contact
+    outcome = _login(env, token, username)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:69: in _login
+    outcome = login_client(token, username, PASSWORD, "1.1.1.1", env.settings, env.adapters)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+token = 'xbkhcxTpDxbeOu1IDxDvaNRwPXm9ItekbmHhPowORj4.5d3abb6fefbfa30d35e0460c5d338ab614efc773e6bf3bcab618323fb5317d79'
+username = 'cliente1', password = 'clave-segura-123', client_ip = '1.1.1.1'
+settings = Settings(app_env='development', service_token='svc-token', database_url='', rag_url='', handover_url='', telegram_gate...=2.0, outbox_backoff_max_seconds=300.0, outbox_backoff_jitter=0.2, worker_poll_seconds=1.0, worker_lease_seconds=120.0)
+adapters = Adapters(repository=<orchestrator.adapters.repository.FakeRepository object at 0x000001BDE372DBE0>, rag=<orchestrator....01BDE14B9160>, channel_admin=<orchestrator.adapters.channel_admin.FakeChannelAdminClient object at 0x000001BDE391B6D0>)
+
+    def login_client(
+        token: str,
+        username: str,
+        password: str,
+        client_ip: str,
+        settings: Settings,
+        adapters: Adapters,
+    ) -> LoginOutcome:
+        """R12–R16, R21–R24, R26, R30, R34, R36, R37, R48: orden fijo del design."""
+        repo = adapters.repository
+        now = adapters.clock()
+        if not verify_login_token_signature(
+            token, settings.identity_link_signing_key.strip()
+        ):
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        link = repo.get_login_link(hash_token(token), now)
+        if link is None:
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        policy = resolve_identity_policy(settings, repo.get_identity_overrides())
+        normalized = username.strip().lower()
+        since = now - timedelta(minutes=policy.lockout_minutes)
+        by_username, by_ip = repo.count_identity_login_failures(
+            normalized, client_ip, since
+        )
+        if (
+            by_username >= policy.login_max_attempts
+            or by_ip >= policy.login_max_attempts
+        ):
+            raise LoginThrottled("Demasiados intentos fallidos. Inténtalo más tarde.")
+    
+        credentials = repo.get_client_credentials_by_username(normalized)
+        if credentials is None:
+            verify_password(password, _fake_scrypt_hash(settings))
+            repo.record_identity_login_failure(normalized, client_ip, now, since)
+>           raise ClientLoginFailed("Usuario o contraseña incorrectos.")
+E           orchestrator.domain.ClientLoginFailed: Usuario o contraseña incorrectos.
+
+services\orchestrator\orchestrator\domain.py:1475: ClientLoginFailed
+_______________ test_login_still_required_for_covered_identity ________________
+
+env_factory = <function make_env at 0x000001BDE0F80E00>
+
+    def test_login_still_required_for_covered_identity(env_factory):
+        """R18: la cobertura por cliente no exime del login verificado."""
+        env = _env(env_factory)
+>       contact = _login_contact(env)
+                  ^^^^^^^^^^^^^^^^^^^
+
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:365: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:93: in _login_contact
+    outcome = _login(env, token, username)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+services\orchestrator\tests\test_consentimiento_unico_cliente.py:69: in _login
+    outcome = login_client(token, username, PASSWORD, "1.1.1.1", env.settings, env.adapters)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+token = 'g6mS5NtrmDElRUhAedJ28R_SSS9TIPMMyhD_AN-DOGU.aa57508af759eeea6bab9231183aa64b81c31b868c261291c5d01209ca4ddada'
+username = 'cliente1', password = 'clave-segura-123', client_ip = '1.1.1.1'
+settings = Settings(app_env='development', service_token='svc-token', database_url='', rag_url='', handover_url='', telegram_gate...=2.0, outbox_backoff_max_seconds=300.0, outbox_backoff_jitter=0.2, worker_poll_seconds=1.0, worker_lease_seconds=120.0)
+adapters = Adapters(repository=<orchestrator.adapters.repository.FakeRepository object at 0x000001BDE372E270>, rag=<orchestrator....01BDDFB44590>, channel_admin=<orchestrator.adapters.channel_admin.FakeChannelAdminClient object at 0x000001BDE33B6FD0>)
+
+    def login_client(
+        token: str,
+        username: str,
+        password: str,
+        client_ip: str,
+        settings: Settings,
+        adapters: Adapters,
+    ) -> LoginOutcome:
+        """R12–R16, R21–R24, R26, R30, R34, R36, R37, R48: orden fijo del design."""
+        repo = adapters.repository
+        now = adapters.clock()
+        if not verify_login_token_signature(
+            token, settings.identity_link_signing_key.strip()
+        ):
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        link = repo.get_login_link(hash_token(token), now)
+        if link is None:
+            raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
+        policy = resolve_identity_policy(settings, repo.get_identity_overrides())
+        normalized = username.strip().lower()
+        since = now - timedelta(minutes=policy.lockout_minutes)
+        by_username, by_ip = repo.count_identity_login_failures(
+            normalized, client_ip, since
+        )
+        if (
+            by_username >= policy.login_max_attempts
+            or by_ip >= policy.login_max_attempts
+        ):
+            raise LoginThrottled("Demasiados intentos fallidos. Inténtalo más tarde.")
+    
+        credentials = repo.get_client_credentials_by_username(normalized)
+        if credentials is None:
+            verify_password(password, _fake_scrypt_hash(settings))
+            repo.record_identity_login_failure(normalized, client_ip, now, since)
+>           raise ClientLoginFailed("Usuario o contraseña incorrectos.")
+E           orchestrator.domain.ClientLoginFailed: Usuario o contraseña incorrectos.
+
+services\orchestrator\orchestrator\domain.py:1475: ClientLoginFailed
+_________________ test_postgres_identity_sql_is_parameterized _________________
+
+    def test_postgres_identity_sql_is_parameterized():
+        """R4, R38: el SQL de Postgres usa parámetros y no concatena datos."""
+        statements: list[tuple[str, tuple]] = []
+    
+        class Cursor:
+            def execute(self, sql, params=()):
+                statements.append((sql, tuple(params)))
+    
+            def fetchall(self):
+                return []
+    
+        class Conn:
+            def cursor(self):
+                return Cursor()
+    
+            def commit(self):
+                pass
+    
+            def rollback(self):
+                pass
+    
+        repo = PostgresRepository(
+            "postgresql://x", connect=lambda: Conn(), new_id=lambda: "p1"
+        )
+        repo.add_identity_audit("p1", "c1", "login", "vigente", NOW)
+        repo.record_identity_login_failure(
+            "ana", "1.1.1.1", NOW, NOW - timedelta(minutes=15)
+        )
+        repo.get_login_link("h1", NOW)
+    
+        joined = " ".join(sql for sql, _ in statements)
+        assert "identity_audit" in joined
+        assert "identity_login_attempts" in joined
+        assert "login_links" in joined
+        assert "%s" in joined
+>       assert "ana" not in joined
+E       AssertionError: assert 'ana' not in 'CREATE TABL...ires_at > %s'
+E         
+E         'ana' is contained here:
+E         ?           ^^^^^^^^^^^^^
+E           OT NULL, canal_id TEXT NOT NULL, id_externo TEXT NOT NULL, vinculado_en TIMESTAMPTZ NOT NULL, PRIMARY KEY (canal_id, id_externo)) CREATE TABLE IF NOT EXISTS consentimientos_cliente (cliente_id TEXT NOT NULL, notice_version TEXT NOT NULL, notice_sha256 TEXT NOT NULL, aceptado_en TIMESTAMPTZ NOT NULL, canal_id TEXT NOT NULL, PRIMARY KEY (cliente_id, notice_version)) CREATE INDEX IF NOT EXISTS admin_login_attempts_user_at ON admin_login_attempts (username, at) CREATE INDEX IF NOT EXISTS admin_login_attempts_ip_at ON admin_login_attempts (ip, at)...
+E         
+E         ...Full output truncated (2 lines hidden), use '-vv' to show
+
+services\orchestrator\tests\test_identity_repository.py:248: AssertionError
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\Wilso\proyectos\chatbot-lazaro\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+services/orchestrator/tests/test_conversation_states.py::test_identity_is_isolated_per_channel
+  C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_conversation_states.py:709: PydanticDeprecatedSince211: Accessing the 'model_fields' attribute on the instance is deprecated. Instead, you should access this attribute from the model class. Deprecated in Pydantic V2.11 to be removed in V3.0.
+    assert "client_id" not in env.repo.contacts[10].model_fields
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED services/orchestrator/tests/test_consentimiento_unico_cliente.py::test_linked_identity_on_other_channel_not_asked_notice
+FAILED services/orchestrator/tests/test_consentimiento_unico_cliente.py::test_not_asked_after_logout
+FAILED services/orchestrator/tests/test_consentimiento_unico_cliente.py::test_unlinked_identity_still_gets_notice
+FAILED services/orchestrator/tests/test_consentimiento_unico_cliente.py::test_login_still_required_for_covered_identity
+FAILED services/orchestrator/tests/test_identity_repository.py::test_postgres_identity_sql_is_parameterized
+5 failed, 4577 passed, 1 skipped, 2 warnings in 245.81s (0:04:05)
+[0;31m[FAIL][0m  Hay tests rotos (pytest salió con código 1)
+
+── 6. Modo del arnés ───────────────────────────────────
+[0;32m[OK][0m    Modo actual: nocturno
+
+── 7. Resumen ──────────────────────────────────────────
+[0;31m[FAIL][0m  Entorno NO está listo. Resuelve los errores antes de avanzar.

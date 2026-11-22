@@ -1,0 +1,1435 @@
+[harness] Delegando escritura de estrategias_asignacion a OpenCode con opencode-go/deepseek-v4.1-flash.
+[0m
+> implementer · deepseek-v4.1-flash
+[0m
+[0m→ [0mRead AGENTS.md
+I'll start by reading the required context files.
+[0m→ [0mRead progress/current.md
+[0m→ [0mRead feature_list.json
+[0m→ [0mRead docs/proyecto.md
+[0m→ [0mRead specs/estrategias_asignacion/requirements.md
+[0m→ [0mRead specs/estrategias_asignacion/design.md
+Now let me read the spec files and other docs.
+[0m→ [0mRead specs/estrategias_asignacion/tasks.md
+[0m→ [0mRead docs/architecture.md
+[0m→ [0mRead docs/conventions.md
+[0m→ [0mRead docs/verification.md
+Now let me read the docs and existing relevant code.
+[0m→ [0mRead docs/specs.md
+[0m✱ [0mGlob "services/handover/**/*.py"[90m 36 matches[0m
+[0m→ [0mRead contracts/lazaro_contracts/cases.py
+Let me explore the relevant existing code files.
+[0m→ [0mRead contracts/lazaro_contracts/__init__.py
+[0m→ [0mRead services/handover/handover/domain.py
+[0m→ [0mRead services/handover/handover/adapters/repository.py
+[0m→ [0mRead services/handover/handover/main.py
+[0m→ [0mRead services/handover/tests/test_auto_assign.py
+[0m→ [0mRead services/handover/tests/fakes.py
+[0m→ [0mRead services/orchestrator/orchestrator/config.py
+[0m→ [0mRead services/orchestrator/orchestrator/administration.py
+[0m✱ [0mGrep "_try_auto_assign|auto_assign|assignment_mode|assignment_strategy"[90m in services/orchestrator · 77 matches[0m
+[0m→ [0mRead services/orchestrator/orchestrator/adapters/handover.py
+[0m→ [0mRead services/orchestrator/orchestrator/domain.py[90m [offset=1730, limit=140][0m
+[0m→ [0mRead services/orchestrator/tests/test_auto_assign.py
+[0m→ [0mRead services/orchestrator/orchestrator/admin_routes.py[90m [limit=80, offset=230][0m
+[0m→ [0mRead contracts/tests/test_auto_assign.py
+[0m→ [0mRead contracts/examples/case_auto_assign_request.json
+[0m✱ [0mGrep "auto-assign"[90m in contracts/CONTRATOS.md · 10 matches[0m
+[0m→ [0mRead services/handover/tests/conftest.py
+[0m→ [0mRead services/handover/handover/config.py
+[0m→ [0mRead contracts/CONTRATOS.md[90m [offset=1395, limit=60][0m
+[0m✱ [0mGrep "ASSIGNMENT"[90m in .env.example · 17 matches[0m
+[0m✱ [0mGrep "ASSIGNMENT|assignment"[90m in render.yaml · 100 matches[0m
+[0m→ [0mRead render.yaml[90m [limit=30, offset=200][0m
+[0m→ [0mRead .env.example[90m [limit=20, offset=218][0m
+[0m→ [0mRead services/orchestrator/tests/conftest.py[90m [limit=80][0m
+[0m✱ [0mGrep "settings_update|validate_settings_form|def _save_settings|/admin/ajustes"[90m in services/orchestrator/orchestrator/admin_routes.py · 11 matches[0m
+[0m→ [0mRead services/orchestrator/orchestrator/admin_routes.py[90m [limit=80, offset=1280][0m
+[0m✱ [0mGrep "def operational_settings|def save_operational_settings"[90m in services/orchestrator/orchestrator/domain.py · 2 matches[0m
+[0m→ [0mRead services/orchestrator/orchestrator/domain.py[90m [limit=40, offset=4925][0m
+[0m→ [0mRead services/orchestrator/orchestrator/domain.py[90m [limit=25, offset=505][0m
+[0m✱ [0mGrep "auto_assign_least_loaded"[90m 10 matches[0m
+[0m✱ [0mGrep "auto_assigned"[90m in services/orchestrator/tests · 27 matches[0m
+[0m✱ [0mGrep "def save_app_settings|def get_app_settings"[90m in services/orchestrator/orchestrator/adapters/repository.py · 6 matches[0m
+[0m→ [0mRead services/orchestrator/orchestrator/adapters/repository.py[90m [limit=35, offset=3140][0m
+[0m→ [0mRead services/orchestrator/orchestrator/admin.py[90m [limit=40, offset=930][0m
+[0m
+[0m← [0mEdit contracts/lazaro_contracts/cases.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\cases.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\cases.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\cases.py
+@@ -19,9 +19,12 @@
+ HandoverReason = Literal[
+     "no_relevant_chunks", "user_request", "invalid_answer", "advisor_take"
+ ]
+ 
++# #69: estrategias de asignación automática que el orquestador puede pedir.
++ASSIGNMENT_STRATEGIES = ("por_carga", "round_robin")
+ 
++
+ class LastMessage(ContractModel):
+     """Un mensaje reciente de la conversación (S2)."""
+ 
+     role: Literal["user", "bot", "advisor"]
+
+[0m
+Now I have a complete picture. Let me start implementing, beginning with the contracts (T1–T3).
+[0m← [0mEdit contracts/lazaro_contracts/cases.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\cases.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\cases.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\cases.py
+@@ -124,11 +124,13 @@
+     case_id: Identifier
+ 
+ 
+ class CaseAutoAssignRequest(ContractModel):
+-    """Candidatos disponibles para asignar un caso por carga (#52)."""
++    """Candidatos disponibles y estrategia para asignar un caso (#52, #69)."""
+ 
+     candidate_ids: Annotated[list[Identifier], Field(min_length=1, max_length=200)]
++    # #69: `por_carga` conserva el comportamiento de #52.
++    strategy: str = Field(default="por_carga", pattern=r"^[a-z_]{1,32}$")
+ 
+ 
+ class CaseAutoAssignResponse(ContractModel):
+     """Respuesta 200 de POST /cases/{id}/auto-assign (#52)."""
+
+[0m
+[0m← [0mEdit contracts/lazaro_contracts/__init__.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\__init__.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\__init__.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\__init__.py
+@@ -1,8 +1,9 @@
+ """Contratos HTTP/JSON entre los servicios del chatbot (ver contracts/CONTRATOS.md)."""
+ from __future__ import annotations
+ 
+ from .cases import (
++    ASSIGNMENT_STRATEGIES,
+     AdvisorRosterEntry,
+     AdvisorRosterRole,
+     AdvisorRosterSyncRequest,
+     AdvisorRosterSyncResponse,
+
+[0m
+[0m← [0mEdit contracts/lazaro_contracts/__init__.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\__init__.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\__init__.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\lazaro_contracts\__init__.py
+@@ -218,8 +218,9 @@
+ "CaseAssignRequest",
+ "CaseAssignResponse",
+ "CaseAutoAssignRequest",
+ "CaseAutoAssignResponse",
++"ASSIGNMENT_STRATEGIES",
+ "CaseAuthorizeRequest",
+ "CaseAuthorizeResponse",
+ "CaseTransferRequest",
+ "CaseTransferResponse",
+
+[0m
+[0m← [0mWrite contracts/examples/case_auto_assign_request.json
+Wrote file successfully.
+[0m
+[0m← [0mEdit contracts/CONTRATOS.md
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\CONTRATOS.md
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\CONTRATOS.md
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\CONTRATOS.md
+@@ -1407,20 +1407,23 @@
+ La ruta `POST /cases/{case_id}/auto-assign` elige y asigna el caso en una sola
+ transacción serializada (S16). `{id}` es el `case_id` (identificador, 1–64 caracteres).
+ `candidate_ids` son los perfiles que el orquestador considera
+ disponibles; handover descarta los que no son asesores atendedores del roster.
+-Entre los válidos elige el de menor número de casos `assigned` y, a igual carga,
+-el menor `advisor_id` lexicográfico. Solo asigna si el caso sigue `open` y sin
+-asesor: si una persona lo asignó, respondió o cerró antes, no lo modifica y
+-responde `skipped`. Sin candidatos válidos responde `queued` sin modificar el
+-caso. Un caso cerrado responde `409` con `error` = `case_closed`. Exige
+-`X-Service-Token`.
++La `strategy` elige la regla de reparto: `por_carga` (por defecto) escoge el de
++menor número de casos `assigned` y, a igual carga, el menor `advisor_id`
++lexicográfico; `round_robin` rota al siguiente asesor en orden lexicográfico y
++vuelve al inicio. Una estrategia desconocida responde `422`. Solo asigna si el
++caso sigue `open` y sin asesor: si una persona lo asignó, respondió o cerró
++antes, no lo modifica y responde `skipped`. Sin candidatos válidos responde
++`queued` sin modificar el caso. Un caso cerrado responde `409` con `error` =
++`case_closed`. Exige `X-Service-Token`.
+ 
+ #### Request
+ 
+ | Campo | Tipo | Obligatorio | Descripción |
+ |-------|------|-------------|-------------|
+ | `candidate_ids` | lista de identificadores (1–200) | sí | perfiles atendedores disponibles, sin repetir |
++| `strategy` | `por_carga` \| `round_robin` | no | estrategia de asignación; por defecto `por_carga` (#69) |
+ 
+ #### Respuesta
+ 
+ `200 OK`
+
+[0m
+[0m← [0mEdit contracts/CONTRATOS.md
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\CONTRATOS.md
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\CONTRATOS.md
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\CONTRATOS.md
+@@ -1438,9 +1438,9 @@
+ 
+ | HTTP | error | Cuándo |
+ |------|-------|--------|
+ | 401 | unauthorized | falta `X-Service-Token` o no es válido |
+-| 422 | validation_error | el cuerpo no valida contra `CaseAutoAssignRequest` |
++| 422 | validation_error | el cuerpo no valida contra `CaseAutoAssignRequest` o la `strategy` no está registrada (#69) |
+ | 404 | not_found | el caso no existe |
+ | 409 | case_closed | el caso está cerrado |
+ | 503 | roster_out_of_sync | la generación del roster no coincide con la sincronizada (S12) |
+ | 500 | internal_error | error inesperado |
+
+[0m
+[0m← [0mEdit contracts/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
+@@ -1,5 +1,5 @@
+-"""Contrato de POST /cases/{id}/auto-assign (feature #52)."""
++"""Contrato de POST /cases/{id}/auto-assign (features #52 y #69)."""
+ from __future__ import annotations
+ 
+ import re
+ from pathlib import Path
+@@ -7,9 +7,13 @@
+ import pytest
+ from pydantic import ValidationError
+ 
+ import lazaro_contracts
+-from lazaro_contracts import CaseAutoAssignRequest, CaseAutoAssignResponse
++from lazaro_contracts import (
++    ASSIGNMENT_STRATEGIES,
++    CaseAutoAssignRequest,
++    CaseAutoAssignResponse,
++)
+ 
+ CONTRACTS_DIR = Path(__file__).resolve().parent.parent
+ DOC_PATH = CONTRACTS_DIR / "CONTRATOS.md"
+ EXAMPLES_DIR = CONTRACTS_DIR / "examples"
+
+[0m
+[0m← [0mEdit contracts/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
+@@ -68,13 +68,16 @@
+     assert "`{id}` es el `case_id` (identificador, 1–64 caracteres)" in section
+ 
+ 
+ def test_request_table_lists_candidate_ids() -> None:
+-    """R24: el request documenta candidate_ids (1–200)."""
++    """R24, R20: el request documenta candidate_ids (1–200) y strategy."""
+     table = _subsection("Request")
+     assert TABLE_HEADER in table
+     assert "candidate_ids" in _first_column_cells(table)
++    assert "strategy" in _first_column_cells(table)
+     assert "1–200" in table
++    assert "por_carga" in table
++    assert "round_robin" in table
+ 
+ 
+ def test_response_table_lists_status_case_id_and_advisor_id() -> None:
+     """R24: la respuesta documenta los tres campos del modelo."""
+
+[0m
+Now update the contract tests (T3):
+[0m← [0mEdit contracts/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\contracts\tests\test_auto_assign.py
+@@ -134,13 +134,14 @@
+         )
+ 
+ 
+ def test_examples_validate_against_their_models() -> None:
+-    """R24: los ejemplos del contrato validan contra sus modelos."""
++    """R24, R20: los ejemplos del contrato validan contra sus modelos."""
+     request = CaseAutoAssignRequest.model_validate_json(
+         (EXAMPLES_DIR / "case_auto_assign_request.json").read_text(encoding="utf-8")
+     )
+     assert request.candidate_ids == ["222222222", "333333333"]
++    assert request.strategy == "por_carga"
+     assigned = CaseAutoAssignResponse.model_validate_json(
+         (EXAMPLES_DIR / "case_auto_assign_response.json").read_text(encoding="utf-8")
+     )
+     assert assigned.status == "assigned"
+@@ -149,4 +150,27 @@
+             encoding="utf-8"
+         )
+     )
+     assert queued.status == "queued" and queued.advisor_id is None
++
++
++def test_strategy_defaults_to_por_carga_and_is_backwards_compatible() -> None:
++    """R20: sin `strategy` la petición sigue siendo válida y usa `por_carga`."""
++    request = CaseAutoAssignRequest(candidate_ids=["111", "222"])
++    assert request.strategy == "por_carga"
++    explicit = CaseAutoAssignRequest(candidate_ids=["111"], strategy="round_robin")
++    assert explicit.strategy == "round_robin"
++
++
++def test_strategy_rejects_invalid_format() -> None:
++    """R20: `strategy` solo admite minúsculas y guiones bajos (1–32)."""
++    for value in ("Round-Robin", "por carga", "", "a" * 33, "round.robin"):
++        with pytest.raises(ValidationError):
++            CaseAutoAssignRequest.model_validate(
++                {"candidate_ids": ["111"], "strategy": value}
++            )
++
++
++def test_assignment_strategies_constant_is_exported() -> None:
++    """R20: la constante de estrategias válidas se exporta desde lazaro_contracts."""
++    assert "ASSIGNMENT_STRATEGIES" in lazaro_contracts.__all__
++    assert ASSIGNMENT_STRATEGIES == ("por_carga", "round_robin")
+
+[0m
+[0m← [0mWrite services/handover/handover/strategies.py
+Wrote file successfully.
+[0m
+Now create the strategies module (T4):
+[0m← [0mEdit services/handover/handover/adapters/repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+@@ -18,8 +18,9 @@
+     HandoverRequestRecord,
+     Notification,
+     RequestResult,
+ )
++from ..strategies import ContextoAsignacion, EstrategiaAsignacion
+ 
+ 
+ class CaseRepository(Protocol):
+     def health_check(self, timeout_seconds: float) -> None:
+
+[0m
+[0m← [0mEdit services/handover/handover/adapters/repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+@@ -72,10 +72,14 @@
+ def add_denial(self, denial: Denial) -> None: ...
+ 
+ def assign_if_unassigned(self, case_id: str, advisor_id: str, at: datetime) -> bool: ...
+ 
+-def auto_assign_least_loaded(
+-    self, case_id: str, candidate_ids: list[str], at: datetime
++def auto_assign(
++    self,
++    case_id: str,
++    candidate_ids: list[str],
++    strategy: EstrategiaAsignacion,
++    at: datetime,
+ ) -> str | None: ...
+ 
+ def transfer_if_assigned_to(
+     self, case_id: str, from_id: str, to_id: str, at: datetime
+
+[0m
+[0m← [0mEdit services/handover/handover/adapters/repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+@@ -122,8 +122,9 @@
+ self.cases: dict[str, Case] = {}
+ self.notifications: list[Notification] = []
+ self.denials: list[Denial] = []
+ self.auto_assignments: list[AutoAssignment] = []
++self.pointers: dict[str, str] = {}
+ self.requests: list[HandoverRequestRecord] = []
+ self.timeout_claims: dict[str, datetime] = {}
+ self.privacy_purge_runs: list[dict[str, Any]] = []
+ self.health_checks: list[float] = []
+
+[0m
+Now migrate the repository (T5): Protocol, Fake, Postgres.
+[0m← [0mEdit services/handover/handover/adapters/repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+@@ -279,11 +279,16 @@
+         update={"status": "assigned", "advisor_id": advisor_id, "assigned_at": at}
+     )
+     return True
+ 
+-def auto_assign_least_loaded(
+-    self, case_id: str, candidate_ids: list[str], at: datetime
++def auto_assign(
++    self,
++    case_id: str,
++    candidate_ids: list[str],
++    strategy: EstrategiaAsignacion,
++    at: datetime,
+ ) -> str | None:
++    """R6-R11, R14: elige con la estrategia y escribe caso y puntero bajo un candado."""
+     with self._auto_assign_lock:
+         case = self.cases.get(case_id)
+         if case is None or case.status != "open" or case.advisor_id is not None:
+             return None
+@@ -297,18 +302,19 @@
+         loads: dict[str, int] = {}
+         for stored in self.cases.values():
+             if stored.status == "assigned" and stored.advisor_id is not None:
+                 loads[stored.advisor_id] = loads.get(stored.advisor_id, 0) + 1
+-        chosen = min(
+-            valid,
+-            key=lambda candidate_id: (loads.get(candidate_id, 0), candidate_id),
++        contexto = ContextoAsignacion(
++            cargas=loads, ultimo=self.pointers.get(strategy.nombre)
+         )
++        chosen = strategy.elegir(valid, contexto)
+         self.cases[case_id] = case.model_copy(
+             update={"status": "assigned", "advisor_id": chosen, "assigned_at": at}
+         )
+         self.auto_assignments.append(
+             AutoAssignment(case_id=case_id, advisor_id=chosen, reason="auto", at=at)
+         )
++        self.pointers[strategy.nombre] = chosen
+         return chosen
+ 
+ def transfer_if_assigned_to(
+     self, case_id: str, from_id: str, to_id: str, at: datetime
+
+[0m
+[0m← [0mEdit services/handover/handover/adapters/repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+@@ -501,8 +501,11 @@
+ "action TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
+ "CREATE TABLE IF NOT EXISTS handover_auto_assignments ("
+ "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
+ "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
++"CREATE TABLE IF NOT EXISTS handover_assignment_pointer ("
++"strategy TEXT PRIMARY KEY, last_advisor_id TEXT NOT NULL, "
++"updated_at TIMESTAMPTZ NOT NULL)",
+ "CREATE TABLE IF NOT EXISTS handover_requests ("
+ "id BIGSERIAL PRIMARY KEY, requested_case_id TEXT NOT NULL, case_id TEXT NULL, "
+ "contact_id TEXT NOT NULL, reason TEXT NOT NULL, received_at TIMESTAMPTZ NOT NULL, "
+ "result TEXT NOT NULL, advisors_configured INTEGER NOT NULL, "
+
+[0m
+[0m← [0mEdit services/handover/handover/adapters/repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\adapters\repository.py
+@@ -943,12 +943,16 @@
+         fetch=True,
+     )
+     return bool(rows)
+ 
+-def auto_assign_least_loaded(
+-    self, case_id: str, candidate_ids: list[str], at: datetime
++def auto_assign(
++    self,
++    case_id: str,
++    candidate_ids: list[str],
++    strategy: EstrategiaAsignacion,
++    at: datetime,
+ ) -> str | None:
+-    """R7-R9, R13, R14, R19: elige y escribe bajo un candado de transacción."""
++    """R6-R11, R14: elige y escribe caso y puntero bajo un candado de transacción."""
+     with self._lock:
+         conn = self._connection()
+         cur = conn.cursor()
+         try:
+@@ -971,12 +975,19 @@
+                 "WHERE status = %s AND advisor_id IS NOT NULL GROUP BY advisor_id",
+                 ("assigned",),
+             )
+             loads = {row[0]: int(row[1]) for row in cur.fetchall()}
+-            chosen = min(
+-                valid, key=lambda candidate_id: (loads.get(candidate_id, 0),
+-                                                 candidate_id)
++            cur.execute(
++                "SELECT last_advisor_id FROM handover_assignment_pointer "
++                "WHERE strategy = %s",
++                (strategy.nombre,),
+             )
++            pointer = cur.fetchall()
++            contexto = ContextoAsignacion(
++                cargas=loads,
++                ultimo=pointer[0][0] if pointer else None,
++            )
++            chosen = strategy.elegir(valid, contexto)
+ 
+             cur.execute(
+                 "UPDATE handover_cases SET status = %s, advisor_id = %s, "
+                 "assigned_at = %s WHERE case_id = %s AND status = %s "
+@@ -991,8 +1002,16 @@
+                 "INSERT INTO handover_auto_assignments "
+                 "(case_id, advisor_id, reason, at) VALUES (%s, %s, %s, %s)",
+                 (case_id, chosen, "auto", at),
+             )
++            cur.execute(
++                "INSERT INTO handover_assignment_pointer "
++                "(strategy, last_advisor_id, updated_at) VALUES (%s, %s, %s) "
++                "ON CONFLICT (strategy) DO UPDATE "
++                "SET last_advisor_id = EXCLUDED.last_advisor_id, "
++                "updated_at = EXCLUDED.updated_at",
++                (strategy.nombre, chosen, at),
++            )
+             conn.commit()
+             return chosen
+         except Exception:
+             conn.rollback()
+
+[0m
+[0m← [0mEdit services/handover/handover/domain.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\domain.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\domain.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\domain.py
+@@ -35,8 +35,9 @@
+ )
+ from pydantic import BaseModel
+ 
+ from .config import Settings
++from .strategies import obtener_estrategia
+ 
+ if TYPE_CHECKING:
+     from .adapters.gateway import GatewayClient
+     from .adapters.repository import CaseRepository
+
+[0m
+[0m← [0mEdit services/handover/handover/domain.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\domain.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\domain.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\domain.py
+@@ -534,9 +534,10 @@
+     req: CaseAutoAssignRequest,
+     settings: Settings,
+     adapters: Adapters,
+ ) -> CaseAutoAssignResponse:
+-    """R7-R9, R11, R13-R15, R19: elige por carga y asigna en una sola operación."""
++    """R4-R5, R10, R13-R14: resuelve la estrategia y asigna en una sola operación."""
++    strategy = obtener_estrategia(req.strategy)
+     repo = adapters.repository
+     case = repo.get_case(case_id)
+     if case is None:
+         raise CaseNotFound("El caso no existe.")
+@@ -546,9 +547,9 @@
+     candidates = _attending_candidates(req.candidate_ids, adapters)
+     if not candidates:
+         return CaseAutoAssignResponse(status="queued", case_id=case_id, advisor_id=None)
+ 
+-    chosen = repo.auto_assign_least_loaded(case_id, candidates, adapters.clock())
++    chosen = repo.auto_assign(case_id, candidates, strategy, adapters.clock())
+     if chosen is not None:
+         logger.info("case_auto_assigned case_id=%s", case_id)
+         return CaseAutoAssignResponse(
+             status="assigned", case_id=case_id, advisor_id=chosen
+
+[0m
+[0m← [0mEdit services/handover/handover/main.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\main.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\main.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\main.py
+@@ -67,8 +67,9 @@
+     sync_advisor_roster,
+     take_case,
+     transfer_case,
+ )
++from .strategies import UnknownStrategy
+ 
+ logger = logging.getLogger(__name__)
+ 
+ ROSTER_GENERATION_HEADER = "X-Advisor-Roster-Generation"
+
+[0m
+Now adapt handover domain and main (T6):
+[0m← [0mEdit services/handover/handover/main.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\main.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\main.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\main.py
+@@ -153,8 +153,13 @@
+ @app.exception_handler(DomainError)
+ async def handle_domain_error(request: Request, exc: DomainError):
+     return _error(exc.status_code, exc.code, str(exc) or exc.code)
+ 
++@app.exception_handler(UnknownStrategy)
++async def handle_unknown_strategy(request: Request, exc: UnknownStrategy):
++    """R5: una estrategia no registrada es un 422 sin tocar el caso."""
++    return _error(422, "validation_error", "La estrategia de asignación no es válida.")
++
+ @app.exception_handler(StarletteHTTPException)
+ async def handle_http_error(request: Request, exc: StarletteHTTPException):
+     if exc.status_code == 404:
+         code = "not_found"
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/config.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
+@@ -3,8 +3,9 @@
+ 
+ import json
+ import re
+ 
++from lazaro_contracts import ASSIGNMENT_STRATEGIES
+ from lazaro_contracts.production import (
+     ProductionConfigError,
+     normalize_service_url,
+     parse_app_env,
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/config.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
+@@ -313,8 +313,9 @@
+ business_hours_end: str = "21:00"
+ business_hours_days: str = "1,2,3,4,5,6,7"
+ business_hours_utc_offset_minutes: int = Field(default=-300, ge=-720, le=840)
+ assignment_mode: str = "manual"
++assignment_strategy: str = "por_carga"
+ expiry_notice_enabled: bool = True
+ expiry_notice_max_attempts: int = Field(default=3, ge=1, le=10)
+ expiry_notice_interval_seconds: int = Field(default=3600, ge=1)
+ expiry_notice_http_timeout_seconds: int = Field(default=120, ge=1)
+
+[0m
+Now orchestrator config (T7):
+[0m← [0mEdit services/orchestrator/orchestrator/config.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\config.py
+@@ -354,8 +354,18 @@
+     if text not in ASSIGNMENT_MODES:
+         raise ValueError("ASSIGNMENT_MODE debe ser manual o automatica")
+     return text
+ 
++@field_validator("assignment_strategy")
++@classmethod
++def _validate_assignment_strategy(cls, value: str) -> str:
++    text = value.strip()
++    if text not in ASSIGNMENT_STRATEGIES:
++        raise ValueError(
++            "ASSIGNMENT_STRATEGY debe ser por_carga o round_robin"
++        )
++    return text
++
+ @field_validator("business_hours_days")
+ @classmethod
+ def _validate_business_days(cls, value: str) -> str:
+     tokens = [token.strip() for token in value.split(",") if token.strip()]
+
+[0m
+[0m← [0mEdit .env.example
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\.env.example
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\.env.example
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\.env.example
+@@ -222,8 +222,10 @@
+ BUSINESS_HOURS_DAYS=1,2,3,4,5,6,7
+ BUSINESS_HOURS_UTC_OFFSET_MINUTES=-300
+ # asignación de casos (#52): manual (por defecto) | automatica; el panel la sobrescribe
+ ASSIGNMENT_MODE=manual
++# estrategia de asignación automática (#69): por_carga | round_robin; el panel la sobrescribe
++ASSIGNMENT_STRATEGY=por_carga
+ EXPIRY_NOTICE_ENABLED=true
+ EXPIRY_NOTICE_MAX_ATTEMPTS=3
+ ADMIN_TEXT_HISTORY_LIMIT=20
+ ADMIN_METRICS_UNANSWERED_LIMIT=20
+
+[0m
+[0m← [0mEdit render.yaml
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\render.yaml
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\render.yaml
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\render.yaml
+@@ -210,8 +210,11 @@
+   value: "-300"
+ # asignación de casos (#52): manual | automatica; el panel la sobrescribe
+ - key: ASSIGNMENT_MODE
+   value: "manual"
++# estrategia de asignación automática (#69): por_carga | round_robin
++- key: ASSIGNMENT_STRATEGY
++  value: "por_carga"
+ - key: EXPIRY_NOTICE_ENABLED
+   value: "true"
+ - key: EXPIRY_NOTICE_MAX_ATTEMPTS
+   value: "3"
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/administration.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+@@ -6,8 +6,10 @@
+ from dataclasses import dataclass
+ from datetime import datetime, time, timedelta
+ from typing import Literal, Sequence
+ 
++from lazaro_contracts import ASSIGNMENT_STRATEGIES
++
+ from .config import Settings
+ from .identity import POLICY_FIELDS, IdentityPolicy, resolve_identity_policy
+ 
+ logger = logging.getLogger(__name__)
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/administration.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+@@ -100,8 +100,16 @@
+         None,
+         "assignment_mode",
+         ("manual", "automatica"),
+     ),
++    SettingSpec(
++        "assignment.strategy",
++        "enum",
++        None,
++        None,
++        "assignment_strategy",
++        ASSIGNMENT_STRATEGIES,
++    ),
+ )
+ 
+ OPERATIONAL_SETTINGS_BY_KEY = {spec.key: spec for spec in OPERATIONAL_SETTINGS}
+ OPERATIONAL_PREFIXES = (
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/administration.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+@@ -137,8 +137,9 @@
+     hours: BusinessHours
+     suppression_deadline_business_days: int
+     suppression_due_soon_business_days: int
+     assignment_mode: str
++    assignment_strategy: str
+ 
+ 
+ def _default_value(spec: SettingSpec, settings: Settings) -> str:
+     value = getattr(settings, spec.default_attr, "")
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/administration.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\administration.py
+@@ -264,15 +264,20 @@
+     assignment_mode = valid.get(
+         "assignment.mode",
+         _default_value(OPERATIONAL_SETTINGS_BY_KEY["assignment.mode"], settings),
+     )
++    assignment_strategy = valid.get(
++        "assignment.strategy",
++        _default_value(OPERATIONAL_SETTINGS_BY_KEY["assignment.strategy"], settings),
++    )
+     return OperationalSettings(
+         identity=identity,
+         expiry_notice_enabled=expiry_enabled,
+         hours=hours,
+         suppression_deadline_business_days=deadline,
+         suppression_due_soon_business_days=due_soon,
+         assignment_mode=assignment_mode,
++        assignment_strategy=assignment_strategy,
+     )
+ 
+ 
+ def validate_settings_form(
+
+[0m
+Now the operational setting (T8):
+[0m← [0mEdit services/orchestrator/orchestrator/admin_routes.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\admin_routes.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\admin_routes.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\admin_routes.py
+@@ -261,8 +261,10 @@
+     if key == "suppression.deadline_business_days":
+         return str(operational.suppression_deadline_business_days)
+     if key == "assignment.mode":
+         return operational.assignment_mode
++    if key == "assignment.strategy":
++        return operational.assignment_strategy
+     return str(operational.suppression_due_soon_business_days)
+ 
+ 
+ def _default_setting_value(spec, settings: Settings) -> str:
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/domain.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\domain.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\domain.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\domain.py
+@@ -1768,16 +1768,20 @@
+     return sorted(available)
+ 
+ 
+ def _try_auto_assign(
+-    contact: Contact, case_id: str, settings: Settings, adapters: Adapters
++    contact: Contact,
++    case_id: str,
++    strategy: str,
++    settings: Settings,
++    adapters: Adapters,
+ ) -> None:
+-    """R6, R10, R12, R20: reparte por carga sin romper el flujo si handover falla."""
++    """R6, R10, R12, R18, R20: reparte con la estrategia sin romper si handover falla."""
+     candidate_ids = available_advisor_ids(settings, adapters)
+     if not candidate_ids:
+         return
+     try:
+-        response = adapters.handover.auto_assign(case_id, candidate_ids)
++        response = adapters.handover.auto_assign(case_id, candidate_ids, strategy)
+     except Exception:
+         logger.error("auto_assign_failed contact_id=%s case_id=%s", contact.id, case_id)
+         adapters.repository.add_event(
+             contact.id, "auto_assign_failed", f"case:{case_id}", adapters.clock()
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/domain.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\domain.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\domain.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\domain.py
+@@ -1843,9 +1843,15 @@
+         operational.hours.enabled
+         and not within_business_hours(now, operational.hours)
+     )
+ ):
+-    _try_auto_assign(contact, response.case_id, settings, adapters)
++    _try_auto_assign(
++        contact,
++        response.case_id,
++        operational.assignment_strategy,
++        settings,
++        adapters,
++    )
+ if ack and (reason == "user_request" or auto):
+     texts = conversation_texts(settings, adapters)
+     hours = operational.hours
+     if hours.enabled and not within_business_hours(now, hours):
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/adapters/handover.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+@@ -61,9 +61,9 @@
+ 
+ def try_assign(self, case_id: str, advisor_id: str) -> CaseAssignResponse: ...
+ 
+ def auto_assign(
+-    self, case_id: str, candidate_ids: list[str]
++    self, case_id: str, candidate_ids: list[str], strategy: str = "por_carga"
+ ) -> CaseAutoAssignResponse: ...
+ 
+ def authorize(
+     self, case_id: str, advisor_id: str, action: CaseAuthorizeAction
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/adapters/handover.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+@@ -195,12 +195,12 @@
+     logger.error("handover_assign_error code=%s", response.status_code)
+     raise ServiceUnavailable("Handover no disponible.")
+ 
+ def auto_assign(
+-    self, case_id: str, candidate_ids: list[str]
++    self, case_id: str, candidate_ids: list[str], strategy: str = "por_carga"
+ ) -> CaseAutoAssignResponse:
+     try:
+-        body = CaseAutoAssignRequest(candidate_ids=candidate_ids)
++        body = CaseAutoAssignRequest(candidate_ids=candidate_ids, strategy=strategy)
+         response = httpx.post(
+             f"{self._base_url}/cases/{quote(case_id, safe='')}/auto-assign",
+             content=body.model_dump_json(),
+             headers=self._headers(content_type=True),
+
+[0m
+[0m← [0mEdit services/orchestrator/orchestrator/adapters/handover.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+@@ -524,8 +524,9 @@
+ self.fail_sync = fail_sync
+ self.assigned: list[tuple[str, str]] = []
+ self.try_assigned: list[tuple[str, str]] = []
+ self.auto_assigned: list[tuple[str, tuple[str, ...]]] = []
++self.auto_assign_strategies: list[str] = []
+ self.authorized: list[tuple[str, str, str]] = []
+ self.listed: list[str] = []
+ self.listed_all: list[str] = []
+ self.listed_overview: list[str] = []
+
+[0m
+Now wire the strategy through the orchestrator domain and handover adapter (T9):
+[0m← [0mEdit services/orchestrator/orchestrator/adapters/handover.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\orchestrator\adapters\handover.py
+@@ -601,11 +601,12 @@
+         raise AuthorizationDenied(self.assign_error)
+     return CaseAssignResponse(status="assigned", case_id=case_id)
+ 
+ def auto_assign(
+-    self, case_id: str, candidate_ids: list[str]
++    self, case_id: str, candidate_ids: list[str], strategy: str = "por_carga"
+ ) -> CaseAutoAssignResponse:
+     self.auto_assigned.append((case_id, tuple(candidate_ids)))
++    self.auto_assign_strategies.append(strategy)
+     if self.fail_auto_assign:
+         raise ServiceUnavailable("Handover caído")
+     advisor_id = self.auto_assign_advisor_id
+     if advisor_id is None and self.auto_assign_status == "assigned":
+
+[0m
+[0m← [0mEdit services/handover/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+@@ -8,8 +8,9 @@
+ from lazaro_contracts import CaseAutoAssignRequest, ErrorResponse
+ 
+ from handover.adapters.repository import FakeCaseRepository, PostgresCaseRepository
+ from handover.domain import auto_assign_case
++from handover.strategies import obtener_estrategia
+ 
+ HEADERS = {"X-Service-Token": "svc-token"}
+ 
+ 
+
+[0m
+[0m← [0mEdit services/handover/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+@@ -107,9 +107,9 @@
+ 
+ class _LostToHuman(FakeCaseRepository):
+     """Simula una asignación humana entre la lectura y la escritura."""
+ 
+-    def auto_assign_least_loaded(self, case_id, candidate_ids, at):
++    def auto_assign(self, case_id, candidate_ids, strategy, at):
+         case = self.cases[case_id]
+         self.cases[case_id] = case.model_copy(
+             update={"status": "assigned", "advisor_id": "222", "assigned_at": at}
+         )
+
+[0m
+[0m← [0mEdit services/handover/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+@@ -189,8 +189,10 @@
+ if "SELECT profile_id FROM handover_advisors" in sql:
+     self._rows = [("111",), ("222",)]
+ elif "SELECT advisor_id, COUNT(*)" in sql:
+     self._rows = [("111", 1)]
++elif "SELECT last_advisor_id FROM handover_assignment_pointer" in sql:
++    self._rows = []
+ elif "UPDATE handover_cases SET status" in sql:
+     self._rows = [("case-1",)]
+ else:
+     self._rows = []
+
+[0m
+[0m← [0mEdit services/handover/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_auto_assign.py
+@@ -216,14 +216,16 @@
+         pass
+ 
+ 
+ def test_postgres_auto_assign_uses_lock_conditional_update_and_parameters():
+-    """R13, R14, R19: candado, UPDATE condicional e INSERT parametrizados."""
++    """R7, R13, R14: candado, UPDATE condicional e INSERT parametrizados."""
+     conn = _AutoAssignConn()
+     repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
+     at = datetime(2026, 1, 2, 3, 0, 0)
+ 
+-    chosen = repo.auto_assign_least_loaded("case-1", ["111", "222"], at)
++    chosen = repo.auto_assign(
++        "case-1", ["111", "222"], obtener_estrategia("por_carga"), at
++    )
+ 
+     assert chosen == "222"
+     statements = [
+         (sql, params)
+@@ -246,8 +248,16 @@
+         if "INSERT INTO handover_auto_assignments" in sql
+     ]
+     assert len(insert) == 1
+     assert "auto" in insert[0][1]
++    pointer = [
++        (sql, params)
++        for sql, params in statements
++        if "INSERT INTO handover_assignment_pointer" in sql
++    ]
++    assert len(pointer) == 1
++    assert "ON CONFLICT (strategy) DO UPDATE" in pointer[0][0]
++    assert pointer[0][1] == ("por_carga", "222", at)
+     for sql, params in statements:
+         assert "case-1" not in sql
+         assert sql.count("%s") == len(params), sql
+         assert not re.search(r"'[^']*'", sql), sql
+
+[0m
+Now migrate the existing handover tests (T11):
+[0m← [0mWrite services/handover/tests/test_strategies.py
+Wrote file successfully.
+[0m
+Now create the handover strategy tests (T10):
+[0m← [0mEdit services/handover/tests/test_strategies.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
+@@ -32,23 +32,8 @@
+         headers=HEADERS,
+     )
+ 
+ 
+-def _assign(env, case_id: str, strategy: str = "round_robin"):
+-    request = CaseAutoAssignRequest(
+-        candidate_ids=CANDIDATES, strategy=strategy
+-    )
+-    return (
+-        env.client.post(
+-            f"/cases/{case_id}/auto-assign",
+-            json=request.model_dump(),
+-            headers=HEADERS,
+-        )
+-        if False
+-        else _auto(env, case_id=case_id, strategy=strategy)
+-    )
+-
+-
+ def test_interfaz_estrategia_elige_entre_candidatos():
+     """R1: la interfaz expone `elegir(candidatos, contexto)` que devuelve un candidato."""
+     estrategia = obtener_estrategia("por_carga")
+     elegido = estrategia.elegir(
+
+[0m
+[0m← [0mEdit services/handover/tests/test_strategies.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
+@@ -4,8 +4,9 @@
+ from concurrent.futures import ThreadPoolExecutor
+ 
+ from lazaro_contracts import ASSIGNMENT_STRATEGIES, CaseAutoAssignRequest, ErrorResponse
+ 
++from handover.domain import auto_assign_case
+ from handover.strategies import (
+     ESTRATEGIAS,
+     ContextoAsignacion,
+     RoundRobin,
+
+[0m
+[0m← [0mEdit services/handover/tests/test_strategies.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\tests\test_strategies.py
+@@ -135,18 +135,14 @@
+     candidate_ids=CANDIDATES, strategy="round_robin"
+ )
+ 
+ def assign(case_id: str):
+-    return env.client.post(
+-        f"/cases/{case_id}/auto-assign",
+-        json=request.model_dump(),
+-        headers=HEADERS,
+-    )
++    return auto_assign_case(case_id, request, env.settings, env.adapters)
+ 
+ with ThreadPoolExecutor(max_workers=6) as pool:
+-    responses = list(pool.map(assign, case_ids))
++    results = list(pool.map(assign, case_ids))
+ 
+-assert [response.status_code for response in responses] == [200] * 6
++assert sorted(result.status for result in results) == ["assigned"] * 6
+ advisors = [env.repo.cases[case_id].advisor_id for case_id in case_ids]
+ counts = {advisor_id: advisors.count(advisor_id) for advisor_id in CANDIDATES}
+ assert counts == {"111": 2, "222": 2, "333": 2}
+ assert env.repo.pointers["round_robin"] in set(CANDIDATES)
+
+[0m
+[0m→ [0mRead services/orchestrator/tests/conftest.py[90m [limit=180, offset=80][0m
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -1,5 +1,5 @@
+-"""Asignación automática de casos por carga en el orquestador (feature #52)."""
++"""Asignación automática de casos en el orquestador (features #52 y #69)."""
+ from __future__ import annotations
+ 
+ from pathlib import Path
+ 
+
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -55,8 +55,16 @@
+         follow_redirects=False,
+     )
+ 
+ 
++def _save_strategy(env, strategy: str):
++    return env.client.post(
++        "/admin/ajustes",
++        data={"csrf_token": CSRF, "assignment.strategy": strategy},
++        follow_redirects=False,
++    )
++
++
+ # --- R2, R5: modo manual por defecto ------------------------------------------------
+ 
+ 
+ def test_default_mode_is_manual(env):
+
+[0m
+Now extend the orchestrator tests (T12):
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -76,18 +76,33 @@
+         encoding="utf-8"
+     )
+ 
+ 
++def test_default_strategy_is_por_carga(env):
++    """R16: sin valor guardado, la estrategia efectiva es `por_carga`."""
++    assert Settings().assignment_strategy == "por_carga"
++    assert env.settings.assignment_strategy == "por_carga"
++    assert (
++        operational_settings(env.settings, env.adapters).assignment_strategy
++        == "por_carga"
++    )
++    assert "ASSIGNMENT_STRATEGY=por_carga" in (ROOT / ".env.example").read_text(
++        encoding="utf-8"
++    )
++
++
+ def test_mode_manual_does_not_auto_assign(env, panel):
+-    """R5: en modo manual el escalamiento no invoca la asignación automática."""
++    """R19: en modo manual no se invoca ninguna estrategia de asignación."""
+     _advisor(env, panel, 701)
+     _set_mode(env, "manual")
++    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
+ 
+     response = _escalate(env)
+ 
+     assert response.status_code == 202
+     assert len(env.handover.requests) == 1
+     assert env.handover.auto_assigned == []
++    assert env.handover.auto_assign_strategies == []
+     assert _events(env, "auto_assigned") == []
+ 
+ 
+ # --- R1, R3, R4: ajuste del panel --------------------------------------------------
+
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -149,8 +149,60 @@
+     assert 'value="manual"' in page.text
+     assert 'value="automatica"' in page.text
+ 
+ 
++def test_admin_sets_assignment_strategy_applies_without_restart_and_audited(
++    admin_env, panel
++):
++    """R15: el panel guarda, audita y aplica la estrategia sin reiniciar."""
++    _advisor(admin_env, panel, 701)
++
++    response = _save_strategy(admin_env, "round_robin")
++
++    assert response.status_code == 303
++    assert (
++        operational_settings(admin_env.settings, admin_env.adapters).assignment_strategy
++        == "round_robin"
++    )
++    audit = [
++        row
++        for row in admin_env.repo.panel_audit
++        if row.action == "settings_update"
++    ]
++    assert any(
++        row.target == "assignment.strategy" and row.result == "ok" for row in audit
++    )
++
++
++def test_invalid_assignment_strategy_422(admin_env):
++    """R15: una estrategia fuera de la lista responde 422 y no cambia el valor."""
++    assert _save_strategy(admin_env, "por_carga").status_code == 303
++    response = _save_strategy(admin_env, "aleatoria")
++
++    assert response.status_code == 422
++    stored = admin_env.repo.get_app_settings(("assignment.",))
++    assert stored["assignment.strategy"] == "por_carga"
++
++
++def test_settings_page_offers_assignment_strategy(admin_env):
++    """R15: /admin/ajustes ofrece `assignment.strategy` con sus dos valores."""
++    page = admin_env.client.get("/admin/ajustes")
++    assert page.status_code == 200
++    assert "assignment.strategy" in page.text
++    assert 'value="por_carga"' in page.text
++    assert 'value="round_robin"' in page.text
++
++
++def test_invalid_stored_strategy_falls_back(env):
++    """R17: un valor guardado inválido cae al default `por_carga`."""
++    env.repo.save_app_settings({"assignment.strategy": "aleatoria"}, [])
++
++    assert (
++        operational_settings(env.settings, env.adapters).assignment_strategy
++        == "por_carga"
++    )
++
++
+ # --- R6, R10, R12: reparto, cola y fallo -------------------------------------------
+ 
+ 
+ def test_automatic_mode_requests_assignment_with_available_advisors(env, panel):
+
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -220,8 +220,9 @@
+     assert len(env.handover.auto_assigned) == 1
+     case_id, candidates = env.handover.auto_assigned[0]
+     assert case_id == "case-1"
+     assert candidates == ("701", "703")
++    assert env.handover.auto_assign_strategies == ["por_carga"]
+     assert _events(env, "auto_assigned") == ["case:case-1 advisor:701 reason:auto"]
+ 
+ 
+ def test_no_available_advisors_leaves_case_queued(env, panel):
+
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -257,29 +257,33 @@
+ # --- R16, R17, R18: exclusiones ----------------------------------------------------
+ 
+ 
+ def test_suppression_case_not_auto_assigned(env, panel):
+-    """R16: un caso creado por la herramienta de supresión no se asigna solo."""
++    """R12: un caso creado por la herramienta de supresión no se asigna solo."""
+     _advisor(env, panel, 701)
+     _set_mode(env, "automatica")
++    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
+ 
+     response = env.post(text="borrar mis datos", update_id=1)
+ 
+     assert response.status_code == 202
+     assert len(env.handover.requests) == 1
+     assert env.handover.auto_assigned == []
++    assert env.handover.auto_assign_strategies == []
+     assert _events(env, "auto_assigned") == []
+ 
+ 
+ def test_out_of_hours_case_not_auto_assigned(env, panel):
+-    """R17: fuera del horario de atención el caso sigue en cola con su aviso."""
++    """R12: fuera del horario de atención el caso sigue en cola con su aviso."""
+     _advisor(env, panel, 701)
+     _set_mode(env, "automatica", enabled=True)
++    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
+ 
+     _escalate(env)
+ 
+     assert len(env.handover.requests) == 1
+     assert env.handover.auto_assigned == []
++    assert env.handover.auto_assign_strategies == []
+     assert _events(env, "out_of_hours") == ["queued"]
+ 
+ 
+ class _ReusingHandover(FakeHandoverClient):
+
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_auto_assign.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_auto_assign.py
+@@ -201,8 +201,22 @@
+         == "por_carga"
+     )
+ 
+ 
++def test_strategy_change_applies_between_escalations(env, panel):
++    """R18: cada escalamiento lee la estrategia vigente sin reiniciar."""
++    _advisor(env, panel, 701)
++    env.repo.save_app_settings(
++        {"assignment.mode": "automatica", "assignment.strategy": "por_carga"}, []
++    )
++
++    _escalate(env, update_id=1)
++    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
++    _escalate(env, update_id=2)
++
++    assert env.handover.auto_assign_strategies == ["por_carga", "round_robin"]
++
++
+ # --- R6, R10, R12: reparto, cola y fallo -------------------------------------------
+ 
+ 
+ def test_automatic_mode_requests_assignment_with_available_advisors(env, panel):
+
+[0m
+[0m→ [0mRead contracts/lazaro_contracts/common.py
+[0m✱ [0mGrep "env.example|model_fields|ASSIGNMENT_MODE"[90m in services/orchestrator/tests · 56 matches[0m
+[0m✱ [0mGrep "ASSIGNMENT_STRATEGIES|ASSIGNMENT_STRATEGY"[90m 40 matches[0m
+[0m→ [0mRead services/orchestrator/tests/test_config.py[90m [limit=70, offset=170][0m
+[0m→ [0mRead services/orchestrator/tests/test_orchestrator_app.py[90m [limit=20, offset=278][0m
+[0m✱ [0mGrep "_handover\(|ConversationEvent.ESCALATED|_handle_.*advisor|def handle_message"[90m in services/orchestrator/orchestrator/domain.py · 17 matches[0m
+[0m→ [0mRead services/orchestrator/orchestrator/domain.py[90m [limit=60, offset=3050][0m
+[0m✱ [0mGrep "\.auto_assign\("[90m 8 matches[0m
+[0m✱ [0mGrep "assignment_strategy|assignment\.strategy"[90m in services/orchestrator · 32 matches[0m
+[0m→ [0mRead services/orchestrator/orchestrator/admin_routes.py[90m [limit=32, offset=238][0m
+[0m→ [0mRead services/orchestrator/orchestrator/administration.py[90m [limit=40, offset=258][0m
+[0m✱ [0mGrep "OPERATIONAL_SETTINGS|validate_settings_form|assignment\.mode|len\(.*deletes|settings_update"[90m in services/orchestrator/tests · 15 matches[0m
+[0m→ [0mRead services/orchestrator/tests/test_administration_pure.py[90m [limit=50, offset=70][0m
+[0m→ [0mRead services/orchestrator/tests/test_admin_settings.py[90m [limit=40, offset=100][0m
+[0m✱ [0mGrep "OperationalSettings\("[90m 2 matches[0m
+[0m✱ [0mGrep "_SCHEMA|assignment_pointer|auto_assign|handover_auto_assignments"[90m in services/handover/tests · 26 matches[0m
+[0m✱ [0mGrep "S16|auto-assign"[90m in contracts/tests · 2 matches[0m
+[0m→ [0mRead services/handover/tests/test_strategies.py
+[0m→ [0mRead services/handover/handover/strategies.py
+[0m→ [0mRead services/handover/handover/adapters/repository.py[90m [limit=55, offset=276][0m
+Let me review the key changed code sections for correctness.
+[0m→ [0mRead services/handover/handover/adapters/repository.py[90m [limit=75, offset=940][0m
+[0m
+[0m← [0mEdit services/handover/handover/strategies.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\strategies.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\strategies.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\handover\handover\strategies.py
+@@ -1,9 +1,9 @@
+ """Estrategias intercambiables de asignación automática de casos (#69)."""
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+-from typing import ClassVar, Mapping, Protocol, Sequence, Type, TypeVar
++from typing import ClassVar, Mapping, Protocol, Sequence, TypeVar
+ 
+ 
+ class UnknownStrategy(ValueError):
+     """El nombre no corresponde a ninguna estrategia registrada (R5)."""
+
+[0m
+Now update `tasks.md` and write the traceability file.
+[0m← [0mEdit specs/estrategias_asignacion/tasks.md
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\specs\estrategias_asignacion\tasks.md
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\specs\estrategias_asignacion\tasks.md
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\specs\estrategias_asignacion\tasks.md
+@@ -1,15 +1,16 @@
+ # Tasks — #69 estrategias_asignacion
+ 
+-- [ ] T1 — Añadir `strategy` a `CaseAutoAssignRequest` y la constante `ASSIGNMENT_STRATEGIES` en `contracts/lazaro_contracts/cases.py` y `__init__.py`. Cubre: R20.
+-- [ ] T2 — Documentar `strategy` en `contracts/CONTRATOS.md` y actualizar `contracts/examples/case_auto_assign_request.json`. Cubre: R20.
+-- [ ] T3 — Test de contrato: default `por_carga`, petición sin `strategy` válida, formato inválido rechazado, tabla de CONTRATOS lista `strategy` (`contracts/tests/test_auto_assign.py`). Cubre: R20.
+-- [ ] T4 — Crear `services/handover/handover/strategies.py` con `ContextoAsignacion`, `EstrategiaAsignacion`, registro, `registrar_estrategia`, `obtener_estrategia`, `UnknownStrategy`, `PorCarga` y `RoundRobin`. Cubre: R1, R2, R3, R4, R11.
+-- [ ] T5 — Migrar `auto_assign_least_loaded` a `auto_assign(..., strategy, at)` en el Protocol, `FakeCaseRepository` y el repositorio Postgres; añadir tabla `handover_assignment_pointer` y actualización del puntero en la misma transacción. Cubre: R6, R7, R8, R9, R10, R13, R14.
+-- [ ] T6 — Adaptar `auto_assign_case` en `handover/domain.py` y `post_auto_assign` en `main.py` (resolver estrategia, mapear `UnknownStrategy` a `422`). Cubre: R4, R5, R13, R14.
+-- [ ] T7 — Añadir `ASSIGNMENT_STRATEGY` a `config.py` (validador), `.env.example` y `render.yaml`. Cubre: R16.
+-- [ ] T8 — Añadir `SettingSpec` `assignment.strategy`, `OperationalSettings.assignment_strategy` y fallback con advertencia en `administration.py`; valor actual en `admin_routes.py`. Cubre: R15, R16, R17.
+-- [ ] T9 — Pasar `strategy` desde `_try_auto_assign` (`domain.py`) y en `adapters/handover.py` (Protocol, HTTP, Fake); conservar condiciones de modo, supresión y horario. Cubre: R12, R18, R19.
+-- [ ] T10 — Pruebas handover `services/handover/tests/test_strategies.py`: `test_por_carga_regression` (R2), `test_round_robin_reparte_en_orden_y_vuelve_al_inicio` (R3), `test_round_robin_salta_no_validos` (R10, R11), `test_puntero_persiste_y_no_cambia_si_skipped` (R6, R8), `test_round_robin_concurrente_sin_repetir` con hilos (R7, R9), `test_registro_sin_ramas_estrategia_nueva` con una clase de prueba registrada (R4), `test_registro_coincide_con_contrato` (R4), `test_estrategia_desconocida_422` (R5), `test_sin_candidatos_queued_sin_tocar_puntero` (R14), `test_caso_asignado_por_persona_skipped` (R13). Cubre: R1-R11, R13, R14.
+-- [ ] T11 — Migrar los tests existentes de handover que usan `auto_assign_least_loaded` a `auto_assign` con `por_carga`. Cubre: R2, R13.
+-- [ ] T12 — Pruebas orquestador en `services/orchestrator/tests/test_auto_assign.py`: ajuste guardable/auditado/default/inválido (R15-R17), cambio en caliente entre dos escalamientos envía estrategias distintas (R18), `manual` no invoca (R19), supresión y fuera de horario no invocan (R12). Cubre: R12, R15-R19.
+-- [ ] T13 — Ejecutar `./init.sh` y registrar la trazabilidad R→test en `progress/impl_estrategias_asignacion.md`. Cubre: R21.
++- [x] T1 — Añadir `strategy` a `CaseAutoAssignRequest` y la constante `ASSIGNMENT_STRATEGIES` en `contracts/lazaro_contracts/cases.py` y `__init__.py`. Cubre: R20.
++- [x] T2 — Documentar `strategy` en `contracts/CONTRATOS.md` y actualizar `contracts/examples/case_auto_assign_request.json`. Cubre: R20.
++- [x] T3 — Test de contrato: default `por_carga`, petición sin `strategy` válida, formato inválido rechazado, tabla de CONTRATOS lista `strategy` (`contracts/tests/test_auto_assign.py`). Cubre: R20.
++- [x] T4 — Crear `services/handover/handover/strategies.py` con `ContextoAsignacion`, `EstrategiaAsignacion`, registro, `registrar_estrategia`, `obtener_estrategia`, `UnknownStrategy`, `PorCarga` y `RoundRobin`. Cubre: R1, R2, R3, R4, R11.
++- [x] T5 — Migrar `auto_assign_least_loaded` a `auto_assign(..., strategy, at)` en el Protocol, `FakeCaseRepository` y el repositorio Postgres; añadir tabla `handover_assignment_pointer` y actualización del puntero en la misma transacción. Cubre: R6, R7, R8, R9, R10, R13, R14.
++- [x] T6 — Adaptar `auto_assign_case` en `handover/domain.py` y `post_auto_assign` en `main.py` (resolver estrategia, mapear `UnknownStrategy` a `422`). Cubre: R4, R5, R13, R14.
++- [x] T7 — Añadir `ASSIGNMENT_STRATEGY` a `config.py` (validador), `.env.example` y `render.yaml`. Cubre: R16.
++- [x] T8 — Añadir `SettingSpec` `assignment.strategy`, `OperationalSettings.assignment_strategy` y fallback con advertencia en `administration.py`; valor actual en `admin_routes.py`. Cubre: R15, R16, R17.
++- [x] T9 — Pasar `strategy` desde `_try_auto_assign` (`domain.py`) y en `adapters/handover.py` (Protocol, HTTP, Fake); conservar condiciones de modo, supresión y horario. Cubre: R12, R18, R19.
++- [x] T10 — Pruebas handover `services/handover/tests/test_strategies.py`: `test_por_carga_regression` (R2), `test_round_robin_reparte_en_orden_y_vuelve_al_inicio` (R3), `test_round_robin_salta_no_validos` (R10, R11), `test_puntero_persiste_y_no_cambia_si_skipped` (R6, R8), `test_round_robin_concurrente_sin_repetir` con hilos (R7, R9), `test_registro_sin_ramas_estrategia_nueva` con una clase de prueba registrada (R4), `test_registro_coincide_con_contrato` (R4), `test_estrategia_desconocida_422` (R5), `test_sin_candidatos_queued_sin_tocar_puntero` (R14), `test_caso_asignado_por_persona_skipped` (R13). Cubre: R1-R11, R13, R14.
++- [x] T11 — Migrar los tests existentes de handover que usan `auto_assign_least_loaded` a `auto_assign` con `por_carga`. Cubre: R2, R13.
++- [x] T12 — Pruebas orquestador en `services/orchestrator/tests/test_auto_assign.py`: ajuste guardable/auditado/default/inválido (R15-R17), cambio en caliente entre dos escalamientos envía estrategias distintas (R18), `manual` no invoca (R19), supresión y fuera de horario no invocan (R12). Cubre: R12, R15-R19.
++- [ ] T13 — Ejecutar `./init.sh` y registrar la trazabilidad R→test en `progress/impl_estrategias_asignacion.md`. Cubre: R21. (trazabilidad registrada; `./init.sh` lo ejecuta Claude al cerrar la sesión del implementer, que no tiene shell)
++
+
+[0m
+[0m→ [0mRead progress/impl_contrato_canal_abierto.md
+[0m
+[0m← [0mWrite progress/impl_estrategias_asignacion.md
+Wrote file successfully.
+[0m
+[0m→ [0mRead services/orchestrator/tests/test_auto_assign.py[90m [limit=70, offset=45][0m
+[0m→ [0mRead services/orchestrator/orchestrator/config.py[90m [limit=18, offset=350][0m
+Let me do a final review of the modified orchestrator tests and config.
+[0m→ [0mRead services/orchestrator/orchestrator/domain.py[90m [limit=30, offset=1771][0m
+[0m→ [0mRead services/orchestrator/orchestrator/config.py[90m [limit=18][0m
+[0m→ [0mRead services/handover/handover/adapters/repository.py[90m [limit=20, offset=70][0m
+[0m→ [0mRead services/handover/handover/adapters/repository.py[90m [limit=18, offset=490][0m
+[0m→ [0mRead render.yaml[90m [limit=10, offset=209][0m
+[0m→ [0mRead .env.example[90m [limit=6, offset=223][0m
+[0m✱ [0mGrep "auto_assign_least_loaded"[90m 0 matches[0m
+[0m✱ [0mGrep "def auto_assign\("[90m 7 matches[0m
+done -> progress/impl_estrategias_asignacion.md
+exit=0

@@ -1,0 +1,117 @@
+[harness] Delegando escritura de consentimiento_unico_por_cliente a OpenCode con opencode-go/deepseek-v4.1-flash.
+[0m
+> implementer · deepseek-v4.1-flash
+[0m
+[0m→ [0mRead progress/current.md
+[0m→ [0mRead feature_list.json
+[0m→ [0mRead progress/impl_consentimiento_unico_por_cliente.md
+[0m→ [0mRead specs/consentimiento_unico_por_cliente/requirements.md
+[0m→ [0mRead specs/consentimiento_unico_por_cliente/design.md
+[0m→ [0mRead specs/consentimiento_unico_por_cliente/tasks.md
+[0m→ [0mRead docs/proyecto.md
+[0m→ [0mRead docs/architecture.md
+[0m→ [0mRead docs/conventions.md
+[0m→ [0mRead docs/verification.md
+[0m→ [0mRead docs/specs.md
+[0m→ [0mRead contracts/CONTRATOS.md
+[0m→ [0mRead .opencode/agents/implementer.md
+[0m→ [0mRead services/orchestrator/tests/test_consentimiento_unico_cliente.py
+[0m→ [0mRead services/orchestrator/tests/test_identity_link.py
+[0m→ [0mRead services/orchestrator/tests/test_identity_repository.py
+[0m→ [0mRead progress/init_72.log
+[0m✱ [0mGrep "def create_client|def login_client|def _fake_scrypt_hash|def hash_password_scrypt|def get_client_credentials_by_username"[90m in services/orchestrator · 11 matches[0m
+[0m✱ [0mGrep "create_client\(|hash_password_scrypt\("[90m in services/orchestrator/tests · 14 matches[0m
+[0m→ [0mRead services/orchestrator/tests/test_identity_login.py[90m [limit=80][0m
+[0m→ [0mRead services/orchestrator/orchestrator/domain.py[90m [offset=1598, limit=70][0m
+[0m→ [0mRead services/orchestrator/orchestrator/adapters/repository.py[90m [limit=40, offset=460][0m
+[0m→ [0mRead services/orchestrator/orchestrator/adapters/repository.py[90m [limit=40, offset=2770][0m
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_consentimiento_unico_cliente.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_consentimiento_unico_cliente.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_consentimiento_unico_cliente.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_consentimiento_unico_cliente.py
+@@ -80,15 +80,21 @@
+         NOW,
+     )
+ 
+ 
++def _ensure_client(env, username: str = "cliente1"):
++    if env.repo.get_client_credentials_by_username(username) is None:
++        _client(env, username)
++
++
+ def _login_contact(
+     env,
+     channel: str = "telegram",
+     user: str = "10",
+     chat: str = "100",
+     username: str = "cliente1",
+ ):
++    _ensure_client(env, username)
+     contact, token = _link(env, channel, user, chat)
+     _accept_evidence(env, channel, user)
+     outcome = _login(env, token, username)
+     assert outcome.status == "ok"
+
+[0m
+[0m← [0mEdit services/orchestrator/tests/test_identity_repository.py
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_identity_repository.py
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_identity_repository.py
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\services\orchestrator\tests\test_identity_repository.py
+@@ -235,18 +235,18 @@
+         "postgresql://x", connect=lambda: Conn(), new_id=lambda: "p1"
+     )
+     repo.add_identity_audit("p1", "c1", "login", "vigente", NOW)
+     repo.record_identity_login_failure(
+-        "ana", "1.1.1.1", NOW, NOW - timedelta(minutes=15)
++        "usuario-x", "1.1.1.1", NOW, NOW - timedelta(minutes=15)
+     )
+     repo.get_login_link("h1", NOW)
+ 
+     joined = " ".join(sql for sql, _ in statements)
+     assert "identity_audit" in joined
+     assert "identity_login_attempts" in joined
+     assert "login_links" in joined
+     assert "%s" in joined
+-    assert "ana" not in joined
++    assert "usuario-x" not in joined
+ 
+ 
+ def test_postgres_start_session_only_maps_unique_violation_to_conflict():
+     """R27: solo el 23505 es conflicto; otros errores de BD se propagan."""
+
+[0m
+[0m→ [0mRead services/orchestrator/orchestrator/adapters/repository.py[90m [limit=20, offset=2809][0m
+[0m→ [0mRead services/orchestrator/tests/test_consentimiento_unico_cliente.py[90m [limit=20, offset=84][0m
+[0m✱ [0mGrep "_login_contact\("[90m in services/orchestrator/tests/test_consentimiento_unico_cliente.py · 8 matches[0m
+[0m
+[0m← [0mEdit progress/impl_consentimiento_unico_por_cliente.md
+Index: C:\Users\Wilso\proyectos\chatbot-lazaro\progress\impl_consentimiento_unico_por_cliente.md
+===================================================================
+--- C:\Users\Wilso\proyectos\chatbot-lazaro\progress\impl_consentimiento_unico_por_cliente.md
++++ C:\Users\Wilso\proyectos\chatbot-lazaro\progress\impl_consentimiento_unico_por_cliente.md
+@@ -52,8 +52,18 @@
+   `test_memory_suppression.py`, `test_identity_link.py` (intención intacta salvo
+   las claves nuevas exigidas en los conteos de supresión).
+ - R27 → `contracts/tests/test_consentimiento_unico_doc.py::test_contratos_documenta_consentimiento_por_cliente`
+ 
++## Corrección (intento 2)
++
++- `test_consentimiento_unico_cliente.py`: `_login_contact` ahora asegura la
++  credencial con `_ensure_client` (crea `cliente1`/`cliente2` con
++  `create_client`, que hashea `clave-segura-123` con `password_scrypt_n`) solo
++  si el usuario aún no existe; los tests que ya creaban el cliente no duplican.
++- `test_identity_repository.py::test_postgres_identity_sql_is_parameterized`:
++  se usa el usuario `usuario-x` en lugar de `ana` para que la aserción no
++  choque con la subcadena de `canal_id` del nuevo DDL.
++
+ ## Fallo de init.sh (intento 1) - corregir
+ 
+ 5 tests fallan (4577 pasan):
+ 1. `test_consentimiento_unico_cliente.py`: `test_linked_identity_on_other_channel_not_asked_notice`,
+
+[0m
+[0m→ [0mRead progress/impl_consentimiento_unico_por_cliente.md[90m [offset=50, limit=30][0m
+done -> progress/impl_consentimiento_unico_por_cliente.md

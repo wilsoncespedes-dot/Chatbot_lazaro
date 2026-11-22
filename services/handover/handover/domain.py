@@ -23,6 +23,8 @@ from lazaro_contracts import (
     CaseListResponse,
     CaseReassignRequest,
     CaseReassignResponse,
+    CaseTakeRequest,
+    CaseTakeResponse,
     CaseTransferRequest,
     CaseTransferResponse,
     CheckTimeoutsResponse,
@@ -34,6 +36,7 @@ from lazaro_contracts import (
 from pydantic import BaseModel
 
 from .config import Settings
+from .strategies import obtener_estrategia
 
 if TYPE_CHECKING:
     from .adapters.gateway import GatewayClient
@@ -290,6 +293,58 @@ def list_all_cases(
     return CaseListResponse(items)
 
 
+def list_overview(
+    advisor_id: str, settings: Settings, adapters: Adapters
+) -> CaseListResponse:
+    """#68 R39: casos no cerrados, sin acciones, para asesores registrados."""
+    if not is_registered_advisor(advisor_id, adapters):
+        logger.info("cases_overview_listed count=0")
+        return CaseListResponse([])
+    cases = [
+        case
+        for case in adapters.repository.list_all_cases(settings.case_list_limit)
+        if case.status != "closed"
+    ]
+    items = [
+        CaseListItem(
+            case_id=case.case_id,
+            status=case.status,
+            created_at=case.created_at,
+            actions=[],
+            advisor_id=case.advisor_id,
+        )
+        for case in cases
+    ]
+    logger.info("cases_overview_listed count=%d", len(items))
+    return CaseListResponse(items)
+
+
+def take_case(
+    req: CaseTakeRequest, settings: Settings, adapters: Adapters
+) -> CaseTakeResponse:
+    """#68 R38-R41: crea o asigna el caso abierto del contacto sin enviar avisos."""
+    if not is_registered_advisor(req.advisor_id, adapters):
+        _deny(req.case_id, req.advisor_id, "assign", adapters)
+    now = adapters.clock()
+    case = Case(
+        case_id=req.case_id,
+        contact_id=req.contact_id,
+        chat_id=req.chat_id,
+        reason="advisor_take",
+        status="assigned",
+        advisor_id=req.advisor_id,
+        last_messages=list(req.last_messages),
+        created_at=now,
+        assigned_at=now,
+    )
+    result = adapters.repository.take_for_contact(case, req.advisor_id, now)
+    if result is None:
+        raise CaseChanged("El caso cambió mientras se tomaba la conversación.")
+    case_id, created = result
+    logger.info("conversation_taken created=%s", created)
+    return CaseTakeResponse(status="taken", case_id=case_id, created=created)
+
+
 def _deny(
     case_id: str, advisor_id: str, action: DenialAction, adapters: Adapters
 ) -> NoReturn:
@@ -480,7 +535,8 @@ def auto_assign_case(
     settings: Settings,
     adapters: Adapters,
 ) -> CaseAutoAssignResponse:
-    """R7-R9, R11, R13-R15, R19: elige por carga y asigna en una sola operación."""
+    """R4-R5, R10, R13-R14: resuelve la estrategia y asigna en una sola operación."""
+    strategy = obtener_estrategia(req.strategy)
     repo = adapters.repository
     case = repo.get_case(case_id)
     if case is None:
@@ -492,7 +548,7 @@ def auto_assign_case(
     if not candidates:
         return CaseAutoAssignResponse(status="queued", case_id=case_id, advisor_id=None)
 
-    chosen = repo.auto_assign_least_loaded(case_id, candidates, adapters.clock())
+    chosen = repo.auto_assign(case_id, candidates, strategy, adapters.clock())
     if chosen is not None:
         logger.info("case_auto_assigned case_id=%s", case_id)
         return CaseAutoAssignResponse(

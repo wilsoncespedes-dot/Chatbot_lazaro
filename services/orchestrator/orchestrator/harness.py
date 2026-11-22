@@ -14,6 +14,7 @@ from .states import ConversationState
 ToolName = Literal[
     "buscar_base_conocimiento",
     "consultar_mis_datos",
+    "consultar_herramientas_mcp",
     "escalar_a_asesor",
     "crear_solicitud_supresion",
     "enviar_link_inicio_sesion",
@@ -24,6 +25,7 @@ TOOL_NAMES: frozenset[str] = frozenset(
     {
         "buscar_base_conocimiento",
         "consultar_mis_datos",
+        "consultar_herramientas_mcp",
         "escalar_a_asesor",
         "crear_solicitud_supresion",
         "enviar_link_inicio_sesion",
@@ -46,6 +48,7 @@ TOOL_MATRIX: Mapping[ConversationState, frozenset[ToolName]] = MappingProxyType(
             {
                 "buscar_base_conocimiento",
                 "consultar_mis_datos",
+                "consultar_herramientas_mcp",
                 "escalar_a_asesor",
                 "crear_solicitud_supresion",
                 "cerrar_sesion",
@@ -65,10 +68,15 @@ TOOL_MATRIX: Mapping[ConversationState, frozenset[ToolName]] = MappingProxyType(
 _TOOL_DESCRIPTIONS: Mapping[str, str] = MappingProxyType(
     {
         "buscar_base_conocimiento": (
-            "Busca la respuesta en los manuales y responde con citas verificadas."
+            "Busca la respuesta en los manuales y responde con citas verificadas; "
+            "args motivo purchase_intent cuando el cliente muestra intención de compra."
         ),
         "consultar_mis_datos": (
             "Consulta los datos propios del cliente autenticado mediante vistas seguras."
+        ),
+        "consultar_herramientas_mcp": (
+            "Consulta las herramientas MCP de solo lectura (manuales y ofertas de "
+            "demostración) y responde con sus resultados."
         ),
         "escalar_a_asesor": (
             "Pasa la conversación a un asesor humano; args motivo user_request o "
@@ -112,6 +120,7 @@ def default_tool(state: ConversationState) -> ToolName | None:
 class RouterDecision:
     tool: ToolName
     args: Mapping[str, str]
+    purchase_intent: bool = False
 
 
 class RouterInvalid(Exception):
@@ -127,9 +136,13 @@ def _neutralize_tag(text: str) -> str:
     return re.sub(r"</\s*estado\s*>", "[/estado]", text, flags=re.IGNORECASE)
 
 
-def build_router_prompt(state: ConversationState, text: str) -> tuple[str, str]:
+def build_router_prompt(
+    state: ConversationState, text: str, mcp_enabled: bool = True
+) -> tuple[str, str]:
     """R15, R17: prompt con solo las herramientas del estado y el mensaje como dato."""
     allowed = sorted(TOOL_MATRIX[state])
+    if not mcp_enabled:
+        allowed = [name for name in allowed if name != "consultar_herramientas_mcp"]
     lines = [HARNESS_ROUTER_PROMPT, "", "Herramientas permitidas:"]
     for name in allowed:
         lines.append(f"- {name}: {_TOOL_DESCRIPTIONS[name]}")
@@ -157,6 +170,11 @@ def parse_router_answer(raw: str) -> RouterDecision:
             "user_request",
             "frustration",
         ):
+            raise RouterInvalid("invalid_args")
+    elif tool == "buscar_base_conocimiento":
+        if args == {"motivo": "purchase_intent"}:
+            return RouterDecision(tool=tool, args={}, purchase_intent=True)
+        if args:
             raise RouterInvalid("invalid_args")
     elif args:
         raise RouterInvalid("invalid_args")

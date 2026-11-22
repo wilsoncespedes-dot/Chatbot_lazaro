@@ -1,4 +1,4 @@
-"""Asignación automática de casos por carga en el orquestador (feature #52)."""
+"""Asignación automática de casos en el orquestador (features #52 y #69)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -56,6 +56,14 @@ def _save_mode(env, mode: str):
     )
 
 
+def _save_strategy(env, strategy: str):
+    return env.client.post(
+        "/admin/ajustes",
+        data={"csrf_token": CSRF, "assignment.strategy": strategy},
+        follow_redirects=False,
+    )
+
+
 # --- R2, R5: modo manual por defecto ------------------------------------------------
 
 
@@ -69,16 +77,31 @@ def test_default_mode_is_manual(env):
     )
 
 
+def test_default_strategy_is_por_carga(env):
+    """R16: sin valor guardado, la estrategia efectiva es `por_carga`."""
+    assert Settings().assignment_strategy == "por_carga"
+    assert env.settings.assignment_strategy == "por_carga"
+    assert (
+        operational_settings(env.settings, env.adapters).assignment_strategy
+        == "por_carga"
+    )
+    assert "ASSIGNMENT_STRATEGY=por_carga" in (ROOT / ".env.example").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_mode_manual_does_not_auto_assign(env, panel):
-    """R5: en modo manual el escalamiento no invoca la asignación automática."""
+    """R19: en modo manual no se invoca ninguna estrategia de asignación."""
     _advisor(env, panel, 701)
     _set_mode(env, "manual")
+    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
 
     response = _escalate(env)
 
     assert response.status_code == 202
     assert len(env.handover.requests) == 1
     assert env.handover.auto_assigned == []
+    assert env.handover.auto_assign_strategies == []
     assert _events(env, "auto_assigned") == []
 
 
@@ -127,6 +150,72 @@ def test_settings_page_offers_assignment_mode(admin_env):
     assert 'value="automatica"' in page.text
 
 
+def test_admin_sets_assignment_strategy_applies_without_restart_and_audited(
+    admin_env, panel
+):
+    """R15: el panel guarda, audita y aplica la estrategia sin reiniciar."""
+    _advisor(admin_env, panel, 701)
+
+    response = _save_strategy(admin_env, "round_robin")
+
+    assert response.status_code == 303
+    assert (
+        operational_settings(admin_env.settings, admin_env.adapters).assignment_strategy
+        == "round_robin"
+    )
+    audit = [
+        row
+        for row in admin_env.repo.panel_audit
+        if row.action == "settings_update"
+    ]
+    assert any(
+        row.target == "assignment.strategy" and row.result == "ok" for row in audit
+    )
+
+
+def test_invalid_assignment_strategy_422(admin_env):
+    """R15: una estrategia fuera de la lista responde 422 y no cambia el valor."""
+    assert _save_strategy(admin_env, "por_carga").status_code == 303
+    response = _save_strategy(admin_env, "aleatoria")
+
+    assert response.status_code == 422
+    stored = admin_env.repo.get_app_settings(("assignment.",))
+    assert stored["assignment.strategy"] == "por_carga"
+
+
+def test_settings_page_offers_assignment_strategy(admin_env):
+    """R15: /admin/ajustes ofrece `assignment.strategy` con sus dos valores."""
+    page = admin_env.client.get("/admin/ajustes")
+    assert page.status_code == 200
+    assert "assignment.strategy" in page.text
+    assert 'value="por_carga"' in page.text
+    assert 'value="round_robin"' in page.text
+
+
+def test_invalid_stored_strategy_falls_back(env):
+    """R17: un valor guardado inválido cae al default `por_carga`."""
+    env.repo.save_app_settings({"assignment.strategy": "aleatoria"}, [])
+
+    assert (
+        operational_settings(env.settings, env.adapters).assignment_strategy
+        == "por_carga"
+    )
+
+
+def test_strategy_change_applies_between_escalations(env, panel):
+    """R18: cada escalamiento lee la estrategia vigente sin reiniciar."""
+    _advisor(env, panel, 701)
+    env.repo.save_app_settings(
+        {"assignment.mode": "automatica", "assignment.strategy": "por_carga"}, []
+    )
+
+    _escalate(env, update_id=1)
+    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
+    _escalate(env, update_id=2)
+
+    assert env.handover.auto_assign_strategies == ["por_carga", "round_robin"]
+
+
 # --- R6, R10, R12: reparto, cola y fallo -------------------------------------------
 
 
@@ -146,6 +235,7 @@ def test_automatic_mode_requests_assignment_with_available_advisors(env, panel):
     case_id, candidates = env.handover.auto_assigned[0]
     assert case_id == "case-1"
     assert candidates == ("701", "703")
+    assert env.handover.auto_assign_strategies == ["por_carga"]
     assert _events(env, "auto_assigned") == ["case:case-1 advisor:701 reason:auto"]
 
 
@@ -182,27 +272,31 @@ def test_auto_assign_failure_keeps_case_queued(env, panel):
 
 
 def test_suppression_case_not_auto_assigned(env, panel):
-    """R16: un caso creado por la herramienta de supresión no se asigna solo."""
+    """R12: un caso creado por la herramienta de supresión no se asigna solo."""
     _advisor(env, panel, 701)
     _set_mode(env, "automatica")
+    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
 
     response = env.post(text="borrar mis datos", update_id=1)
 
     assert response.status_code == 202
     assert len(env.handover.requests) == 1
     assert env.handover.auto_assigned == []
+    assert env.handover.auto_assign_strategies == []
     assert _events(env, "auto_assigned") == []
 
 
 def test_out_of_hours_case_not_auto_assigned(env, panel):
-    """R17: fuera del horario de atención el caso sigue en cola con su aviso."""
+    """R12: fuera del horario de atención el caso sigue en cola con su aviso."""
     _advisor(env, panel, 701)
     _set_mode(env, "automatica", enabled=True)
+    env.repo.save_app_settings({"assignment.strategy": "round_robin"}, [])
 
     _escalate(env)
 
     assert len(env.handover.requests) == 1
     assert env.handover.auto_assigned == []
+    assert env.handover.auto_assign_strategies == []
     assert _events(env, "out_of_hours") == ["queued"]
 
 

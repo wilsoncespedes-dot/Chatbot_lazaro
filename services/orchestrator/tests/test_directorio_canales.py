@@ -134,7 +134,12 @@ def test_list_policies_orders_active_first():
 
 
 def test_post_messages_answers_upstream_error_when_directory_is_down(env):
-    """R18: sin directorio, POST /messages responde upstream_error y no encola."""
+    """R18: sin directorio, una posible decisión de consentimiento falla cerrado.
+
+    #73 R32 permite degradar el saludo de primer contacto sin lista; cuando el
+    texto podría ser la frase de aceptación o rechazo no se puede arriesgar la
+    evidencia, así que se responde upstream_error y no se encola.
+    """
     env.adapters.channels = FakeChannelDirectory(fail=True)
     response = env.client.post(
         "/messages",
@@ -144,7 +149,7 @@ def test_post_messages_answers_upstream_error_when_directory_is_down(env):
             "external_chat_id": "u-1",
             "external_message_id": "m-1",
             "kind": "text",
-            "text": "Hola",
+            "text": env.settings.consent_accept_phrase,
             "received_at": "2026-01-02T03:04:00+00:00",
         },
         headers={"X-Service-Token": TOKEN},

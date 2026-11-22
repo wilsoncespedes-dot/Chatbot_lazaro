@@ -9,6 +9,7 @@ from lazaro_contracts import CaseAutoAssignRequest, ErrorResponse
 
 from handover.adapters.repository import FakeCaseRepository, PostgresCaseRepository
 from handover.domain import auto_assign_case
+from handover.strategies import obtener_estrategia
 
 HEADERS = {"X-Service-Token": "svc-token"}
 
@@ -107,7 +108,7 @@ def test_auto_assign_concurrent_no_double_assignment(env):
 class _LostToHuman(FakeCaseRepository):
     """Simula una asignación humana entre la lectura y la escritura."""
 
-    def auto_assign_least_loaded(self, case_id, candidate_ids, at):
+    def auto_assign(self, case_id, candidate_ids, strategy, at):
         case = self.cases[case_id]
         self.cases[case_id] = case.model_copy(
             update={"status": "assigned", "advisor_id": "222", "assigned_at": at}
@@ -189,6 +190,8 @@ class _AutoAssignCursor:
             self._rows = [("111",), ("222",)]
         elif "SELECT advisor_id, COUNT(*)" in sql:
             self._rows = [("111", 1)]
+        elif "SELECT last_advisor_id FROM handover_assignment_pointer" in sql:
+            self._rows = []
         elif "UPDATE handover_cases SET status" in sql:
             self._rows = [("case-1",)]
         else:
@@ -214,12 +217,14 @@ class _AutoAssignConn:
 
 
 def test_postgres_auto_assign_uses_lock_conditional_update_and_parameters():
-    """R13, R14, R19: candado, UPDATE condicional e INSERT parametrizados."""
+    """R7, R13, R14: candado, UPDATE condicional e INSERT parametrizados."""
     conn = _AutoAssignConn()
     repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
     at = datetime(2026, 1, 2, 3, 0, 0)
 
-    chosen = repo.auto_assign_least_loaded("case-1", ["111", "222"], at)
+    chosen = repo.auto_assign(
+        "case-1", ["111", "222"], obtener_estrategia("por_carga"), at
+    )
 
     assert chosen == "222"
     statements = [
@@ -244,6 +249,14 @@ def test_postgres_auto_assign_uses_lock_conditional_update_and_parameters():
     ]
     assert len(insert) == 1
     assert "auto" in insert[0][1]
+    pointer = [
+        (sql, params)
+        for sql, params in statements
+        if "INSERT INTO handover_assignment_pointer" in sql
+    ]
+    assert len(pointer) == 1
+    assert "ON CONFLICT (strategy) DO UPDATE" in pointer[0][0]
+    assert pointer[0][1] == ("por_carga", "222", at)
     for sql, params in statements:
         assert "case-1" not in sql
         assert sql.count("%s") == len(params), sql

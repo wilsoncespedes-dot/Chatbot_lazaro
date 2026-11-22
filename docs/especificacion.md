@@ -353,7 +353,7 @@ cada feature pasa por el flujo SDD (#60–#78 en `feature_list.json`).
 | Bienvenida | El primer contacto lista los canales activos marcados como públicos. |
 | IA y MCP | Servidor MCP con herramientas de solo lectura, autorizadas por estado como el resto del harness. Modelo configurable por variables de entorno (Ollama en local u otro proveedor). Para el ejemplo de turismo del profesor se usan datos de **demostración**, marcados como tales. |
 | Gráficos | Dashboard con mensajes por canal, conversaciones por estado y tiempo de respuesta, en SVG generado en el servidor (sin librerías de terceros ni cambios en la CSP). |
-| Clientes | Puerto `FuenteDeClientes` con la implementación local actual, e importación de clientes desde CSV con vista previa, duplicados y resumen. Excel solo si no requiere dependencias nuevas o si el dueño aprueba la dependencia. |
+| Clientes | Puerto `FuenteDeClientes` con la implementación local actual, e importación de clientes desde CSV con vista previa, duplicados y resumen. Acepta CSV y Excel `.xlsx` (con `openpyxl`, aprobada por el dueño el 2026-11-22). |
 
 ### Lo que no se implementa (solo posibilidad a futuro)
 
@@ -366,6 +366,23 @@ El profesor pidió no presentarlo como implementado ni como compromiso:
 - **Que la IA consulte los datos de los negocios de Lázaro** (hoteles,
   restaurantes) mediante esa API.
 - **Login configurable según la empresa.**
+
+### ID de cliente, bienvenida con canales y login configurable
+
+- **ID de cliente:** cada cliente tiene un ID corto, único y estable con formato
+  `XXXX-XXXX` (sin caracteres ambiguos) que se muestra en el chat tras el login y
+  al pedirlo con un comando. El panel lo muestra con un botón «Copiar» en la
+  ficha, la bandeja, la conversación y la lista de Clientes, y asesores y
+  administradores pueden buscar por él. Escribir un ID en el chat no identifica
+  a nadie ni da acceso a datos: solo sirve para que soporte encuentre al cliente.
+- **Bienvenida con canales:** el primer contacto lista, en texto plano, los
+  canales activos marcados como públicos en `canales` (nombre, glifo y enlace de
+  contacto opcional). Los canales simulados no aparecen salvo el ajuste de
+  demostración `CHANNELS_WELCOME_INCLUDE_SIMULATED`.
+- **Login configurable (posibilidad, no implementada):** a futuro, cada empresa
+  podría decidir si el login es obligatorio, opcional o sustituido por su propio
+  mecanismo de identificación. No se implementa, no se simula y el login sigue
+  siendo obligatorio en la plataforma actual.
 
 ### Supuestos a confirmar
 
@@ -385,7 +402,7 @@ validación legal.
 - [x] Elegir proveedor WhatsApp para la feature #43: Cloud API de Meta (2026-11-03).
 - [ ] Calibrar el modelo de embeddings y el umbral con un manual real.
 - [x] Proteger los secretos de `canales.config` (#61): se cifran con `cryptography` (Apache-2.0/BSD) y una clave de entorno; decisión del dueño, 2026-11-21.
-- [ ] Decidir si la importación de clientes acepta Excel (#77): requiere `openpyxl` (MIT) o un lector propio de `.xlsx`; sin decisión, solo CSV.
+- [x] Decidir si la importación de clientes acepta Excel (#77): requiere `openpyxl` (MIT) o un lector propio de `.xlsx`; decidido: sí, con `openpyxl` (2026-11-22).
 
 ### Fuentes
 

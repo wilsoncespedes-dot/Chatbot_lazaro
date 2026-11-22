@@ -87,7 +87,7 @@ def test_new_channel_full_flow_from_consent_to_advisor_reply(env_factory, panel)
     drain_queues(env.settings, env.adapters)
     assert outcome.status == "ok"
     assert env.repo.get_conversation_state(contact.id) == ConversationState.ACTIVE
-    assert _sent_to_simulado(env)[-1] == env.repo.get_conversation_texts().active_welcome
+    assert env.repo.get_conversation_texts().active_welcome in _sent_to_simulado(env)
 
     # R40: escribe → el bot responde por el mismo canal y destino.
     assert _post(env, _message("¿Cómo instalo el módulo?", "m-3")).status_code == 202

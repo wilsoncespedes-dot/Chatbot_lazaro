@@ -24,6 +24,7 @@ from lazaro_contracts.channel_registry import (
 MIN_LABEL_CONTRAST = 4.5
 LABEL_TEXT_COLOR = "#FFFFFF"
 MAX_CALLBACK_URL_LENGTH = 2048
+MAX_CONTACT_URL_LENGTH = 200
 
 
 class ChannelFormError(ValueError):
@@ -114,6 +115,29 @@ def channel_form(
         raise ChannelFormError("El modo de consentimiento no es válido.")
     config = dict(current_config or {})
     config["consent_mode"] = consent_mode
+    if "public" in form:
+        if form.get("public") == "si":
+            config["public"] = "true"
+        else:
+            config.pop("public", None)
+    elif not creating:
+        config.pop("public", None)
+    if "contact_url" in form:
+        contact_url = form.get("contact_url", "").strip()
+        if contact_url:
+            if (
+                not contact_url.startswith("https://")
+                or len(contact_url) > MAX_CONTACT_URL_LENGTH
+            ):
+                raise ChannelFormError(
+                    "El enlace de contacto debe empezar por https:// y tener "
+                    "200 caracteres como máximo."
+                )
+            config["contact_url"] = contact_url
+        else:
+            config.pop("contact_url", None)
+    elif not creating:
+        config.pop("contact_url", None)
     callback_url = form.get("callback_url", "").strip()
     if not managed:
         if callback_url:

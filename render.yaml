@@ -211,6 +211,9 @@ services:
       # asignación de casos (#52): manual | automatica; el panel la sobrescribe
       - key: ASSIGNMENT_MODE
         value: "manual"
+      # estrategia de asignación automática (#69): por_carga | round_robin
+      - key: ASSIGNMENT_STRATEGY
+        value: "por_carga"
       - key: EXPIRY_NOTICE_ENABLED
         value: "true"
       - key: EXPIRY_NOTICE_MAX_ATTEMPTS
@@ -219,6 +222,17 @@ services:
         value: "20"
       - key: ADMIN_METRICS_UNANSWERED_LIMIT
         value: "20"
+      # intención de compra (#70)
+      - key: PURCHASE_INTENT_ENABLED
+        value: "true"
+      - key: PURCHASE_INTENT_PHRASES
+        value: "me interesa,quiero reservar,quiero comprar"
+      - key: PURCHASE_INTENT_INTERVAL_MINUTES
+        value: "60"
+      - key: PURCHASE_INTENT_CREATE_CASE
+        value: "false"
+      - key: PURCHASE_INTENT_MARK_HOURS
+        value: "72"
 
   - type: pserv
     name: rag

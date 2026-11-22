@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
-from lazaro_contracts import HandoverRequest
+from lazaro_contracts import CaseTakeRequest, HandoverRequest, LastMessage
 
 from orchestrator.adapters import gateway, handover, llm, rag
 from orchestrator.adapters.repository import PostgresRepository
@@ -216,6 +216,59 @@ def test_http_transfer_maps_denials(captured, status, code):
     with pytest.raises(AuthorizationDenied) as excinfo:
         handover.HttpHandoverClient("http://ho", "t").transfer("case-1", "111", "222")
     assert excinfo.value.code == code
+
+
+def _take_request() -> CaseTakeRequest:
+    return CaseTakeRequest(
+        case_id="case-new",
+        contact_id="contact-1",
+        chat_id=900,
+        advisor_id="111",
+        last_messages=[LastMessage(role="user", text="hola", at=NOW)],
+    )
+
+
+def test_http_take_posts_contract_and_parses_response(captured):
+    """R38: take usa su ruta, token y contrato."""
+    requests, responses = captured
+    responses["/cases/take"] = httpx.Response(
+        200, json={"status": "taken", "case_id": "case-new", "created": True}
+    )
+    parsed = handover.HttpHandoverClient("http://ho:8000/", "tok", 3).take(
+        _take_request()
+    )
+    assert (parsed.status, parsed.case_id, parsed.created) == (
+        "taken",
+        "case-new",
+        True,
+    )
+    assert str(requests[0][0].url) == "http://ho:8000/cases/take"
+    assert requests[0][0].headers["X-Service-Token"] == "tok"
+
+
+@pytest.mark.parametrize(
+    ("status", "code"), [(403, "forbidden"), (409, "case_changed")]
+)
+def test_http_take_maps_denials(captured, status, code):
+    """R38, R40: forbidden y case_changed se convierten en AuthorizationDenied."""
+    _, responses = captured
+    responses["/cases/take"] = httpx.Response(
+        status, json={"error": code, "message": "x"}
+    )
+    with pytest.raises(AuthorizationDenied) as excinfo:
+        handover.HttpHandoverClient("http://ho", "t").take(_take_request())
+    assert excinfo.value.code == code
+
+
+def test_http_take_unexpected_status_is_service_unavailable(captured):
+    """R23: un 5xx o cuerpo inválido se convierte en ServiceUnavailable."""
+    _, responses = captured
+    responses["/cases/take"] = httpx.Response(500)
+    with pytest.raises(ServiceUnavailable):
+        handover.HttpHandoverClient("http://ho", "t").take(_take_request())
+    responses["/cases/take"] = httpx.Response(200, json={"raro": 1})
+    with pytest.raises(ServiceUnavailable):
+        handover.HttpHandoverClient("http://ho", "t").take(_take_request())
 
 
 def test_http_transfer_uses_route_token_and_payload(captured):

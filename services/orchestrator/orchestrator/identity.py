@@ -76,6 +76,12 @@ def is_logout_command(text: str, commands: tuple[str, ...]) -> bool:
     return any(normalized == normalize_text(command) for command in commands if command)
 
 
+def is_client_id_command(text: str, commands: tuple[str, ...]) -> bool:
+    """R11: igualdad exacta normalizada; `mi id 5` no es el comando de ID."""
+    normalized = normalize_text(text)
+    return any(normalized == normalize_text(command) for command in commands if command)
+
+
 @dataclass(frozen=True)
 class IdentityPolicy:
     link_ttl_minutes: int

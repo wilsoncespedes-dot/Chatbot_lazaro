@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .cases import (
+    ASSIGNMENT_STRATEGIES,
     AdvisorRosterEntry,
     AdvisorRosterRole,
     AdvisorRosterSyncRequest,
@@ -27,6 +28,8 @@ from .cases import (
     CaseReassignResponse,
     CaseReplyRequest,
     CaseReplyResponse,
+    CaseTakeRequest,
+    CaseTakeResponse,
     CaseTransferRequest,
     CaseTransferResponse,
     CheckTimeoutsRequest,
@@ -216,12 +219,15 @@ __all__ = [
     "CaseAssignResponse",
     "CaseAutoAssignRequest",
     "CaseAutoAssignResponse",
+    "ASSIGNMENT_STRATEGIES",
     "CaseAuthorizeRequest",
     "CaseAuthorizeResponse",
     "CaseTransferRequest",
     "CaseTransferResponse",
     "CaseReassignRequest",
     "CaseReassignResponse",
+    "CaseTakeRequest",
+    "CaseTakeResponse",
     "CaseClientMessageRequest",
     "CaseClientMessageResponse",
     "AdvisorRosterEntry",

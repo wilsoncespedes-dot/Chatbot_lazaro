@@ -168,7 +168,7 @@ def test_postgres_schema_adds_claim_and_role_columns_if_not_exists():
 
     creates = [index for index, (sql, _) in enumerate(conn.log) if sql.startswith("CREATE TABLE")]
     alters = [index for index, (sql, _) in enumerate(conn.log) if sql.startswith("ALTER TABLE")]
-    assert len(creates) == 8
+    assert len(creates) == 9
     assert len(alters) == 2
     statements = [conn.log[index][0] for index in alters]
     assert (
@@ -191,7 +191,7 @@ def test_postgres_repository_connects_lazily_and_once():
     repo.get_case("a")
     repo.get_case("b")
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 8
+    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 9
 
 
 def test_postgres_repository_reads_cases_from_rows():
@@ -414,7 +414,7 @@ def test_postgres_repository_connects_once_with_concurrent_first_use():
     for thread in threads:
         thread.join(timeout=5)
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 8
+    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 9
 
 
 def test_fake_close_if_still_allowed_checks_state_and_assignee():
@@ -496,7 +496,7 @@ def test_postgres_creates_requests_table_if_not_exists():
     repo.get_case("case-1")
 
     statements = [sql for sql, _ in conn.log if sql.startswith("CREATE TABLE")]
-    assert len(statements) == 8
+    assert len(statements) == 9
     table = next(sql for sql in statements if "handover_requests" in sql)
     assert table.startswith("CREATE TABLE IF NOT EXISTS handover_requests")
     for column in (

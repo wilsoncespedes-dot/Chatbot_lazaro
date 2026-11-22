@@ -28,6 +28,8 @@ from lazaro_contracts import (
     CaseListResponse,
     CaseReassignRequest,
     CaseReassignResponse,
+    CaseTakeRequest,
+    CaseTakeResponse,
     CaseTransferRequest,
     CaseTransferResponse,
     CheckTimeoutsRequest,
@@ -57,13 +59,16 @@ from .domain import (
     forward_client_message,
     list_advisor_cases,
     list_all_cases,
+    list_overview,
     log_orphan_cases,
     open_case,
     purge_personal_data,
     reassign_case,
     sync_advisor_roster,
+    take_case,
     transfer_case,
 )
+from .strategies import UnknownStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +154,11 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     async def handle_domain_error(request: Request, exc: DomainError):
         return _error(exc.status_code, exc.code, str(exc) or exc.code)
 
+    @app.exception_handler(UnknownStrategy)
+    async def handle_unknown_strategy(request: Request, exc: UnknownStrategy):
+        """R5: una estrategia no registrada es un 422 sin tocar el caso."""
+        return _error(422, "validation_error", "La estrategia de asignación no es válida.")
+
     @app.exception_handler(StarletteHTTPException)
     async def handle_http_error(request: Request, exc: StarletteHTTPException):
         if exc.status_code == 404:
@@ -196,6 +206,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         _require_current_generation(request)
         if query.scope == "all":
             return list_all_cases(query.advisor_id, settings, adapters)
+        if query.scope == "overview":
+            return list_overview(query.advisor_id, settings, adapters)
         return list_advisor_cases(query.advisor_id, settings, adapters)
 
     @app.post("/advisors/sync", response_model=AdvisorRosterSyncResponse)
@@ -210,6 +222,10 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     @app.post("/cases/check-timeouts", response_model=CheckTimeoutsResponse)
     def post_check_timeouts(body: CheckTimeoutsRequest) -> CheckTimeoutsResponse:
         return check_timeouts(settings, adapters)
+
+    @app.post("/cases/take", response_model=CaseTakeResponse)
+    def post_take(body: CaseTakeRequest) -> CaseTakeResponse:
+        return take_case(body, settings, adapters)
 
     @app.post("/cases/{case_id}/assign", response_model=CaseAssignResponse)
     def post_assign(

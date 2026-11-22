@@ -1,0 +1,22 @@
+# Tasks — #76 `fuente_clientes_y_futuro_lazaro`
+
+- [x] T1 — Crear `services/orchestrator/orchestrator/client_source.py` con el Protocol `FuenteDeClientes` (`buscar_por_id`, `listar`, `crear`, `actualizar`, `obtener_credencial`) y `FuenteClientesLocal` delegando en el repositorio. Cubre: R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11.
+- [x] T2 — Añadir `Adapters.client_source` (default `None`) y `client_source_of(adapters)` en `domain.py`. Cubre: R12.
+- [x] T3 — Hacer que `create_client` use `client_source_of(...).crear` conservando el reintento por `PublicIdTaken`. Cubre: R13, R17.
+- [x] T4 — Hacer que `list_clients_admin` use `.listar()`. Cubre: R14.
+- [x] T5 — Hacer que `renew_credential` y `revoke_credential` usen `.obtener_credencial` y `.actualizar`, sin cambiar auditoría, cierre de sesión ni avisos. Cubre: R15.
+- [x] T6 — Hacer que `search_client_by_public_id` use `.buscar_por_id`. Cubre: R16.
+- [x] T7 — Añadir la tarjeta «a futuro» con el texto exacto en `render_clients` (`admin.py`), sin formularios, botones ni enlaces, visible también en respuestas de error. Cubre: R18, R19, R20.
+- [x] T8 — Añadir sección «Posibilidad a futuro, no implementada» sobre `LazaroClientSource` (buscar, listar, sincronizar, duplicados, borrados) en `docs/architecture.md`. Cubre: R23, R24, R25.
+- [x] T9 — Test `test_client_source.py::test_local_find_by_id_and_missing` (buscar existente e inexistente). Cubre: R3, R4.
+- [x] T10 — Test `test_local_list_matches_repository`. Cubre: R5.
+- [x] T11 — Test `test_local_create_returns_profile_with_public_id`, `test_local_create_duplicate_public_id_raises`, `test_local_create_duplicate_username_raises`. Cubre: R6, R7, R8.
+- [x] T12 — Test `test_local_update_renews_revokes_and_rejects` (renovar, revocar, inexistente, revocada). Cubre: R9, R10, R11.
+- [x] T13 — Test `test_default_source_is_local_and_injectable` (default perezoso e inyección con fuente espía). Cubre: R12.
+- [x] T14 — Test de regresión `test_admin_create_client_goes_through_port` (POST `/admin/clientes` con fuente espía; redirección 303 a `/admin/clientes`) y `test_post_clients_api_goes_through_port`. Cubre: R13, R17.
+- [x] T15 — Test `test_list_renew_revoke_and_search_use_port` con fuente espía. Cubre: R14, R15, R16.
+- [x] T16 — Test `test_clients_page_shows_future_card_exact_text` (también en respuesta 422 y sin `<form>`/`<button>`/`<a>`/`<input>` dentro de la tarjeta). Cubre: R18, R19, R20.
+- [x] T17 — Test `test_no_lazaro_source_in_code_or_config` (recorre `services/`, `contracts/`, `scripts/` buscando `LazaroClientSource`/`lazaro_client`; `.env.example` sin variables de Lázaro). Cubre: R21.
+- [x] T18 — Test `test_clients_page_lazaro_only_in_future_card` (sin afirmaciones de conexión fuera de la tarjeta). Cubre: R22.
+- [x] T19 — Test `test_docs_describe_lazaro_adapter_as_future_only` (la sección existe, menciona buscar/listar/sincronizar/duplicados/borrados y «no implementada»). Cubre: R23, R24, R25.
+- [ ] T20 — Ejecutar `./init.sh` y dejar verde toda la suite existente. Cubre: R26.

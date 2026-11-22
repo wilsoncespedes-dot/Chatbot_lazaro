@@ -30,6 +30,7 @@ class ConversationEvent(StrEnum):
     CREDENTIAL_EXPIRED = "credential_expired"
     CREDENTIAL_RENEWED = "credential_renewed"
     ESCALATED = "escalated"
+    ADVISOR_TAKEN = "advisor_taken"
     ADVISOR_RESOLVED = "advisor_resolved"
     ADVISOR_RETURNED = "advisor_returned"
     SESSION_CLOSED = "session_closed"
@@ -55,6 +56,15 @@ _TRANSITIONS: dict[tuple[ConversationState, ConversationEvent], ConversationStat
     (ConversationState.AWAITING_LOGIN, ConversationEvent.LOGIN_EXPIRED):
         ConversationState.NO_ACCESS,
     (ConversationState.ACTIVE, ConversationEvent.ESCALATED):
+        ConversationState.WITH_ADVISOR,
+    # #68: un asesor toma la conversación desde el panel.
+    (ConversationState.ACTIVE, ConversationEvent.ADVISOR_TAKEN):
+        ConversationState.WITH_ADVISOR,
+    (ConversationState.AWAITING_LOGIN, ConversationEvent.ADVISOR_TAKEN):
+        ConversationState.WITH_ADVISOR,
+    (ConversationState.NO_ACCESS, ConversationEvent.ADVISOR_TAKEN):
+        ConversationState.WITH_ADVISOR,
+    (ConversationState.WITH_ADVISOR, ConversationEvent.ADVISOR_TAKEN):
         ConversationState.WITH_ADVISOR,
     (ConversationState.ACTIVE, ConversationEvent.CREDENTIAL_EXPIRED):
         ConversationState.NO_ACCESS,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ ENV_VARS = [
     "LLM_BASE_URL", "DATABASE_URL", "LLM_API_KEY", "LLM_MODEL", "HTTP_TIMEOUT_SECONDS",
     "PRIVACY_NOTICE_TEXT", "PRIVACY_NOTICE_VERSION", "PRIVACY_ACCEPT_PHRASE",
     "PRIVACY_ACCEPTED_REPLY", "PRIVACY_RETENTION_DAYS",
+    "CLIENT_CONSENT_RETENTION_DAYS",
 ]
 
 
@@ -114,9 +116,18 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/respuestas",
         "/admin/respuestas/{reply_id}",
         "/admin/respuestas/{reply_id}/activa",
+        # Feature 71: respuestas rápidas del bot y su media público.
+        "/admin/respuestas-rapidas",
+        "/admin/respuestas-rapidas/{reply_id}",
+        "/admin/respuestas-rapidas/{reply_id}/activa",
+        "/media/respuestas/{image_id}",
         "/admin/texts",
         "/admin/texts/{field}/historial",
         "/admin/clientes",
+        "/admin/clientes/importar",
+        "/admin/clientes/importar/vista-previa",
+        "/admin/clientes/importar/confirmar",
+        "/admin/clientes/importar/resumen/{token}",
         "/admin/clientes/{profile_id}/renovar",
         "/admin/clientes/{profile_id}/revocar",
         "/admin/clientes/{profile_id}/cerrar-sesion",
@@ -125,11 +136,21 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/plantillas/{name}/estado",
         "/admin/ajustes",
         "/admin/metricas",
+        # Feature 75: dashboard SVG del panel.
+        "/admin/dashboard",
+        # Feature 74: panel de solo lectura del servidor MCP.
+        "/admin/mcp",
         "/admin/simulador",
         "/credentials/expiry-notices",
         "/asesor",
         "/asesor/login",
         "/asesor/logout",
+        "/asesor/conversaciones",
+        "/asesor/conversaciones/{contact_id}",
+        "/asesor/conversaciones/{contact_id}/tomar",
+        # Feature 73: búsqueda de clientes por ID y botón copiar propio.
+        "/asesor/clientes",
+        "/panel/copiar.js",
         "/asesor/cases",
         "/asesor/cases/{case_id}",
         "/asesor/cases/{case_id}/memoria",
@@ -146,10 +167,14 @@ def test_only_health_and_messages_routes_exposed():
         "/asesor/todos",
         "/asesor/casos/{case_id}/reasignar",
         "/asesor/metricas",
+        # Feature 75: dashboard del supervisor.
+        "/asesor/dashboard",
         "/asesor/simulador",
         "/asesor/supresiones",
         "/asesor/supresiones/{request_id}/execute",
         "/asesor/live/inbox",
+        "/asesor/live/conversaciones",
+        "/asesor/live/conversaciones/{contact_id}",
         "/asesor/live/cases/{case_id}",
         "/asesor/static/panel_live.js",
         "/admin/supresiones",
@@ -183,6 +208,18 @@ def test_retention_days_must_be_positive_integer(value):
         Settings(privacy_retention_days=value)
 
 
+def test_config_client_consent_retention_valid_and_invalid():
+    """#72 R22: vacío = sin caducidad; 0, negativos y texto fallan al arrancar."""
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert Settings(client_consent_retention_days="").client_consent_not_before(now) is None
+    assert Settings(
+        client_consent_retention_days="30"
+    ).client_consent_not_before(now) == now - timedelta(days=30)
+    for value in ("0", "-1", "abc", "1.5"):
+        with pytest.raises(ValidationError):
+            Settings(client_consent_retention_days=value)
+
+
 def test_notice_must_contain_the_acceptance_phrase():
     """R3: el aviso normalizado debe contener la frase de aceptación normalizada."""
     with pytest.raises(ValidationError):
@@ -200,6 +237,8 @@ PANEL_ENV_VARS = [
     "ADVISOR_HISTORY_MAX_MESSAGES",
     "ADVISOR_PRESENCE_TTL_MINUTES",
     "ADVISOR_INBOX_REFRESH_SECONDS",
+    "PANEL_BOT_CONVERSATIONS_VISIBLE",
+    "PANEL_CONVERSATIONS_LIMIT",
     "SUPPRESSION_DEADLINE_BUSINESS_DAYS",
     "SUPPRESSION_DUE_SOON_BUSINESS_DAYS",
     "SUPPRESSION_QUEUE_EXECUTED_LIMIT",
@@ -223,6 +262,8 @@ def test_panel_settings_defaults_and_env_example():
     assert settings.advisor_history_max_messages == 100
     assert settings.advisor_presence_ttl_minutes == 15
     assert settings.advisor_inbox_refresh_seconds == 30
+    assert settings.panel_bot_conversations_visible is True
+    assert settings.panel_conversations_limit == 200
     assert settings.suppression_deadline_business_days == 15
     assert settings.suppression_due_soon_business_days == 3
     assert settings.suppression_queue_executed_limit == 20
@@ -260,6 +301,8 @@ def test_panel_settings_defaults_and_env_example():
         {"advisor_presence_ttl_minutes": 241},
         {"advisor_inbox_refresh_seconds": -1},
         {"advisor_inbox_refresh_seconds": 601},
+        {"panel_conversations_limit": 0},
+        {"panel_conversations_limit": 1001},
         {"suppression_deadline_business_days": 0},
         {"suppression_deadline_business_days": 61},
         {"suppression_due_soon_business_days": 31},
@@ -422,6 +465,24 @@ def test_saved_reply_settings_reject_out_of_range(overrides):
         Settings(**overrides)
 
 
+def test_quick_reply_image_setting_and_env_example():
+    """#71 R24, R25: máximo de imagen por defecto y declarado en .env.example."""
+    settings = Settings()
+    assert settings.quick_reply_image_max_bytes == 2097152
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert any(
+        line.startswith("QUICK_REPLY_IMAGE_MAX_BYTES=")
+        for line in text.splitlines()
+    )
+
+
+@pytest.mark.parametrize("value", [1023, 5242881])
+def test_quick_reply_image_setting_rejects_out_of_range(value):
+    """#71 R24: fuera de 1024..5242880 `Settings` falla al arrancar."""
+    with pytest.raises(ValidationError):
+        Settings(quick_reply_image_max_bytes=value)
+
+
 def test_notice_and_phrase_are_compared_normalized():
     """R3: mayúsculas y espacios repetidos no impiden la validación."""
     settings = Settings(
@@ -429,3 +490,61 @@ def test_notice_and_phrase_are_compared_normalized():
         privacy_accept_phrase="Acepto el tratamiento de mis datos.",
     )
     assert settings.privacy_configured is False
+
+
+PURCHASE_INTENT_ENV_VARS = [
+    "PURCHASE_INTENT_ENABLED",
+    "PURCHASE_INTENT_PHRASES",
+    "PURCHASE_INTENT_INTERVAL_MINUTES",
+    "PURCHASE_INTENT_CREATE_CASE",
+    "PURCHASE_INTENT_MARK_HOURS",
+]
+
+
+def test_purchase_intent_defaults_and_documented_env():
+    """R1, R25: defaults de intención de compra y documentación en entorno y Render."""
+    settings = Settings()
+    assert settings.purchase_intent_enabled is True
+    assert settings.purchase_intent_phrase_list == (
+        "me interesa",
+        "quiero reservar",
+        "quiero comprar",
+    )
+    assert settings.purchase_intent_interval_minutes == 60
+    assert settings.purchase_intent_create_case is False
+    assert settings.purchase_intent_mark_hours == 72
+
+    env_text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    declared_env = {
+        ln.split("=", 1)[0].strip()
+        for ln in env_text.splitlines()
+        if "=" in ln and not ln.lstrip().startswith("#")
+    }
+    render_text = (ROOT / "render.yaml").read_text(encoding="utf-8")
+    for name in PURCHASE_INTENT_ENV_VARS:
+        assert name in declared_env, name
+        assert f"key: {name}" in render_text, name
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"purchase_intent_phrases": ""},
+        {"purchase_intent_phrases": "ab"},
+        {"purchase_intent_phrases": "x" * 81},
+        {
+            "purchase_intent_phrases": ",".join(
+                f"frase {index}" for index in range(31)
+            )
+        },
+        {"purchase_intent_phrases": "me interesa,\x01quiero comprar"},
+        {"purchase_intent_interval_minutes": 0},
+        {"purchase_intent_interval_minutes": 1441},
+        {"purchase_intent_mark_hours": 0},
+        {"purchase_intent_mark_hours": 721},
+    ],
+)
+def test_purchase_intent_settings_reject_invalid_values(overrides):
+    """R2, R25: frases y rangos inválidos fallan al construir Settings."""
+    with pytest.raises(ValidationError):
+        Settings(**overrides)
