@@ -905,6 +905,8 @@ class Adapters:
     outbound: "GatewayClient | None" = None
     # #65: metadatos de canal (capacidades y ajustes) leídos del gateway.
     channels: "ChannelDirectory | None" = None
+    # #66: administración de canales en el gateway (panel /admin/canales).
+    channel_admin: "ChannelAdminClient | None" = None
 
     def __post_init__(self) -> None:
         if self.outbound is None:
@@ -915,6 +917,10 @@ class Adapters:
             from .adapters.channels import FakeChannelDirectory
 
             self.channels = FakeChannelDirectory()
+        if self.channel_admin is None:
+            from .adapters.channel_admin import FakeChannelAdminClient
+
+            self.channel_admin = FakeChannelAdminClient()
 
 
 def channel_policy(adapters: Adapters, channel: str) -> ChannelPolicy:

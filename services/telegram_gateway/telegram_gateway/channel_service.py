@@ -16,6 +16,7 @@ from lazaro_contracts import (
     ChannelListResponse,
     ChannelSecretResponse,
     ChannelUpdateRequest,
+    credential_hint,
 )
 
 from .adapters.channel_repository import ChannelChanges, ChannelRepository
@@ -121,6 +122,7 @@ class ChannelService:
             managed_by_environment=managed,
             created_at=record.created_at,
             capabilities=_default_capabilities(factory, record),
+            credential_hints=dict(record.credential_hints),
         )
 
     def _secrets_for(self, record: ChannelRecord) -> ChannelSecrets | None:
@@ -242,6 +244,7 @@ class ChannelService:
             created_at=self._context.adapters.clock(),
             has_secrets=True,
             active_follows_environment=False,
+            credential_hints=_hints(request.credentials),
         )
         created = self._repository_call(self._repository.create, record, encrypted)
         if not created:
@@ -277,6 +280,9 @@ class ChannelService:
             color=request.color if "color" in fields else None,
             config=(dict(request.config) if "config" in fields else None),
             encrypted_secrets=encrypted_secrets,
+            credential_hints=(
+                _hints(request.credentials or {}) if "credentials" in fields else None
+            ),
         )
         updated = self._repository_call(
             self._repository.update, channel_id, changes
@@ -329,6 +335,11 @@ class ChannelService:
             raise ChannelNotFound("El canal o su secreto no existen.")
         logger.info("channel_secret_revealed channel_id=%s", channel_id)
         return ChannelSecretResponse(channel_id=channel_id, secret=current.secret)
+
+
+def _hints(credentials) -> dict[str, str]:
+    """#66 R3/R4: solo la pista de cada credencial, nunca su valor."""
+    return {name: credential_hint(value) for name, value in dict(credentials).items()}
 
 
 def _default_capabilities(factory, record: ChannelRecord) -> ChannelCapabilities | None:

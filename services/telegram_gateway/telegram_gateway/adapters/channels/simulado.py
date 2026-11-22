@@ -137,10 +137,10 @@ class SimuladoChannel:
     def validate_config(
         cls, config: Mapping[str, Any], context: ChannelContext
     ) -> None:
-        unknown = set(config) - {"capabilities"}
+        unknown = set(config) - {"capabilities", "consent_mode"}
         if unknown:
             raise InvalidChannelConfig(
-                "config del canal simulado solo admite capabilities."
+                "config del canal simulado solo admite capabilities y consent_mode."
             )
         raw = config.get("capabilities", {})
         if not isinstance(raw, Mapping):

@@ -77,7 +77,9 @@ from .chunks import (
     ChunkUpdateResponse,
 )
 from .channel_registry import (
+    CHANNEL_ICONS,
     CONSENT_MODES,
+    DEFAULT_CHANNEL_ICON,
     DEFAULT_CONSENT_MODE,
     ChannelActiveRequest,
     ChannelCreateRequest,
@@ -86,6 +88,7 @@ from .channel_registry import (
     ChannelListResponse,
     ChannelSecretResponse,
     ChannelUpdateRequest,
+    credential_hint,
 )
 from .channel_simulator import (
     MAX_SIMULATED_REASON_LENGTH,
@@ -175,6 +178,9 @@ __all__ = [
     "ChannelSecretResponse",
     "CONSENT_MODES",
     "DEFAULT_CONSENT_MODE",
+    "CHANNEL_ICONS",
+    "DEFAULT_CHANNEL_ICON",
+    "credential_hint",
     "MailboxEntry",
     "MailboxKind",
     "MailboxResponse",

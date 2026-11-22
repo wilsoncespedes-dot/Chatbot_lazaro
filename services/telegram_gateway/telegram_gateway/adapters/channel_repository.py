@@ -21,10 +21,14 @@ _SCHEMA = (
     "ALTER TABLE canales ADD COLUMN IF NOT EXISTS config_secreta TEXT NULL",
     "ALTER TABLE canales ADD COLUMN IF NOT EXISTS activo_segun_entorno "
     "BOOLEAN NOT NULL DEFAULT FALSE",
+    # #66: pistas de credenciales (`…` + últimos 4 caracteres), nunca el valor.
+    "ALTER TABLE canales ADD COLUMN IF NOT EXISTS pistas_credenciales "
+    "JSONB NOT NULL DEFAULT '{}'::jsonb",
 )
 _CHANNEL_COLUMNS = (
     "id, nombre, tipo_adaptador, icono, color, config, activo, creado_en, "
-    "(config_secreta IS NOT NULL) AS has_secrets, activo_segun_entorno"
+    "(config_secreta IS NOT NULL) AS has_secrets, activo_segun_entorno, "
+    "pistas_credenciales"
 )
 
 
@@ -64,12 +68,15 @@ def _config_json(config: Mapping[str, Any]) -> str:
     return json.dumps(config, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def _json_object(value: Any) -> dict:
+    if isinstance(value, (str, bytes)):
+        value = json.loads(value)
+    return value if isinstance(value, dict) else {}
+
+
 def _row_to_record(row: tuple[Any, ...]) -> ChannelRecord:
-    config = row[5]
-    if isinstance(config, (str, bytes)):
-        config = json.loads(config)
-    if not isinstance(config, dict):
-        config = {}
+    config = _json_object(row[5])
+    hints = _json_object(row[10]) if len(row) > 10 else {}
     return ChannelRecord(
         id=row[0],
         name=row[1],
@@ -81,6 +88,7 @@ def _row_to_record(row: tuple[Any, ...]) -> ChannelRecord:
         created_at=row[7],
         has_secrets=row[8],
         active_follows_environment=row[9],
+        credential_hints={str(k): str(v) for k, v in hints.items()},
     )
 
 
@@ -111,6 +119,7 @@ class ChannelChanges:
     color: str | None = None
     config: Mapping[str, Any] | None = None
     encrypted_secrets: str | None = None
+    credential_hints: Mapping[str, str] | None = None
 
 
 class FakeChannelRepository:
@@ -195,6 +204,7 @@ class FakeChannelRepository:
             self._channels[record.id] = replace(
                 record,
                 config=dict(record.config),
+                credential_hints=dict(record.credential_hints),
                 has_secrets=encrypted_secrets is not None,
             )
             if encrypted_secrets is not None:
@@ -219,6 +229,11 @@ class FakeChannelRepository:
                 ),
                 has_secrets=(
                     True if changes.encrypted_secrets is not None else current.has_secrets
+                ),
+                credential_hints=(
+                    dict(changes.credential_hints)
+                    if changes.credential_hints is not None
+                    else dict(current.credential_hints)
                 ),
             )
             self._channels[channel_id] = updated
@@ -408,8 +423,9 @@ class PostgresChannelRepository:
         rows = self._run(
             "INSERT INTO canales "
             "(id, nombre, tipo_adaptador, icono, color, config, config_secreta, activo, "
-            "activo_segun_entorno, creado_en) "
-            "VALUES (%s, %s, %s, %s, %s, CAST(%s AS JSONB), %s, %s, %s, %s) "
+            "activo_segun_entorno, creado_en, pistas_credenciales) "
+            "VALUES (%s, %s, %s, %s, %s, CAST(%s AS JSONB), %s, %s, %s, %s, "
+            "CAST(%s AS JSONB)) "
             "ON CONFLICT (id) DO NOTHING RETURNING id",
             (
                 record.id,
@@ -422,6 +438,7 @@ class PostgresChannelRepository:
                 record.active,
                 record.active_follows_environment,
                 record.created_at,
+                _config_json(record.credential_hints),
             ),
             fetch=True,
         )
@@ -441,6 +458,9 @@ class PostgresChannelRepository:
         if changes.encrypted_secrets is not None:
             assignments.append("config_secreta = %s")
             params.append(changes.encrypted_secrets)
+        if changes.credential_hints is not None:
+            assignments.append("pistas_credenciales = CAST(%s AS JSONB)")
+            params.append(_config_json(changes.credential_hints))
         if not assignments:
             return self.get(channel_id)
         params.append(channel_id)

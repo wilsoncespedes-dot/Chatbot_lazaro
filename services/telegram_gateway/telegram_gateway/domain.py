@@ -185,6 +185,8 @@ class ChannelRecord:
     created_at: datetime
     has_secrets: bool
     active_follows_environment: bool
+    # #66: pista pública de cada credencial (`…` + últimos 4); nunca el valor.
+    credential_hints: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -41,11 +41,13 @@ from .adapters.llm import HttpLLMClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
 from .adapters.simulator import HttpSimulatorClient
+from .adapters.channel_admin import HttpChannelAdminClient
 from .adapters.channels import HttpChannelDirectory
 from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
 from .advisor_routes import AdvisorAccessDenied, create_advisor_router
 from .config import Settings
 from .envios_routes import create_envios_router
+from .admin_channels_routes import create_admin_channels_router
 from .domain import (
     Adapters,
     DedupKey,
@@ -227,6 +229,9 @@ def build_default_adapters(settings: Settings) -> Adapters:
         simulator=HttpSimulatorClient(
             settings.telegram_gateway_url, settings.service_token, timeout
         ),
+        channel_admin=HttpChannelAdminClient(
+            settings.telegram_gateway_url, settings.service_token, timeout
+        ),
         channels=HttpChannelDirectory(
             settings.telegram_gateway_url,
             settings.service_token,
@@ -362,6 +367,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     app.router.routes.extend(create_simulator_router(settings, adapters).routes)
     app.router.routes.extend(create_identity_router(settings, adapters).routes)
     app.router.routes.extend(create_envios_router(settings, adapters).routes)
+    app.router.routes.extend(create_admin_channels_router(settings, adapters).routes)
 
     def _mark_dedup(dedup: DedupKey) -> bool:
         if dedup.kind == "update":

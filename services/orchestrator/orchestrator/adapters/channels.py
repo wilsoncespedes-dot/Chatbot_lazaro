@@ -25,6 +25,8 @@ class ChannelDirectory(Protocol):
 
     def list_policies(self) -> list[ChannelPolicy]: ...
 
+    def invalidate(self) -> None: ...
+
 
 def _ordered(infos: Sequence[ChannelInfo]) -> list[ChannelPolicy]:
     """Activos primero; dentro de cada grupo, por creación e id."""
@@ -91,6 +93,11 @@ class HttpChannelDirectory(_PolicyLookup):
             self._fetched_at = now
             return policies
 
+    def invalidate(self) -> None:
+        """#66 R29: tras un cambio en el panel la próxima consulta va al gateway."""
+        with self._lock:
+            self._fetched_at = float("-inf")
+
 
 class FakeChannelDirectory(_PolicyLookup):
     """Directorio en memoria. Sin nombres de canal: las pruebas pueblan `default_infos`."""
@@ -103,6 +110,10 @@ class FakeChannelDirectory(_PolicyLookup):
         self._infos = list(infos) if infos is not None else list(type(self).default_infos)
         self.fail = fail
         self.calls = 0
+        self.invalidations = 0
+
+    def invalidate(self) -> None:
+        self.invalidations += 1
 
     def set_infos(self, infos: Sequence[ChannelInfo]) -> None:
         self._infos = list(infos)

@@ -579,6 +579,12 @@ gestionado por el entorno. Todas las rutas exigen `X-Service-Token`.
 | `managed_by_environment` | booleano | sí | si el canal lo gestiona la configuración del entorno |
 | `created_at` | fecha ISO 8601 con zona | sí | fecha de creación |
 | `capabilities` | `ChannelCapabilities` o `null` | no (por defecto `null`) | capacidades por defecto (sin destino) del tipo de adaptador; `null` si el tipo no está registrado |
+| `credential_hints` | objeto `nombre → pista` | no (por defecto `{}`) | pista de cada credencial guardada: `…` y sus últimos 4 caracteres si mide 8 o más, o solo `…`; nunca el valor completo (#66) |
+
+Íconos (#66): el panel de administración solo ofrece los ids de
+`CHANNEL_ICONS` (`chat`, `telegram`, `whatsapp`, `web`, `correo`, `telefono`,
+`sms`, `instagram`, `facebook`, `tienda`, `bot`, `soporte`), que se muestran como
+emoji. Un ícono guardado fuera de la lista se muestra como `chat`.
 
 Claves reservadas de `config`:
 

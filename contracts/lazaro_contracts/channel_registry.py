@@ -31,6 +31,31 @@ MAX_CREDENTIAL_VALUE_LENGTH = 4096
 CHANNEL_SECRET_PATTERN = r"^[A-Za-z0-9_-]{43}$"
 CONSENT_MODES = ("texto", "boton")
 DEFAULT_CONSENT_MODE = "texto"
+CREDENTIAL_HINT_MIN_LENGTH = 8
+CREDENTIAL_HINT_PREFIX = "…"
+# #66: lista cerrada de íconos de canal (id → emoji). El panel solo ofrece estos.
+CHANNEL_ICONS: dict[str, str] = {
+    "chat": "💬",
+    "telegram": "✈️",
+    "whatsapp": "🟢",
+    "web": "🌐",
+    "correo": "✉️",
+    "telefono": "📞",
+    "sms": "📨",
+    "instagram": "📷",
+    "facebook": "👥",
+    "tienda": "🛒",
+    "bot": "🤖",
+    "soporte": "🛟",
+}
+DEFAULT_CHANNEL_ICON = "chat"
+
+
+def credential_hint(value: str) -> str:
+    """#66 R1: `…` más los últimos 4 caracteres si la credencial mide 8 o más."""
+    if len(value) >= CREDENTIAL_HINT_MIN_LENGTH:
+        return CREDENTIAL_HINT_PREFIX + value[-4:]
+    return CREDENTIAL_HINT_PREFIX
 
 
 def _check_display_text(value: str) -> str:
@@ -101,6 +126,7 @@ class ChannelInfo(ContractModel):
     managed_by_environment: bool
     created_at: AwareDatetime
     capabilities: ChannelCapabilities | None = None
+    credential_hints: dict[CredentialName, str] = Field(default_factory=dict)
 
 
 class ChannelListResponse(ContractModel):

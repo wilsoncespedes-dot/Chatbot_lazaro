@@ -156,6 +156,13 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/supresiones/{request_id}/execute",
         "/admin/envios",
         "/admin/envios/{row_id}/reintentar",
+        # Feature 66: panel de canales.
+        "/admin/static/canales.js",
+        "/admin/canales",
+        "/admin/canales/{channel_id}",
+        "/admin/canales/{channel_id}/activo",
+        "/admin/canales/{channel_id}/secreto",
+        "/admin/canales/{channel_id}/secreto/regenerar",
     }
 
 

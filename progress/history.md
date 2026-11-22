@@ -141,3 +141,9 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Núcleo sin nombres de canal:** el orquestador decide ventana y plantillas por `ChannelInfo.capabilities` y el consentimiento por `config.consent_mode` (`texto`/`boton`), leídos de `GET /channels` del gateway con caché (`CHANNEL_DIRECTORY_TTL_SECONDS`) y copia obsoleta. Se retiran `ATTENDED_CHANNELS`, `INBOX_CHANNELS` y `TEXT_CONSENT_CHANNELS`; los literales `telegram`/`whatsapp` quedan solo en `orchestrator/legacy.py`.
 - **Gateway:** `default_capabilities` en cada adaptador y siembra idempotente de `consent_mode`. **Datos:** columna `canal_id` en contactos y mensajes con migración idempotente.
 - **Resultado:** `./init.sh` verde: 4224 passed, 1 skipped. Informe R→test en `progress/impl_nucleo_sin_nombres_canal.md`.
+
+## 2026-11-21 — Feature #66 panel_administracion_canales (done)
+- **Modo:** supervisado. Claude escribió el spec y el código directamente (OpenCode Go sin cuota), por decisión del dueño, sin revisión del reviewer.
+- **Panel `/admin/canales` (solo admin):** listar, crear y editar canales (nombre, ícono de lista cerrada, color `#RRGGBB` con contraste ≥ 4.5 frente a blanco, tipo de adaptador registrado, consentimiento, credenciales, URL de callback); activar y desactivar. URL del webhook (`GATEWAY_PUBLIC_BASE_URL/webhooks/{id}`) y secreto, solo tras acción explícita, con botón copiar (`/admin/static/canales.js`, sin cambiar la CSP). Ver y regenerar el secreto quedan en auditoría, sin el valor.
+- **Credenciales:** el gateway guarda solo pistas (`…` + últimos 4) en `pistas_credenciales`. Cada cambio invalida el directorio de canales del orquestador.
+- **Resultado:** `./init.sh` verde: 4302 passed, 1 skipped. Informe R→test en `progress/impl_panel_administracion_canales.md`.

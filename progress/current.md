@@ -1,3 +1,3 @@
 # Sesión actual
 
-Sin trabajo en curso. Última feature cerrada: #65 `nucleo_sin_nombres_canal` (ver `progress/history.md`).
+#66 `panel_administracion_canales` cerrada. Siguiente: #67 `etiqueta_origen_canal` (pending, sdd).

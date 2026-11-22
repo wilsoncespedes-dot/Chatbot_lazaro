@@ -270,6 +270,8 @@ class Settings(BaseSettings):
     # Horas de ventana de texto libre de los canales con ventana (#65); conserva
     # el nombre histórico para no tocar los .env desplegados.
     whatsapp_window_hours: int = Field(default=24, ge=1, le=24)
+    # #66: base pública https del gateway para mostrar `…/webhooks/{canal_id}`.
+    gateway_public_base_url: str = ""
     # #65: segundos que se reutiliza la copia de GET /channels del gateway.
     channel_directory_ttl_seconds: float = Field(default=30, ge=1, le=3600)
     advisor_whatsapp_templates: str = "respuesta_asesor"

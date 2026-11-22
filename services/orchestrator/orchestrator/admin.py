@@ -308,6 +308,7 @@ ADMIN_NAV_LINKS = [
     ("/admin/simulador", "Simulador"),
     ("/admin/supresiones", "Supresiones"),
     ("/admin/envios", "Envíos fallidos"),
+    ("/admin/canales", "Canales"),
 ]
 
 
@@ -997,3 +998,189 @@ def render_error(status: int, code: str, csrf: str | None = None) -> str:
 
 def render_message(title: str, message: str, csrf: str | None = None) -> str:
     return render_page(title, f"<p>{_esc(message)}</p>", csrf)
+
+
+# ── Canales (#66) ────────────────────────────────────────────────────────────
+
+CHANNELS_JS = """'use strict';
+document.addEventListener('click', function (event) {
+  var button = event.target.closest('button[data-copy]');
+  if (!button) { return; }
+  var field = document.getElementById(button.getAttribute('data-copy'));
+  if (!field) { return; }
+  var done = function () { button.textContent = 'Copiado'; };
+  field.select();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(field.value).then(done, function () {});
+  } else if (document.execCommand && document.execCommand('copy')) {
+    done();
+  }
+});
+"""
+
+
+def _channel_label(info, glyph: str) -> str:
+    """R31: etiqueta SVG (sin estilos inline) con el color del canal y texto blanco."""
+    text = f"{glyph} {info.name}"
+    width = 24 + 9 * len(text)
+    return (
+        f'<svg class="channel-label" width="{width}" height="26" role="img" '
+        f'aria-label="{_esc(info.name)}">'
+        f'<rect width="{width}" height="26" rx="6" fill="{_esc(info.color)}"></rect>'
+        f'<text x="10" y="18" fill="#FFFFFF" font-size="14">{_esc(text)}</text>'
+        "</svg>"
+    )
+
+
+def _copy_field(field_id: str, value: str, label: str) -> str:
+    return (
+        f'<label>{_esc(label)} <input id="{_esc(field_id)}" value="{_esc(value)}" readonly></label>'
+        f'<button type="button" class="btn-secondary" data-copy="{_esc(field_id)}">Copiar</button>'
+    )
+
+
+def _icon_options(selected: str, icons: dict[str, str]) -> str:
+    return "".join(
+        f'<option value="{_esc(key)}"{" selected" if key == selected else ""}>'
+        f"{_esc(glyph)} {_esc(key)}</option>"
+        for key, glyph in icons.items()
+    )
+
+
+def _consent_options(selected: str) -> str:
+    labels = (("texto", "Texto (frase de aceptación)"), ("boton", "Botones Acepto / No acepto"))
+    return "".join(
+        f'<option value="{value}"{" selected" if value == selected else ""}>{label}</option>'
+        for value, label in labels
+    )
+
+
+def render_channels(
+    listing,
+    csrf: str,
+    *,
+    icons: dict[str, str],
+    glyph_for,
+    webhook_for,
+    error: str | None = None,
+    revealed: tuple[str, str] | None = None,
+    revealed_title: str = "Secreto del canal",
+) -> str:
+    """R10–R14, R20–R22, R30, R31: listado, alta y edición de canales."""
+    parts: list[str] = []
+    if error:
+        parts.append(f'<p class="error" role="alert">{_esc(error)}</p>')
+    if revealed is not None:
+        channel_id, secret = revealed
+        parts.append(
+            '<section class="card" aria-live="polite">'
+            f"<h3>{_esc(revealed_title)}: {_esc(channel_id)}</h3>"
+            "<p>Guárdalo ahora: no se vuelve a mostrar en el listado.</p>"
+            f"{_copy_field('secreto-revelado', secret, 'Secreto')}"
+            "</section>"
+        )
+    rows = []
+    for info in listing.channels:
+        path = quote(info.id, safe="")
+        consent = str(info.config.get("consent_mode", "texto"))
+        hints = ", ".join(
+            f"{_esc(name)} {_esc(hint)}" for name, hint in info.credential_hints.items()
+        ) or "—"
+        state = "Activo" if info.active else "Inactivo"
+        toggle_to = "false" if info.active else "true"
+        toggle_label = "Desactivar" if info.active else "Activar"
+        webhook_html = ""
+        secret_html = ""
+        credentials_html = ""
+        callback_html = ""
+        if not info.managed_by_environment:
+            url, configured = webhook_for(info.id)
+            webhook_html = _copy_field(f"webhook-{info.id}", url, "URL del webhook")
+            if not configured:
+                webhook_html += (
+                    '<p class="hint">Configura GATEWAY_PUBLIC_BASE_URL para ver la URL completa.</p>'
+                )
+            secret_html = (
+                f'<form method="post" action="/admin/canales/{path}/secreto">'
+                f"{csrf_field(csrf)}"
+                '<button type="submit" class="btn-secondary">Ver secreto</button></form>'
+                f'<form method="post" action="/admin/canales/{path}/secreto/regenerar">'
+                f"{csrf_field(csrf)}"
+                '<label><input type="checkbox" name="confirmar" value="si" required> '
+                "Invalidar el secreto actual</label>"
+                '<button type="submit" class="btn-secondary">Regenerar secreto</button></form>'
+            )
+            callback = str(info.config.get("callback_url", ""))
+            callback_html = (
+                '<label>URL de callback (si el adaptador la usa) '
+                f'<input name="callback_url" value="{_esc(callback)}" placeholder="https://"></label>'
+                '<label><input type="checkbox" name="clear_callback_url" value="si"> '
+                "Quitar la URL de callback</label>"
+            )
+            credentials_html = (
+                "<label>Credenciales (nombre=valor por línea; vacío = no cambiar) "
+                '<textarea name="credentials" autocomplete="off"></textarea></label>'
+            )
+        rows.append(
+            "<tr>"
+            f"<td>{_channel_label(info, glyph_for(info.icon))}</td>"
+            f"<td>{_esc(info.id)}</td>"
+            f"<td>{_esc(info.adapter_type)}</td>"
+            f"<td>{_esc(state)}</td>"
+            f"<td>{_esc(consent)}</td>"
+            f"<td>{hints}</td>"
+            "<td>"
+            f"{webhook_html}"
+            f'<form method="post" action="/admin/canales/{path}">'
+            f"{csrf_field(csrf)}"
+            f'<label>Nombre <input name="name" value="{_esc(info.name)}" maxlength="60" required></label>'
+            f'<label>Ícono <select name="icon">{_icon_options(info.icon, icons)}</select></label>'
+            f'<label>Color <input name="color" value="{_esc(info.color)}" pattern="#[0-9A-Fa-f]{{6}}" required></label>'
+            f'<label>Consentimiento <select name="consent_mode">{_consent_options(consent)}</select></label>'
+            f"{callback_html}{credentials_html}"
+            '<button type="submit" class="btn-secondary">Guardar</button>'
+            "</form>"
+            f'<form method="post" action="/admin/canales/{path}/activo">'
+            f"{csrf_field(csrf)}"
+            f'<input type="hidden" name="active" value="{toggle_to}">'
+            f'<button type="submit" class="btn-secondary">{toggle_label}</button>'
+            "</form>"
+            f"{secret_html}"
+            "</td>"
+            "</tr>"
+        )
+    adapter_options = "".join(
+        f'<option value="{_esc(adapter)}">{_esc(adapter)}</option>'
+        for adapter in listing.adapter_types
+    )
+    if adapter_options:
+        create = (
+            '<form method="post" action="/admin/canales" class="card">'
+            "<h3>Nuevo canal</h3>"
+            f"{csrf_field(csrf)}"
+            '<label>Id <input name="id" required minlength="2" maxlength="32" '
+            'pattern="[a-z][a-z0-9]*([_\\-][a-z0-9]+)*"></label>'
+            '<label>Nombre <input name="name" maxlength="60" required></label>'
+            f'<label>Tipo de adaptador <select name="adapter_type">{adapter_options}</select></label>'
+            f'<label>Ícono <select name="icon">{_icon_options("chat", icons)}</select></label>'
+            '<label>Color <input name="color" value="#1B6FA8" pattern="#[0-9A-Fa-f]{6}" required></label>'
+            f'<label>Consentimiento <select name="consent_mode">{_consent_options("texto")}</select></label>'
+            '<label>URL de callback (si el adaptador la usa) '
+            '<input name="callback_url" placeholder="https://"></label>'
+            "<label>Credenciales (nombre=valor por línea) "
+            '<textarea name="credentials" autocomplete="off"></textarea></label>'
+            '<button type="submit">Crear canal</button>'
+            "</form>"
+        )
+    else:
+        create = "<p>No hay tipos de adaptador disponibles para crear canales.</p>"
+    parts.append(create)
+    parts.append(
+        _table_wrap(
+            "<table><thead><tr><th>Canal</th><th>Id</th><th>Adaptador</th><th>Estado</th>"
+            "<th>Consentimiento</th><th>Credenciales</th><th>Acciones</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+    )
+    parts.append('<script src="/admin/static/canales.js" defer></script>')
+    return render_page("Canales", "\n".join(parts), csrf, "/admin/canales")
