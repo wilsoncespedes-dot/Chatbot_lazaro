@@ -12,11 +12,14 @@ def test_is_social_message_is_pure_and_exact():
     phrases = Settings().social_message_list
     before = list(phrases)
     for text in (
-        "hola", "¡Hola!", "buenas", "¿Qué tal?", "gracias", "gracias por todo",
-        "vale", "entendido", "hasta luego", "¿Cómo estás?",
+        "hola", "¡Hola!", "buenas", "gracias", "gracias por todo", "vale",
+        "entendido", "hasta luego",
     ):
         assert is_social_message(text, phrases) is True
-    for text in ("hola como creo un usuario", "hola asesor", "¿cuánto cuesta?", ""):
+    for text in (
+        "hola como creo un usuario", "hola asesor", "¿cuánto cuesta?",
+        "¿Qué tal?", "¿Cómo estás?", "como estas?", "",
+    ):
         assert is_social_message(text, phrases) is False
     assert phrases == before
 

@@ -7,7 +7,9 @@ bot y canal, y reutiliza la memoria e historial existentes.
 CUANDO una conversación está en estado `ACTIVE`,
 `CONVERSATIONAL_MODE_ENABLED=true` y una búsqueda RAG exitosa no devuelve
 fragmentos, el orquestador DEBE solicitar al LLM una clasificación explícita
-`general` o `manual_required` junto con la respuesta.
+`general` o `manual_required` junto con la respuesta. Las preguntas casuales no
+DEBEN ser interceptadas por la respuesta fija de mensajes sociales aunque una
+frase coincida con `SOCIAL_MESSAGES`.
 
 ## R2
 CUANDO el LLM devuelve `general` con una respuesta válida, el orquestador DEBE

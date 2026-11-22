@@ -217,6 +217,10 @@ def _social_key(text: str) -> str:
 
 
 def is_social_message(text: str, phrases: list[str] | tuple[str, ...]) -> bool:
-    """True solo si el texto normalizado es igual a alguna frase configurada."""
+    """True para mensajes sociales exactos, dejando preguntas al modo conversacional."""
+    # Frases como «cómo estás?» pueden estar configuradas como saludo social,
+    # pero deben llegar al LLM conversacional para una respuesta contextual.
+    if "?" in text or "¿" in text:
+        return False
     key = _social_key(text)
     return bool(key) and any(_social_key(phrase) == key for phrase in phrases)

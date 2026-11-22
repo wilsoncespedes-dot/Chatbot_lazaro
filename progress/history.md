@@ -304,3 +304,4 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 ## 2026-11-22 — Feature #88 `modo_conversacional_general` (done)
 - Implementa el fallback conversacional en el orquestador cuando la búsqueda RAG termina sin fragmentos; reutiliza memoria de sesión existente, historial y outbox, con guardia de términos de negocio y prompt injection.
 - Revisión estática aprobada y `python -m compileall` correcto. **Las pruebas no se ejecutaron**, por decisión del usuario; queda registrado que `./init.sh` no pudo completarse por configuración de Python/pytest y finales CRLF en el hook.
+- Corrección posterior: las preguntas con signos de interrogación ya no se contestan con el saludo social fijo y continúan al fallback conversacional.
