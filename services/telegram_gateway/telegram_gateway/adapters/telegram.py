@@ -1,6 +1,7 @@
 """Adaptador de Telegram (Bot API) con versión falsa."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Protocol, Sequence
 
@@ -154,7 +155,32 @@ def render_blocks(blocks: Sequence[ResponseBlock]) -> str:
             parts.append(f"{block.name}: {', '.join(block.variables)}")
         elif isinstance(block, TemplateBlock):
             parts.append(block.name)
-    return "\n".join(parts)[:MAX_TEXT_LENGTH]
+    return "\n".join(parts)
+
+
+def split_message_text(text: str) -> list[str]:
+    """Divide por límites legibles para no truncar una respuesta en Telegram."""
+    remaining = text.strip()
+    parts: list[str] = []
+    while len(remaining) > MAX_TEXT_LENGTH:
+        window = remaining[: MAX_TEXT_LENGTH + 1]
+        boundaries = [
+            window.rfind("\n\n") + 2,
+            max(
+                (match.end() for match in re.finditer(r"(?<=[.!?])\s+", window)),
+                default=0,
+            ),
+            window.rfind("\n") + 1,
+            window.rfind(" "),
+        ]
+        cut = max((boundary for boundary in boundaries if boundary > 0), default=0)
+        if cut <= 0:
+            cut = MAX_TEXT_LENGTH
+        parts.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        parts.append(remaining)
+    return parts
 
 
 class TelegramChannelAdapter:
@@ -179,11 +205,15 @@ class TelegramChannelAdapter:
     def send(
         self, destination: str, blocks: Sequence[ResponseBlock]
     ) -> DeliveryStatus:
-        self._client.send_message(
-            int(destination),
-            render_blocks(blocks),
-            reply_markup=build_inline_keyboard(blocks),
-        )
+        chat_id = int(destination)
+        parts = split_message_text(render_blocks(blocks))
+        reply_markup = build_inline_keyboard(blocks)
+        for index, part in enumerate(parts):
+            self._client.send_message(
+                chat_id,
+                part,
+                reply_markup=reply_markup if index == len(parts) - 1 else None,
+            )
         return "sent"
 
     def delivery_status(self, raw: str) -> DeliveryStatus:
