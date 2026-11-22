@@ -13,7 +13,11 @@ import pytest
 from lazaro_contracts import LastMessage
 
 from handover.adapters.gateway import HttpGatewayClient
-from handover.adapters.repository import FakeCaseRepository, PostgresCaseRepository
+from handover.adapters.repository import (
+    SCHEMA_LOCK_SQL,
+    FakeCaseRepository,
+    PostgresCaseRepository,
+)
 from handover.domain import Case, Denial, HandoverRequestRecord, ServiceUnavailable
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -83,6 +87,7 @@ def test_postgres_repository_uses_parameters_only():
         for sql, params in conn.log
         if not sql.startswith(("CREATE", "ALTER"))
         and "handover_roster_state" not in sql
+        and sql != SCHEMA_LOCK_SQL
     ]
     assert len(statements) == 10
     for sql, params in statements:
@@ -269,7 +274,20 @@ def _statements(conn: _FakeConn) -> list[tuple[str, tuple]]:
         for sql, params in conn.log
         if not sql.startswith(("CREATE", "ALTER"))
         and "handover_roster_state" not in sql
+        and sql != SCHEMA_LOCK_SQL
     ]
+
+
+def test_schema_bootstrap_takes_the_global_lock_first():
+    """El primer comando de una conexión nueva es el turno global de esquema,
+    antes de cualquier CREATE: evita el deadlock con los workers al arrancar."""
+    conn = _FakeConn()
+    repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
+    repo.get_case("case-1")
+    assert conn.log[0][0] == SCHEMA_LOCK_SQL
+    assert "pg_advisory_xact_lock" in SCHEMA_LOCK_SQL
+    first_create = next(i for i, (sql, _) in enumerate(conn.log) if sql.startswith("CREATE"))
+    assert first_create == 1
 
 
 def test_postgres_repository_add_denial_uses_parameters_only():

@@ -487,6 +487,10 @@ class FakeCaseRepository:
         return counts, closed_active_cases
 
 
+# Turno global para crear el esquema: la misma clave en todos los servicios que
+# comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
+SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
+
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS handover_cases ("
     "case_id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, chat_id BIGINT NOT NULL, "
@@ -636,6 +640,8 @@ class PostgresCaseRepository:
         if self._conn is None:
             conn = self._connect()
             cur = conn.cursor()
+            # handover y sus workers arrancan a la vez: un turno evita el deadlock.
+            cur.execute(SCHEMA_LOCK_SQL)
             for statement in _SCHEMA:
                 cur.execute(statement)
             conn.commit()

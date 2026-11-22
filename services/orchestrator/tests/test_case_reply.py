@@ -256,7 +256,10 @@ def test_postgres_case_links_use_parameters_only():
     contact = repo.get_case_contact(secret)
     assert contact == Contact(id="c1", telegram_user_id=10, chat_id=100)
     assert any("CREATE TABLE IF NOT EXISTS case_links" in sql for sql, _ in conn.log)
-    statements = [(sql, p) for sql, p in conn.log if not sql.startswith("CREATE")]
+    statements = [
+        (sql, p) for sql, p in conn.log
+        if not sql.startswith("CREATE") and "pg_advisory_xact_lock" not in sql
+    ]
     assert len(statements) == 4
     for sql, params in statements:
         assert secret not in sql and sql.count("%s") == len(params)

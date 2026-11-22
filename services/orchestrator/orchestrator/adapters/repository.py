@@ -3966,6 +3966,10 @@ class FakeRepository:
         return samples
 
 
+# Turno global para crear el esquema: la misma clave en todos los servicios que
+# comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
+SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
+
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS contacts ("
     "id TEXT PRIMARY KEY, channel TEXT NOT NULL, "
@@ -4400,6 +4404,9 @@ class PostgresRepository:
         if self._conn is None:
             conn = self._connect()
             cur = conn.cursor()
+            # El orquestador y sus workers arrancan a la vez y crean el mismo
+            # esquema: sin turno, Postgres detecta un deadlock y el proceso cae.
+            cur.execute(SCHEMA_LOCK_SQL)
             for statement in _SCHEMA:
                 cur.execute(statement)
             for statement in _INDEXES:

@@ -186,7 +186,10 @@ def test_postgres_repository_uses_parameters_only():
     for sql, _ in conn.log:
         assert "TEXTO-CLIENTE" not in sql and "DROP TABLE messages" not in sql
         assert "'" not in sql
-    dml = [sql for sql, _ in conn.log if not sql.startswith("CREATE")]
+    dml = [
+        sql for sql, _ in conn.log
+        if not sql.startswith("CREATE") and "pg_advisory_xact_lock" not in sql
+    ]
     assert dml and all("%s" in sql for sql in dml)
 
 

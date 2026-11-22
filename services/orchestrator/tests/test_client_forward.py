@@ -192,7 +192,10 @@ def test_postgres_last_case_uses_parameters_only():
     repo = PostgresRepository("postgresql://x", connect=lambda: conn)
     secret = "'; DROP TABLE x; --"
     assert repo.get_contact_last_case(secret) is None
-    statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]
+    statements = [
+        (sql, params) for sql, params in conn.log
+        if not sql.startswith("CREATE") and "pg_advisory_xact_lock" not in sql
+    ]
     assert len(statements) == 1
     sql, params = statements[0]
     assert "ORDER BY created_at DESC" in sql and "LIMIT 1" in sql

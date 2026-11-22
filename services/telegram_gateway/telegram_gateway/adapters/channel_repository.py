@@ -13,6 +13,10 @@ from urllib.parse import unquote, urlparse
 from ..domain import ChannelRecord, ChannelSeed
 
 IDLE_PROBE_SECONDS = 10.0
+# Turno global para crear el esquema: la misma clave en todos los servicios que
+# comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
+SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
+
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS canales ("
     "id TEXT PRIMARY KEY, nombre TEXT NOT NULL, tipo_adaptador TEXT NOT NULL, "
@@ -312,6 +316,7 @@ class PostgresChannelRepository:
             conn = self._connect()
             try:
                 cursor = conn.cursor()
+                cursor.execute(SCHEMA_LOCK_SQL)
                 for statement in _SCHEMA:
                     cursor.execute(statement)
                 conn.commit()
