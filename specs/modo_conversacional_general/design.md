@@ -35,7 +35,8 @@ el entorno cuando se conozcan los términos del negocio.
   pago(s), cuenta(s), cliente(s), usuario(s), política(s), proceso(s),
   operación(es), licencia(s), contrato(s), pedido(s), reserva(s), soporte,
   horario(s), garantía(s), manual(es), instalar, instalo, instala, instale,
-  instalación, configurar, configuro, configura, configuración`
+  instalación, configurar, configura, configuración` (50 términos máximos,
+  como exige el parser de keywords compartido)
   y sus properties normalizadas. Pydantic lee `CONVERSATIONAL_MODE_ENABLED` y
   `CONVERSATIONAL_BUSINESS_TERMS` del entorno.
 - `.env.example`: documentar `CONVERSATIONAL_MODE_ENABLED=true`, editable por

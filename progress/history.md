@@ -305,3 +305,4 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - Implementa el fallback conversacional en el orquestador cuando la búsqueda RAG termina sin fragmentos; reutiliza memoria de sesión existente, historial y outbox, con guardia de términos de negocio y prompt injection.
 - Revisión estática aprobada y `python -m compileall` correcto. **Las pruebas no se ejecutaron**, por decisión del usuario; queda registrado que `./init.sh` no pudo completarse por configuración de Python/pytest y finales CRLF en el hook.
 - Corrección posterior: las preguntas con signos de interrogación ya no se contestan con el saludo social fijo y continúan al fallback conversacional.
+- Incidente 2026-11-22: el CI detectó que el default tenía 51 términos frente al límite de 50 del parser compartido, lo que impedía crear `Settings` al iniciar el orquestador. Se retiró `configuro`; las pruebas no se ejecutaron localmente.

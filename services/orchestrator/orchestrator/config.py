@@ -36,7 +36,7 @@ DEFAULT_CONVERSATIONAL_BUSINESS_TERMS = (
     "usuario,usuarios,política,políticas,proceso,procesos,operación,operaciones,"
     "licencia,licencias,contrato,contratos,pedido,pedidos,reserva,reservas,"
     "soporte,horario,horarios,garantía,garantías,manual,manuales,instalar,instalo,"
-    "instala,instale,instalación,configurar,configuro,configura,configuración"
+    "instala,instale,instalación,configurar,configura,configuración"
 )
 
 REQUIRED_IN_PRODUCTION = (
