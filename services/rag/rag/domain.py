@@ -5,6 +5,7 @@ Sin IO: la extracción de texto y los adaptadores entran como dependencias.
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
@@ -89,20 +90,82 @@ def detect_format(data: bytes) -> str:
 
 
 def chunk_text(text: str, size: int, overlap: int) -> list[str]:
-    """Ventana deslizante de `size` caracteres con paso `size - overlap` sobre texto normalizado."""
+    """Agrupa frases y líneas; cae a ventanas de caracteres si no hay límites legibles."""
     normalized = " ".join(text.split())
     if not normalized:
         return []
-    step = max(size - overlap, 1)
+    if size < 1:
+        return []
+    overlap = max(0, min(overlap, size - 1))
+
+    def split_long_unit(unit: str) -> list[str]:
+        words = unit.split()
+        pieces: list[str] = []
+        current = ""
+        for word in words:
+            if len(word) > size:
+                if current:
+                    pieces.append(current)
+                    current = ""
+                pieces.extend(word[index:index + size] for index in range(0, len(word), size))
+                continue
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > size:
+                pieces.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            pieces.append(current)
+        return pieces
+
+    units = [
+        " ".join(part.split())
+        for part in re.split(r"[\r\n]+|(?<=[.!?])\s+", text)
+        if part.strip()
+    ]
+    if len(units) <= 1 and not re.search(r"[.!?\r\n]", text):
+        step = max(size - overlap, 1)
+        chunks: list[str] = []
+        start = 0
+        while start < len(normalized):
+            chunks.append(normalized[start:start + size])
+            if start + size >= len(normalized):
+                break
+            start += step
+        return chunks
+
+    bounded_units = [
+        piece
+        for unit in units
+        for piece in (split_long_unit(unit) if len(unit) > size else [unit])
+    ]
     chunks: list[str] = []
-    start = 0
-    while start < len(normalized):
-        piece = normalized[start:start + size]
-        if piece.strip():
-            chunks.append(piece)
-        if start + size >= len(normalized):
-            break
-        start += step
+    current: list[str] = []
+    current_length = 0
+    for unit in bounded_units:
+        extra = len(unit) + (1 if current else 0)
+        if current and current_length + extra > size:
+            chunks.append(" ".join(current))
+            previous_context: list[str] = []
+            context_length = 0
+            for previous in reversed(current):
+                candidate_length = len(previous) + (1 if previous_context else 0)
+                if context_length + candidate_length > overlap:
+                    break
+                previous_context.insert(0, previous)
+                context_length += candidate_length
+            current = previous_context
+            current_length = context_length
+            extra = len(unit) + (1 if current else 0)
+            if current and current_length + extra > size:
+                current = []
+                current_length = 0
+                extra = len(unit)
+        current.append(unit)
+        current_length += extra
+    if current:
+        chunks.append(" ".join(current))
     return chunks
 
 

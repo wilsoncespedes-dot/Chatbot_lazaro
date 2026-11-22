@@ -821,6 +821,13 @@
       ],
       "sdd": false,
       "status": "done"
+    },
+    {
+      "id": 79,
+      "name": "respuestas_rag_completas",
+      "title": "Respuestas RAG sintetizadas y sin cortes",
+      "sdd": true,
+      "status": "in_progress"
     }
   ]
 }
