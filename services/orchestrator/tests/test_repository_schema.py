@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 
 from orchestrator.adapters.repository import (
+    SCHEMA_LOCK_SQL,
     PostgresRepository,
     _INDEXES,
     _MIGRATIONS,
@@ -338,6 +339,34 @@ class _ContactConn:
 
     def rollback(self) -> None:
         pass
+
+
+def test_schema_bootstrap_takes_the_global_lock_before_any_ddl():
+    """El orquestador y sus workers (procesar_entrantes, enviar_salientes)
+    arrancan a la vez: el turno global va antes de cualquier CREATE/ALTER para
+    que Postgres no detecte un deadlock y el proceso no caiga al arrancar."""
+    log: list = []
+    repo = PostgresRepository("postgresql://x", connect=lambda: _ContactConn(log))
+    repo.get_case_contact("case-1")
+    assert log[0][0] == SCHEMA_LOCK_SQL == "SELECT pg_advisory_xact_lock(7301984)"
+    assert all(not sql.startswith(("CREATE", "ALTER")) for sql, _ in log[:1])
+    assert log[1][0].lstrip().startswith("CREATE")
+
+
+def test_schema_lock_key_is_shared_by_every_service():
+    """La misma clave en todos los servicios que comparten la base."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    for module in (
+        "services/orchestrator/orchestrator/adapters/repository.py",
+        "services/handover/handover/adapters/repository.py",
+        "services/telegram_gateway/telegram_gateway/adapters/channel_repository.py",
+        "services/telegram_gateway/telegram_gateway/adapters/mailbox.py",
+    ):
+        text = (root / module).read_text(encoding="utf-8")
+        assert f'SCHEMA_LOCK_SQL = "{SCHEMA_LOCK_SQL}"' in text, module
+        assert "execute(SCHEMA_LOCK_SQL)" in text, module
 
 
 def test_get_case_contact_selects_all_six_columns():

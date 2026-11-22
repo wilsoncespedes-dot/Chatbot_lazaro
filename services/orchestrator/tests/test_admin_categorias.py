@@ -548,7 +548,10 @@ def test_postgres_category_queries_use_parameters_only():
     repo.get_classifier_threshold()
     repo.set_classifier_threshold(0.5)
 
-    statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]
+    statements = [
+        (sql, params) for sql, params in conn.log
+        if not sql.startswith("CREATE") and "pg_advisory_xact_lock" not in sql
+    ]
     assert len(statements) == 6
     for sql, params in statements:
         assert secret not in sql

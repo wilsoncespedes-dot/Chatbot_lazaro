@@ -452,7 +452,10 @@ def test_postgres_get_link_token_role_is_single_select():
     )
     assert repo.get_link_token_role("hash", FIXED_NOW) == "asesor"
 
-    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    selects = [
+        sql for sql in statements
+        if sql.lstrip().upper().startswith("SELECT") and "pg_advisory_xact_lock" not in sql
+    ]
     assert len(selects) == 1
     assert "used_at IS NULL" in selects[0]
     assert "expires_at >" in selects[0]

@@ -33,7 +33,9 @@ class _Cursor:
         values = tuple(params or ())
         self.conn.log.append((sql, values))
         normalized = " ".join(sql.split())
-        if normalized.startswith(("CREATE TABLE", "CREATE INDEX")):
+        if normalized.startswith(("CREATE TABLE", "CREATE INDEX")) or (
+            "pg_advisory_xact_lock" in normalized
+        ):
             self.rows = []
         elif normalized.startswith("INSERT INTO buzon_simulado"):
             self.conn.next_id += 1

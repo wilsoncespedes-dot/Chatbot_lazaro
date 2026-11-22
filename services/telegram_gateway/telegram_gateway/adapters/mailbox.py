@@ -17,6 +17,10 @@ from .channel_repository import (
     is_connection_error,
 )
 
+# Turno global para crear el esquema: la misma clave en todos los servicios que
+# comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
+SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
+
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS buzon_simulado ("
     "id BIGSERIAL PRIMARY KEY, canal_id TEXT NOT NULL, destino TEXT NOT NULL, "
@@ -192,6 +196,7 @@ class PostgresMailboxRepository:
             conn = self._connect()
             try:
                 cursor = conn.cursor()
+                cursor.execute(SCHEMA_LOCK_SQL)
                 for statement in _SCHEMA:
                     cursor.execute(statement)
                 conn.commit()
