@@ -23,8 +23,9 @@ DEFAULT_HANDOVER_KEYWORDS = (
 )
 
 DEFAULT_SOCIAL_MESSAGES = (
-    "hola,buenos días,buenas tardes,buenas noches,gracias,muchas gracias,"
-    "ok,perfecto,de acuerdo,cómo estás,cómo va"
+    "hola,buenas,buenos días,buenas tardes,buenas noches,buen día,que tal,hey,"
+    "hola a todos,gracias,muchas gracias,gracias por todo,ok,okey,vale,perfecto,"
+    "genial,entendido,de acuerdo,listo,cómo estás,cómo va,hasta luego,adiós,nos vemos"
 )
 DEFAULT_SOCIAL_REPLY = "¡Hola! Gracias por escribirnos. ¿En qué puedo ayudarte?"
 
@@ -111,7 +112,8 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = 10
     rag_top_k: int = Field(default=5, ge=1, le=20)
     no_answer_reply: str = (
-        "No encontré información sobre eso en los manuales. Te paso con un asesor."
+        "No tengo ese dato en los manuales disponibles. "
+        "Puedo pasarte con un asesor si lo necesitas."
     )
     handover_ack_reply: str = "Avisé a un asesor; te responderá por aquí en cuanto pueda."
     error_reply: str = "Tuve un problema para responderte. Inténtalo de nuevo en unos minutos."

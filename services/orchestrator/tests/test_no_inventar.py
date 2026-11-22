@@ -11,6 +11,7 @@ import pytest
 from lazaro_contracts import SearchResult
 
 from orchestrator import domain
+from orchestrator.config import Settings
 from orchestrator.domain import (
     INVALID_REASONS,
     InvalidAnswer,
@@ -21,7 +22,7 @@ from orchestrator.domain import (
     validate_llm_answer,
 )
 
-NO_ANSWER = "No encontré información sobre eso en los manuales. Te paso con un asesor."
+NO_ANSWER = Settings().no_answer_reply
 ROOT = Path(__file__).resolve().parents[3]
 PKG = Path(__file__).resolve().parents[1] / "orchestrator"
 

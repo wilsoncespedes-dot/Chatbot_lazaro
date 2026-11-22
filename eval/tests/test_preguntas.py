@@ -20,6 +20,17 @@ def test_r1_r2_r3_conteos_e_ids_unicos():
     assert all(q.fragmento_esperado for q in qs if q.tipo == "responde")
 
 
+def test_r7_saludo_pregunta_cases():
+    """R10: casos límite de saludo+pregunta, sin tipos nuevos en scoring."""
+    qs = load_questions(PREGUNTAS)
+    mixtas = [q for q in qs if q.pregunta.lower().startswith(("hola", "buenos días", "buenas"))]
+    assert len(mixtas) >= 2
+    assert {"s01", "s02"} <= {q.id for q in mixtas}
+    assert all(q.tipo == "responde" and q.fragmento_esperado for q in mixtas)
+    assert {q.tipo for q in qs} <= {"responde", "no_responde"}
+    # `test_r5_fragmento_esperado_en_manual` ya comprueba que sus fragmentos están.
+
+
 def test_r4_manual_existe_y_es_texto():
     files = [p for p in MANUAL_DIR.iterdir() if p.suffix in {".md", ".txt"}]
     assert files

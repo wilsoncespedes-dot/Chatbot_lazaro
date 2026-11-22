@@ -14,6 +14,8 @@
     {"id": "r11", "pregunta": "¿Qué tamaño máximo tienen los archivos adjuntos?", "tipo": "responde", "fragmento_esperado": "10 MB"},
     {"id": "r12", "pregunta": "¿Cómo corrijo una factura ya emitida?", "tipo": "responde", "fragmento_esperado": "emitiendo una factura rectificativa"},
     {"id": "r13", "pregunta": "¿En qué formatos puedo exportar las facturas?", "tipo": "responde", "fragmento_esperado": "en formato PDF y en formato CSV"},
+    {"id": "s01", "pregunta": "hola, ¿cómo doy de alta un usuario nuevo?", "tipo": "responde", "fragmento_esperado": "pulsa el botón Crear usuario"},
+    {"id": "s02", "pregunta": "buenos días, ¿cuál es el horario del soporte técnico entre semana?", "tipo": "responde", "fragmento_esperado": "de lunes a viernes de 9:00 a 18:00"},
     {"id": "n01", "pregunta": "¿Cuál es la capital de Australia?", "tipo": "no_responde"},
     {"id": "n02", "pregunta": "¿Cuánto cuesta el plan Profesional al mes?", "tipo": "no_responde"},
     {"id": "n03", "pregunta": "¿Tienen una aplicación móvil para iPhone?", "tipo": "no_responde"},

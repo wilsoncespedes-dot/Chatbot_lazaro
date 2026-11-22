@@ -101,6 +101,18 @@ def test_r15_informe_con_fallos_y_ninguno():
     assert "Ninguno" in ok
 
 
+def test_report_exposes_quality_metrics():
+    """R9: el informe expone las tres métricas de calidad del acceptance."""
+    summary = summarize(_mix())
+    assert summary.tasa_recuperacion == 1 / 3
+    assert summary.tasa_rechazo == 1 / 3
+    assert summary.inventadas == 1
+    texto = render_report(summary, url="http://x", mode="rag", date=date(2026, 1, 2))
+    for frag in ("Aciertos de recuperación", "Rechazos correctos",
+                 "Respuestas inventadas detectadas"):
+        assert frag in texto
+
+
 def test_r7_scoring_sin_red_ni_entorno():
     src = (Path(__file__).resolve().parent.parent / "scoring.py").read_text(encoding="utf-8")
     tree = ast.parse(src)

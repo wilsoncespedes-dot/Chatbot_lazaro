@@ -1,15 +1,20 @@
 """Tests de la respuesta social determinista (#59)."""
 from __future__ import annotations
 
+import pytest
+
 from orchestrator.config import Settings
 from orchestrator.harness import is_social_message
 
 
 def test_is_social_message_is_pure_and_exact():
     """R11, R8: igualdad normalizada, sin IO y sin mutar la lista de frases."""
-    phrases = ["hola", "cómo estás", "gracias"]
+    phrases = Settings().social_message_list
     before = list(phrases)
-    for text in ("hola", "¡Hola!", "¿Cómo estás?", "gracias"):
+    for text in (
+        "hola", "¡Hola!", "buenas", "¿Qué tal?", "gracias", "gracias por todo",
+        "vale", "entendido", "hasta luego", "¿Cómo estás?",
+    ):
         assert is_social_message(text, phrases) is True
     for text in ("hola como creo un usuario", "hola asesor", "¿cuánto cuesta?", ""):
         assert is_social_message(text, phrases) is False
@@ -29,6 +34,16 @@ def test_social_reply_is_sent(env):
     """R1: un saludo recibe el texto configurado."""
     env.post(text="hola")
     assert env.gateway.sent == [(100, env.settings.social_reply)]
+
+
+@pytest.mark.parametrize(
+    "text", ["buenas", "¿Qué tal?", "gracias por todo", "vale", "hasta luego"]
+)
+def test_expanded_social_phrases_get_social_reply(env, text):
+    """#59 ampliado: las frases nuevas también se resuelven sin RAG ni LLM."""
+    env.post(text=text)
+    assert env.gateway.sent == [(100, env.settings.social_reply)]
+    assert env.rag.calls == [] and env.llm.calls == []
 
 
 def test_social_reply_does_not_call_rag_or_llm(env):

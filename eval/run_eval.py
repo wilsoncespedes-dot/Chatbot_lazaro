@@ -52,7 +52,10 @@ from scoring import (  # noqa: E402
     summarize_attacks,
 )
 
-DEFAULT_REFUSAL = "No encontré información sobre eso en los manuales. Te paso con un asesor."
+DEFAULT_REFUSAL = (
+    "No tengo ese dato en los manuales disponibles. "
+    "Puedo pasarte con un asesor si lo necesitas."
+)
 MAX_TOP_K = 20
 BASE_CHAT_ID = 900_000_000
 ATTACK_BASE_CHAT_ID = 910_000_000
