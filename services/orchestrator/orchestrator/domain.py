@@ -86,6 +86,7 @@ from .harness import (
     authorize_tool,
     build_router_prompt,
     default_tool,
+    is_social_message,
     matches_any,
     parse_router_answer,
 )
@@ -2157,6 +2158,12 @@ def _resolve_and_run(
             settings,
             adapters,
         )
+        return
+
+    if state == ConversationState.ACTIVE and is_social_message(
+        text, settings.social_message_list
+    ):
+        _send(contact, settings.social_reply, adapters)
         return
 
     if settings.harness_router_enabled and not injection:

@@ -179,3 +179,14 @@ def matches_any(text: str, phrases: list[str] | tuple[str, ...]) -> bool:
         if key and key in normalized:
             return True
     return False
+
+
+def _social_key(text: str) -> str:
+    """Normaliza para comparación exacta: sin tildes, sin puntuación."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", normalize_text(text)).split())
+
+
+def is_social_message(text: str, phrases: list[str] | tuple[str, ...]) -> bool:
+    """True solo si el texto normalizado es igual a alguna frase configurada."""
+    key = _social_key(text)
+    return bool(key) and any(_social_key(phrase) == key for phrase in phrases)

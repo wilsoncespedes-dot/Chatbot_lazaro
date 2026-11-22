@@ -74,6 +74,7 @@
     {"id": 55, "name": "evaluacion_ataques_y_preguntas_reales", "title": "Evaluación con casos de ataque y preguntas reales", "sdd": true, "status": "done"},
     {"id": 56, "name": "rediseño_visual_paneles", "title": "Rediseño visual moderno de los paneles", "sdd": true, "status": "done"},
     {"id": 57, "name": "retencion_evidencia_y_privacidad_inicial", "title": "Aplicar la retención aprobada a la evidencia de consentimiento", "sdd": true, "status": "done"},
-    {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"}
+    {"id": 58, "name": "correcciones_sonar", "title": "Corregir hallazgos del análisis estático (Sonar)", "sdd": true, "status": "done"},
+    {"id": 59, "name": "saludos_y_mensajes_sociales", "title": "Respuesta determinista a saludos y mensajes sociales", "sdd": true, "status": "done"}
   ]
 }

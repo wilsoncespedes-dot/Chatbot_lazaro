@@ -9,6 +9,10 @@ SERVICE_TOKEN = "svc-token"
 HEADERS = {"X-Service-Token": SERVICE_TOKEN}
 RECEIVED_AT = "2026-11-03T16:05:12Z"
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+# #59: «Hola» es ahora un mensaje social con respuesta propia; estos tests
+# comprueban identidad de canal, no saludos. Se usa una pregunta real como
+# payload para conservar la intención original (RAG + «Respuesta final»).
+CANONICAL_TEXT = "¿Cómo instalo el módulo?"
 
 
 def _consent(env, channel: str, external_user_id: str) -> None:
@@ -28,7 +32,7 @@ def _canonical(channel: str, external_id: str = "77", **changes):
         "external_chat_id": "100" if channel == "telegram" else "57300",
         "external_message_id": external_id,
         "kind": "text",
-        "text": "Hola",
+        "text": CANONICAL_TEXT,
         "received_at": RECEIVED_AT,
     }
     data.update(changes)
@@ -43,7 +47,7 @@ def test_canonical_whatsapp_message_is_processed_and_answered(env):
     )
     assert response.status_code == 202
     assert response.json() == {"status": "accepted"}
-    assert env.rag.calls == [("Hola", env.settings.rag_top_k)]
+    assert env.rag.calls == [(CANONICAL_TEXT, env.settings.rag_top_k)]
     assert env.gateway.channel_sent == [("whatsapp", "57300", "Respuesta final")]
     contact = env.repo.contacts[("whatsapp", "57300")]
     assert contact.external_user_id == "57300"
@@ -114,4 +118,4 @@ def test_canonical_telegram_with_opaque_ids_is_accepted_as_text(env):
     assert env.gateway.channel_sent == [
         ("telegram", "tg-chat", "Respuesta final")
     ]
-    assert env.rag.calls == [("Hola", env.settings.rag_top_k)]
+    assert env.rag.calls == [(CANONICAL_TEXT, env.settings.rag_top_k)]

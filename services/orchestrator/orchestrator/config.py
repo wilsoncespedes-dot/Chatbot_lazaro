@@ -22,6 +22,12 @@ DEFAULT_HANDOVER_KEYWORDS = (
     "quiero un asesor,quiero un agente,agente humano"
 )
 
+DEFAULT_SOCIAL_MESSAGES = (
+    "hola,buenos días,buenas tardes,buenas noches,gracias,muchas gracias,"
+    "ok,perfecto,de acuerdo,cómo estás,cómo va"
+)
+DEFAULT_SOCIAL_REPLY = "¡Hola! Gracias por escribirnos. ¿En qué puedo ayudarte?"
+
 REQUIRED_IN_PRODUCTION = (
     "SERVICE_TOKEN",
     "DATABASE_URL",
@@ -117,6 +123,8 @@ class Settings(BaseSettings):
     auto_handover_failure_threshold: int = Field(default=3, ge=1)
     auto_handover_failure_reasons: str = "no_relevant_chunks,invalid_answer"
     handover_keywords: str = DEFAULT_HANDOVER_KEYWORDS
+    social_messages: str = DEFAULT_SOCIAL_MESSAGES
+    social_reply: str = DEFAULT_SOCIAL_REPLY
     case_closed_reply: str = (
         "Tu caso con el asesor quedó cerrado. Si necesitas algo más, escríbenos por aquí."
     )
@@ -578,6 +586,10 @@ class Settings(BaseSettings):
     @property
     def handover_keyword_list(self) -> list[str]:
         return [k.strip() for k in self.handover_keywords.split(",") if k.strip()]
+
+    @property
+    def social_message_list(self) -> list[str]:
+        return [p.strip() for p in self.social_messages.split(",") if p.strip()]
 
     @property
     def identity_logout_command_list(self) -> tuple[str, ...]:

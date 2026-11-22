@@ -84,3 +84,11 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Sin cambio de código:** los falsos positivos quedaron marcados con `# NOSONAR` (verificados por `scripts/tests/test_sonar_markers.py`); el hallazgo de `test_advisor_commands.py` estaba obsoleto y el archivo no se tocó.
 - **Resultado:** `./init.sh` verde, 3624 passed, 1 skipped (un ciclo de corrección por ids de `parametrize` en Windows); revisión de código `APPROVED`.
 - **Pendiente fuera de alcance:** `eval/scoring.py` línea 30 conserva la misma regex de correo; no estaba en el reporte y queda a decisión del leader.
+
+## 2026-11-21 — Feature #59 `saludos_y_mensajes_sociales` (done)
+- **Origen:** al escribir «hola», el bot respondía «No encontré información sobre eso en los manuales…». Causa: con `HARNESS_ROUTER_ENABLED=false`, todo mensaje `ACTIVE` caía en `buscar_base_conocimiento`; sin fragmentos se enviaba `no_answer_reply` y se contaba un fallo RAG que escalaba a asesor al tercer intento.
+- **Decisión del dueño:** arreglarlo localmente, sin LLM extra, sin ingerir más PDFs (cuesta dinero) y sin salirse del rol; fuera del corpus, rechazo útil + asesor. Spec en `specs/saludos_y_mensajes_sociales/` (R1–R11, T1–T8), aprobado en revisión enfocada.
+- **Cambio:** guardia determinista en `domain.py::_resolve_and_run` solo para `ACTIVE`, antes del router/RAG y después de las keywords; `is_social_message` puro en `harness.py` con igualdad de texto normalizado; `SOCIAL_MESSAGES`/`SOCIAL_REPLY` en `config.py` y `.env.example`. Sin herramientas nuevas (la matriz sigue con 6).
+- **Tests:** 8 nuevos en `test_social_messages.py` con trazabilidad R1–R11 en `progress/impl_saludos_y_mensajes_sociales.md`. Se ajustó el payload de `test_multicanal_flow.py` («Hola» → pregunta real) porque «Hola» ya tiene comportamiento propio; la intención del test se conserva y el reviewer lo aprobó.
+- **Resultado:** `./init.sh` verde (Git Bash), 3631 passed, 2 skipped; revisión `APROBADO`. Se instalaron `cryptography` y `pg8000`, ya declarados en `requirements.txt`, que faltaban en el entorno.
+- **Siguiente:** #60 `calidad_respuestas_y_evaluacion` (specs de prompts, umbral/`top_k` y evaluación sobre el corpus existente), aún sin spec.
