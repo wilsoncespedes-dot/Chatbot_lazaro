@@ -273,3 +273,22 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - Se conserva la API interna `/profiles/{id}/link-token` y el `/start` de
   Telegram (feature #20) porque no son del panel; sin enlace nuevo, un asesor
   no podrá usar `/db_query` desde Telegram.
+
+## Rama `juan` (Juan Pablo Parra), traída en el merge del 2026-11-22: sus #59 y #60 son aquí #86 y #87
+
+## 2026-11-21 — Feature #59 `saludos_y_mensajes_sociales` (done)
+- **Origen:** al escribir «hola», el bot respondía «No encontré información sobre eso en los manuales…». Causa: con `HARNESS_ROUTER_ENABLED=false`, todo mensaje `ACTIVE` caía en `buscar_base_conocimiento`; sin fragmentos se enviaba `no_answer_reply` y se contaba un fallo RAG que escalaba a asesor al tercer intento.
+- **Decisión del dueño:** arreglarlo localmente, sin LLM extra, sin ingerir más PDFs (cuesta dinero) y sin salirse del rol; fuera del corpus, rechazo útil + asesor. Spec en `specs/saludos_y_mensajes_sociales/` (R1–R11, T1–T8), aprobado en revisión enfocada.
+- **Cambio:** guardia determinista en `domain.py::_resolve_and_run` solo para `ACTIVE`, antes del router/RAG y después de las keywords; `is_social_message` puro en `harness.py` con igualdad de texto normalizado; `SOCIAL_MESSAGES`/`SOCIAL_REPLY` en `config.py` y `.env.example`. Sin herramientas nuevas (la matriz sigue con 6).
+- **Tests:** 8 nuevos en `test_social_messages.py` con trazabilidad R1–R11 en `progress/impl_saludos_y_mensajes_sociales.md`. Se ajustó el payload de `test_multicanal_flow.py` («Hola» → pregunta real) porque «Hola» ya tiene comportamiento propio; la intención del test se conserva y el reviewer lo aprobó.
+- **Resultado:** `./init.sh` verde (Git Bash), 3631 passed, 2 skipped; revisión `APROBADO`. Se instalaron `cryptography` y `pg8000`, ya declarados en `requirements.txt`, que faltaban en el entorno.
+- **Siguiente:** #60 `calidad_respuestas_y_evaluacion` (specs de prompts, umbral/`top_k` y evaluación sobre el corpus existente), aún sin spec.
+- **Ampliación posterior (2026-11-22):** `SOCIAL_MESSAGES` pasó de 11 a 25 frases (`buenas`, `qué tal`, `gracias por todo`, `vale`, `hasta luego`, …) como cambio de configuración sin spec, con tests parametrizados nuevos.
+
+## 2026-11-22 — Feature #60 `calidad_respuestas_y_evaluacion` (done)
+- **Origen:** el dueño pidió «hacer ambas cosas»: ampliar los saludos y mejorar la calidad de respuestas y su evaluación. Restricción firme: el corpus está congelado por coste, sin ingesta nueva, sin llamadas extra al LLM, matriz de 6 herramientas, router apagado y sin tipo `saluda` en `eval/scoring.py`.
+- **Spec:** `specs/calidad_respuestas_y_evaluacion/` (R1–R13, T1–T10). Primera revisión `CAMBIOS REQUERIDOS` por dos puntos concretos: `HARNESS_ROUTER_PROMPT` está en `harness.py` (no en `domain.py`) y el acceptance exigía ejecutar la medición antes/después, no solo documentar el comando. Corregidos y re-revisado: `APROBADO`.
+- **Cambio:** cortesía literal en `LLM_SYSTEM_PROMPT` y `HARNESS_ROUTER_PROMPT` sin nuevos datos ni herramientas; rechazo único «No tengo ese dato en los manuales disponibles. Puedo pasarte con un asesor si lo necesitas.» sincronizado en `config.py`, `.env.example` y `eval/run_eval.py`; dos casos de saludo+pregunta (`s01`, `s02`) en `eval/preguntas.json`; tests de configuración de `RAG_SIMILARITY_THRESHOLD` y `RAG_TOP_K` sin cambiar sus defaults.
+- **Tests:** 11 nuevos, trazabilidad R1–R13 en `progress/impl_calidad_respuestas_y_evaluacion.md`. Se ajustaron las copias antiguas del rechazo en `test_decisions.py` y `test_no_inventar.py` (ahora `Settings().no_answer_reply`) y el conteo 19 → 21 en `test_run_eval_attacks.py`. Ningún test saltado ni borrado.
+- **Medición real antes/después** con TestClient + `FakeEmbeddings`/`FakeChunkRepository` + manual de ejemplo: 19 preguntas → recuperación 2/13 (15%), rechazos 2/6 (33%), inventadas 4; 21 preguntas → 2/15 (13%), 2/6 (33%), 4. Declarado expresamente como no representativo del corpus de producción; no se recalibró el umbral a partir de esos valores.
+- **Resultado:** `./init.sh` verde (Git Bash), 3647 passed, 2 skipped; revisión de código `APROBADO` tras reforzar R8 con la comprobación del camino real de `run_eval.main`.

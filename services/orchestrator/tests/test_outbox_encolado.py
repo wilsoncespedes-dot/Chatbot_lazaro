@@ -33,7 +33,8 @@ def _message(update_id: int = 1) -> MessageRequest:
         update_id=update_id,
         telegram_user_id=10,
         chat_id=100,
-        text="Hola",
+        # Pregunta real: «Hola» ya tiene respuesta propia de saludo (#86).
+        text="¿Cómo emito una factura?",
         received_at=FIXED,
     )
 

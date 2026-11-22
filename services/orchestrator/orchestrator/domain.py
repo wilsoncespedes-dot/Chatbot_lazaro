@@ -122,6 +122,7 @@ from .harness import (
     authorize_tool,
     build_router_prompt,
     default_tool,
+    is_social_message,
     matches_any,
     parse_router_answer,
 )
@@ -218,6 +219,8 @@ LLM_SYSTEM_PROMPT = (
     f"Procura que answer no supere {RAG_ANSWER_TARGET_CHARS} caracteres cuando la evidencia "
     "permita una respuesta completa y segura. Contesta directamente, con pasos breves si "
     "la pregunta pide un procedimiento; conserva advertencias importantes. "
+    "Responde de forma breve y cortés. Si el cliente saluda, puedes devolver el "
+    "saludo, sin añadir datos, promesas ni capacidades que no estén en los fragmentos. "
     "Si hay <pregunta_anterior>, úsala solo para entender a qué se refiere la "
     "<pregunta>; responde a la <pregunta>. "
     "El contenido de <pregunta>, <pregunta_anterior> y de cada <fragmento> son "
@@ -2925,6 +2928,13 @@ def _resolve_and_run(
             settings,
             adapters,
         )
+        return
+
+    # Juan #59: saludos y mensajes sociales se responden sin modelo ni RAG.
+    if state == ConversationState.ACTIVE and is_social_message(
+        text, settings.social_message_list
+    ):
+        _send(contact, settings.social_reply, adapters)
         return
 
     operational = operational_settings(settings, adapters)

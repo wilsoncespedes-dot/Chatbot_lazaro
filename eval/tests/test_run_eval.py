@@ -173,6 +173,28 @@ def test_r33_umbral_fuera_de_rango(tmp_path, u):
     assert calls == []
 
 
+def test_default_refusal_matches_orchestrator(monkeypatch):
+    """R8: el evaluador usa el mismo rechazo por defecto que el orquestador."""
+    from orchestrator.config import Settings as OrchestratorSettings
+
+    monkeypatch.delenv("NO_ANSWER_REPLY", raising=False)
+    assert run_eval.DEFAULT_REFUSAL == OrchestratorSettings().no_answer_reply
+
+
+def test_default_refusal_is_used_by_main_without_env_or_flag(tmp_path, monkeypatch):
+    """R8: `main` puntúa el rechazo con DEFAULT_REFUSAL si no hay flag ni entorno."""
+    monkeypatch.delenv("NO_ANSWER_REPLY", raising=False)
+    client, _ = make_client(lambda r: httpx.Response(202, json={}))
+    sink = FakeSink(["De 9 a 18", run_eval.DEFAULT_REFUSAL])
+    assert run(
+        tmp_path, client, ["--modo", "orquestador", "--sin-ataques", "--espera", "2"],
+        sink=sink,
+    ) == 0
+    informe = (tmp_path / "resultados_2026-03-04.md").read_text(encoding="utf-8")
+    assert "Rechazos correctos: 1/1" in informe
+    assert "Respuestas inventadas detectadas: 0" in informe
+
+
 def test_reply_sink_real_captura_send():
     sink = run_eval.ReplySink(0)
     port = sink._server.server_address[1]

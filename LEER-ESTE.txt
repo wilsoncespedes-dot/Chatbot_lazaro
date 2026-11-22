@@ -1,0 +1,207 @@
+Las transcripciones no dicen quién habla, así que separé lo que suena al profesor por el tono y el contenido. Esto es lo que dijo:
+
+La idea principal (lo que él llama la "aplicación ganadora")
+
+Una plataforma multicanal y multiagente: una sola bandeja donde llegan los mensajes de todos los canales (WhatsApp, Instagram, Facebook, TikTok, SMS, etc.) y desde ahí se responden.
+
+Cada conversación debe tener una etiqueta con el canal de donde viene.
+Si un mensaje llega por TikTok, el asesor responde desde la plataforma y la respuesta sale por TikTok. Lo mismo con Instagram y los demás.
+Varios asesores (agentes humanos) conectados y atendiendo conversaciones de distintos lugares.
+Bots que responden primero y asesores que revisan y entran cuando hace falta, por ejemplo cuando el cliente dice "me interesa".
+Dijo que con eso sería "un 5", porque sirve para cualquier negocio (hotel, restaurante, agencia de turismo…).
+Advirtió que otras plataformas decían ser multicanal pero solo conectaban dos plataformas. La idea es que sea un multicanal de verdad.
+El bot con IA
+Que la IA consulte la información del negocio. Su ejemplo: alguien pregunta por TikTok "¿tiene algo para Melgar esta semana?", el bot busca en la base de datos y le muestra las opciones.
+Que el bot ayude con cosas simples para ahorrarle tiempo al asesor, como mandarle al usuario el panel o QR que tiene que escanear.
+Sobre la consulta a la base de datos en lenguaje natural, explicó que normalmente se hace con un MCP: la IA se conecta al MCP y el MCP usa la API que ya tienen (puede ser con Ollama u otro modelo). Dijo que no es difícil porque la API ya está conectada.
+Mencionó pasarle los datos a una librería de gráficos para mostrarlos más bonitos.
+El flujo de usuario (por ahora, con Telegram)
+El usuario tiene que saber qué canales hay disponibles y cómo llegar a ellos.
+Acepta términos y condiciones una sola vez.
+No hace falta registro ni login. Basta con un número o ID de usuario que el cliente copia y pega en el chat, y con eso el asesor o el bot busca sus datos.
+Les recordó que el flujo lo definen ustedes, según el problema que les planteó Lazaro.
+Lo que dijo que presenten solo como "posibilidad"
+
+Esto lo aclaró explícitamente: no lo presenten como algo ya implementado ni prometido.
+
+Conectar la sección de clientes a la API de Lazaro para traer sus datos, en vez de crearlos dos veces (así no quedan creados en un lado y en el otro no, o eliminados en uno solo).
+Que los bots busquen al cliente por el ID que entrega en el chat.
+Que la IA consulte los datos de cada empresa (hoteles, restaurantes) a través de la API de Lazaro.
+Su evaluación
+
+Dijo que como está ya es bastante presentable, que funciona, y que hoy es más fácil ganar haciendo más de lo esperado que perder por quedarse corto.
+
+En resumen, lo central es la bandeja multicanal con etiquetas por canal, varios asesores y bots que responden. Lo de la API de Lazaro va como propuesta a futuro.
+
+-------------------------------------------------------------------------------------
+
+
+Sobre la consulta a la base de datos, esto es lo que dijo:
+
+1. Que sí se puede hacer en lenguaje natural, con un MCP
+
+Alguien había pedido consultar la base de datos "por imagen natural". Seguramente quiso decir lenguaje natural y la transcripción lo cambió.
+Dijo que sí se puede, y que lo normal es hacerlo con un MCP:
+Tienen una API con operaciones CRUD (crear, leer, actualizar, borrar). Luego dijo algo como "quítale la C… y la D…", que parece significar que no hacen falta todas, sobre todo la lectura. Esa parte está muy cortada en el audio y no se entiende bien.
+Con esa API ya tienen acceso a toda la información de la base de datos.
+La IA se conecta al MCP, el MCP ve qué endpoints de la API hay disponibles, y así la IA saca los datos.
+Se puede hacer con Ollama o con el modelo que prefieran.
+Dijo que no es difícil con lo que ya tienen, porque la API ya está conectada.
+
+2. Mostrar los resultados con una librería de gráficos
+
+Lo que faltaría es pasarle los datos a una librería de gráficos ("o algo más bonito"): uno le pasa el set de datos y genera el gráfico.
+Un estudiante dijo que la estaba buscando y no la encontraba. El profesor ofreció mostrarle una.
+Comentó que esa parte es más difícil y que no sabe si les alcanza el tiempo.
+
+3. La consulta es para el negocio, no para un canal en particular
+
+Alguien preguntó si se podría consultar la base de datos desde TikTok. Respondió que no se trata de un canal: ustedes atienden a la empresa.
+Su ejemplo: un cliente pregunta por TikTok "¿tiene algo para Melgar esta semana?" y la IA consulta la base de datos del negocio (por ejemplo, los viajes que vende la agencia de turismo) y le responde con las opciones.
+
+4. Los datos de las empresas de Lazaro, como posibilidad
+
+Si el proyecto se enfoca en la empresa de Lazaro, los datos tendrían que salir de los negocios de Lazaro (hoteles, restaurantes). Para eso haría falta consultar la API de Lazaro.
+Eso no lo pueden hacer ahora porque no tienen acceso a esa API.
+Pero lo pueden plantear como posibilidad, algo como: "podemos conectarnos a su sistema y traer los datos de esa empresa para darle soporte". Repitió que no lo presenten como algo ya implementado.
+---------------------------------------------------------------------------------------------------------------
+Aquí va todo lo que dijo, en el orden de los dos audios. Ojo con dos cosas: la transcripción no dice quién habla, así que separé al profesor de los estudiantes por el contexto, y donde aparece "IPA" se refiere a la API.
+
+Audio 1 (7:00 PM)
+
+1. Los canales que debería abarcar
+
+Las empresas atienden por WhatsApp, Instagram y la página de Facebook. Algunas tienen TikTok, aunque dudó de que TikTok tenga chat.
+También mencionó Snapchat, hi5 y SMS, "lo que sea". La idea es que se puedan conectar todos los canales que existan.
+
+2. Etiquetas de origen
+
+Cada conversación debe tener una etiqueta que diga de qué canal viene.
+Dijo que con eso sería "una aplicación ganadora" y que "ahí sí sería un 5".
+
+3. Por qué es buena idea
+
+Ya nadie podría decir "esto no es implementable", porque sirve en cualquier negocio: hotel, restaurante, lo que sea.
+Todo el mundo tiene que atender mensajes que llegan de algún lado.
+Dio el ejemplo de alguien que escribe por WhatsApp "disculpa, me quitaron el celular y es el único donde tengo WhatsApp". O sea, los clientes cambian de canal, y tener todo unificado ayuda.
+
+4. Consultar la base de datos en lenguaje natural
+
+Sí se puede, pero lo normal es hacerlo con un MCP.
+Se necesita una API con las operaciones CRUD. Después dijo algo como "quítale la C… y la D", que parece significar que no hacen falta todas (sobre todo basta con leer), pero esa parte está muy cortada en el audio.
+Con esa API ya tienen acceso a la información de la base de datos.
+La IA se conecta al MCP, el MCP le dice qué funciones de la API hay disponibles, y así la IA saca los datos.
+Se puede hacer con Ollama o con el modelo que prefieran.
+No es difícil con lo que ya tienen, porque la API ya está conectada.
+
+5. Librería de gráficos
+
+Lo siguiente sería pasarle los datos a una librería de gráficos "o algo más bonito".
+Uno le pasa el set de datos y la librería genera el gráfico. Hay mucha gente que hace contenido de eso.
+Un estudiante dijo que la estaba buscando y no la encontraba. El profesor ofreció mostrarle una.
+Alguien comentó que esa parte es más difícil y que no sabía si alcanzaba el tiempo.
+
+6. Cómo va el proyecto
+
+Alguien dijo que "así como estamos, estamos bastante bien, presentables". Respondieron "definamos presentables".
+Se dijo que sí está funcionando, pero que depende del caso específico.
+
+7. Hacer más de lo esperado
+
+Hoy es más fácil ganar por exceso que perder por defecto. Conviene hacer más de lo que se espera.
+
+8. La visión completa
+
+Un software que asigne varios agentes a varias conversaciones que llegan de diferentes lugares.
+Que respondan bots y que los agentes verifiquen esas respuestas.
+Que todo pase por un solo canal, una sola plataforma.
+Dijo que eso "sería ganar muchísimo".
+
+9. Lo que hicieron otras plataformas
+
+Varias plataformas lo intentaron antes, pero solo decían "somos multicanal". En realidad solo conectaban dos plataformas.
+Audio 2 (7:09 PM)
+
+10. El "plus" del bot
+
+En vez de que el asesor responda todo, el bot puede resolver cosas simples.
+Ejemplo: ya tienen paneles estáticos, entonces el bot le dice al usuario "escanea esto", sin que intervenga el asesor.
+Eso le ahorra unos minutos a la gente. Dijo que ese sería el plus.
+
+11. El flujo depende del canal
+
+El flujo del usuario cambia según el canal por el que se conecta.
+Por ahora solo hay Telegram, así que el usuario:
+tiene que saber qué canales hay disponibles y dónde está el canal por el que puede hablar;
+tiene que tener Telegram abierto;
+tiene que aceptar términos y condiciones, pero una sola vez.
+
+12. Registro y login
+
+Si quieren etiquetar usuarios, pedir login o cualquier otra cosa, lo pueden hacer, pero eso depende de cada empresa.
+Su recomendación fue no hacer registro. Basta con hacerlo como se hace normalmente: asignar un número de usuario.
+
+13. Ejemplo del número de usuario
+
+Un cliente dice: "no encuentro los datos de mis clientes en la plataforma".
+El asesor le pide su número de usuario. El cliente lo copia y lo pega en el chat.
+Con ese número, el asesor ve que el cliente borró los datos y están en la papelera, y se los recupera.
+
+14. El flujo lo definen ustedes
+
+Depende de cómo lo estén pensando. Ustedes proponen el flujo porque ustedes proponen la solución.
+Y el flujo depende del problema que les planteó Lazaro.
+
+15. Para qué sirve el multicanal
+
+Alguien preguntó si se podría consultar la base de datos desde TikTok. Respondió que no es así: ustedes atienden a la empresa.
+Ejemplo de una agencia de turismo que publica en Instagram y TikTok y no usa WhatsApp:
+contrata el servicio de Lazaro, que es lo multiagente;
+conecta sus dos canales y sus asesores a la plataforma;
+si un mensaje llega por TikTok, el asesor responde en el mismo chat de la plataforma y la respuesta sale por TikTok;
+lo mismo con Instagram.
+
+16. La IA consultando el negocio
+
+Un estudiante preguntó si eso dejaba obsoletas otras partes, o si había que separar los mensajes de TikTok de los que necesitan la base de datos. Respondió que no hace falta separarlos.
+Ejemplo: alguien pregunta por TikTok "¿tiene algo para Melgar esta semana?". El mensaje va al bot, el bot consulta la base de datos de lo que vende la empresa y responde "para esta semana tengo esto y esto, ¿cuál te sirve?".
+Eso lo hace la IA.
+Los asesores van leyendo la conversación, y cuando el cliente dice "me interesa", entran ellos a atender.
+Dijo que ese es el "objetivo macro".
+
+17. Si se enfocan en la empresa de Lazaro
+
+Entonces la información sería solo la de los negocios de Lazaro: restaurantes, hoteles.
+Esos datos tienen que salir de algún lado, así que haría falta una API para consultarlos.
+
+18. ¿Se pueden hacer las dos cosas a la vez?
+
+Lo de la API no tanto, porque tendrían que tener acceso a la API de Lazaro, y no lo tienen.
+Pero pueden decir: "nosotros podemos conectarnos a su sistema y traer los datos de esa empresa para darle soporte".
+
+19. Presentarlo como posibilidad
+
+Hay cosas que pueden poner como posibilidades.
+No las presenten como ya implementadas ni como "ya lo vamos a implementar".
+
+20. Ejemplo de la sección de clientes
+
+Ahora tienen una lista donde pueden crear clientes.
+El problema de crear el cliente en el sistema de Lazaro y otra vez en el de ustedes es que es engorroso. A veces queda creado en un lado y no en el otro, o se elimina en un lado y en el otro no.
+Lo que pueden decir es:
+"En esta sección se pueden crear clientes, pero a futuro se podría conectar a la API de Lazaro para traer la información a este panel."
+Así los bots responderían a todos los clientes de esa base de datos.
+¿Cómo se conectaría? Con un ID de cliente que el cliente da en el chat, y el bot lo busca.
+Insistió en que es una posibilidad, no algo que ya van a hacer.
+
+21. Cierre
+
+Se dijo que con eso ya mejora la comunicación del proyecto.
+Comentaron que todavía no es una plataforma sino una aplicación, aunque "casi es plataforma".
+Alguien preguntó si iba muy bien o era un fracaso. La respuesta fue que "no hay punto medio": es como el coyote que ya pasó el precipicio y no ha mirado para abajo. Esto parece más una broma entre todos que algo dicho solo por el profesor.
+
+--------------------------------------------------------------------------------------------
+
+
+Necesito que ayuden a hacer las specs que estan ahi
+para implementar lo que dijo el profe

@@ -23,6 +23,13 @@ DEFAULT_HANDOVER_KEYWORDS = (
     "quiero un asesor,quiero un agente,agente humano"
 )
 
+DEFAULT_SOCIAL_MESSAGES = (
+    "hola,buenas,buenos días,buenas tardes,buenas noches,buen día,que tal,hey,"
+    "hola a todos,gracias,muchas gracias,gracias por todo,ok,okey,vale,perfecto,"
+    "genial,entendido,de acuerdo,listo,cómo estás,cómo va,hasta luego,adiós,nos vemos"
+)
+DEFAULT_SOCIAL_REPLY = "¡Hola! Gracias por escribirnos. ¿En qué puedo ayudarte?"
+
 REQUIRED_IN_PRODUCTION = (
     "SERVICE_TOKEN",
     "DATABASE_URL",
@@ -101,8 +108,8 @@ class Settings(BaseSettings):
     rag_followup_max_words: int = Field(default=8, ge=1, le=50)
     rag_followup_window_minutes: int = Field(default=30, ge=1, le=1440)
     no_answer_reply: str = (
-        "No encontré información sobre eso en los manuales. Si quieres hablar "
-        "con una persona, escribe «quiero un asesor»."
+        "No tengo ese dato en los manuales disponibles. "
+        "Puedo pasarte con un asesor si lo necesitas."
     )
     handover_ack_reply: str = "Avisé a un asesor; te responderá por aquí en cuanto pueda."
     error_reply: str = "Tuve un problema para responderte. Inténtalo de nuevo en unos minutos."
@@ -114,6 +121,8 @@ class Settings(BaseSettings):
     auto_handover_failure_threshold: int = Field(default=3, ge=1)
     auto_handover_failure_reasons: str = "no_relevant_chunks,invalid_answer"
     handover_keywords: str = DEFAULT_HANDOVER_KEYWORDS
+    social_messages: str = DEFAULT_SOCIAL_MESSAGES
+    social_reply: str = DEFAULT_SOCIAL_REPLY
     case_closed_reply: str = (
         "Tu caso con el asesor quedó cerrado. Si necesitas algo más, escríbenos por aquí."
     )
@@ -657,6 +666,10 @@ class Settings(BaseSettings):
     @property
     def handover_keyword_list(self) -> list[str]:
         return [k.strip() for k in self.handover_keywords.split(",") if k.strip()]
+
+    @property
+    def social_message_list(self) -> list[str]:
+        return [p.strip() for p in self.social_messages.split(",") if p.strip()]
 
     @property
     def identity_logout_command_list(self) -> tuple[str, ...]:

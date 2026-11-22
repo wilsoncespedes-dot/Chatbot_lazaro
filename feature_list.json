@@ -870,6 +870,20 @@
       "title": "Respuestas RAG sintetizadas y sin cortes",
       "sdd": true,
       "status": "in_progress"
+    },
+    {
+      "id": 86,
+      "name": "saludos_y_mensajes_sociales",
+      "title": "Respuesta determinista a saludos y mensajes sociales",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 87,
+      "name": "calidad_respuestas_y_evaluacion",
+      "title": "Mejorar la calidad de las respuestas de manuales con evaluación",
+      "sdd": true,
+      "status": "done"
     }
   ]
 }

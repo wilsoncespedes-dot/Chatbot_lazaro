@@ -283,7 +283,7 @@ def test_r27_sin_preguntas_no_emite_aviso_de_minimo(tmp_path, capsys):
         out_dir=tmp_path,
     )
     assert code == 0
-    assert len(calls) == 19  # eval/preguntas.json de ejemplo
+    assert len(calls) == 21  # eval/preguntas.json de ejemplo (19 + 2 saludo+pregunta)
     output = capsys.readouterr()
     assert "Aviso" not in output.err
     assert "## Avisos" not in report(tmp_path)

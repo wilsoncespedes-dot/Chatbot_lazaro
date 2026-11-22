@@ -5,9 +5,10 @@ import json
 
 from lazaro_contracts import SearchResult
 
+from orchestrator.config import Settings
 from orchestrator.domain import build_llm_prompt, is_handover_request, normalize_text
 
-NO_ANSWER = "No encontré información sobre eso en los manuales. Si quieres hablar con una persona, escribe «quiero un asesor»."
+NO_ANSWER = Settings().no_answer_reply
 ACK = "Avisé a un asesor; te responderá por aquí en cuanto pueda."
 ERROR = "Tuve un problema para responderte. Inténtalo de nuevo en unos minutos."
 

@@ -20,7 +20,8 @@ def _legacy(update_id: int = 1, user: int = 10, chat: int = 100) -> dict:
         "update_id": update_id,
         "telegram_user_id": user,
         "chat_id": chat,
-        "text": "Hola",
+        # Pregunta real: «Hola» ya tiene respuesta propia de saludo (#86).
+        "text": "Necesito ayuda con mi factura",
         "received_at": RECEIVED_AT,
     }
 
@@ -32,7 +33,7 @@ def _channel(message_id: str = "m1") -> dict:
         "external_chat_id": "57300",
         "external_message_id": message_id,
         "kind": "text",
-        "text": "Hola",
+        "text": "Necesito ayuda con mi factura",
         "received_at": RECEIVED_AT,
     }
 
@@ -116,7 +117,7 @@ def test_dispatches_legacy_and_channel(env):
     _consent(env, "whatsapp", "57300")
     _enqueue(env, _legacy())
     assert run_inbox_once(env.settings, env.adapters)
-    assert env.rag.calls == [("Hola", env.settings.rag_top_k)]
+    assert env.rag.calls == [("Necesito ayuda con mi factura", env.settings.rag_top_k)]
     assert env.repo.inbox[1]["status"] == "done"
 
     _enqueue(env, _channel("m1"), kind="channel")
