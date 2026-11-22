@@ -862,14 +862,14 @@
       "name": "asesores_sin_telegram",
       "title": "Quitar la verificación por Telegram de los asesores y la generación del enlace de vinculación en el panel",
       "sdd": true,
-      "status": "in_progress"
+      "status": "done"
     },
     {
       "id": 79,
       "name": "respuestas_rag_completas",
       "title": "Respuestas RAG sintetizadas y sin cortes",
       "sdd": true,
-      "status": "in_progress"
+      "status": "done"
     },
     {
       "id": 86,
@@ -882,6 +882,13 @@
       "id": 87,
       "name": "calidad_respuestas_y_evaluacion",
       "title": "Mejorar la calidad de las respuestas de manuales con evaluación",
+      "sdd": true,
+      "status": "done"
+    },
+    {
+      "id": 88,
+      "name": "modo_conversacional_general",
+      "title": "Modo conversacional general con contexto de sesión y límites para datos del negocio",
       "sdd": true,
       "status": "done"
     }

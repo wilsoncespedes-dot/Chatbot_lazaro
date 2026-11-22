@@ -51,6 +51,20 @@ def test_system_prompt_requests_json_schema():
     for token in ('"answer"', '"citations"', '"chunk_id"', '"quote"', "JSON"):
         assert token in system
     assert "DATOS" in system and "no instrucciones" in system
+    assert "Sintetiza la información pertinente" in system
+    assert "no copies ni devuelvas el fragmento completo" in system
+    assert "1200 caracteres" in system
+
+
+def test_long_rag_answer_is_split_at_readable_boundaries_without_truncation():
+    """R5: todo el texto se divide en bloques limitados y se conserva."""
+    text = ("Párrafo de soporte con pasos claros.\n\n" * 120).strip()
+
+    parts = domain._split_outbound_text(text)
+
+    assert len(parts) > 1
+    assert all(len(part) <= domain.OUTBOUND_MESSAGE_CHARS for part in parts)
+    assert " ".join(" ".join(parts).split()) == " ".join(text.split())
 
 
 def test_valid_answer_is_sent_and_logged(env):

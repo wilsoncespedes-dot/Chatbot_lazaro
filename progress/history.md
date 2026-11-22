@@ -292,3 +292,15 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Tests:** 11 nuevos, trazabilidad R1–R13 en `progress/impl_calidad_respuestas_y_evaluacion.md`. Se ajustaron las copias antiguas del rechazo en `test_decisions.py` y `test_no_inventar.py` (ahora `Settings().no_answer_reply`) y el conteo 19 → 21 en `test_run_eval_attacks.py`. Ningún test saltado ni borrado.
 - **Medición real antes/después** con TestClient + `FakeEmbeddings`/`FakeChunkRepository` + manual de ejemplo: 19 preguntas → recuperación 2/13 (15%), rechazos 2/6 (33%), inventadas 4; 21 preguntas → 2/15 (13%), 2/6 (33%), 4. Declarado expresamente como no representativo del corpus de producción; no se recalibró el umbral a partir de esos valores.
 - **Resultado:** `./init.sh` verde (Git Bash), 3647 passed, 2 skipped; revisión de código `APROBADO` tras reforzar R8 con la comprobación del camino real de `run_eval.main`.
+
+## 2026-11-22 — Feature #79 `respuestas_rag_completas` (done)
+- Se añadieron pruebas para el prompt de síntesis, los límites de fragmentación, el registro íntegro en outbox y el envío completo en varios mensajes por Telegram; se conservan las pruebas existentes de validación de citas.
+- El reviewer aprobó la implementación tras revisión estática. `bash ./init.sh` se ejecutó, pero WSL no inició la sesión systemd y `find_python.sh` falló por CRLF antes de pytest. El usuario confirmó que verificó la feature; por instrucción suya se cerró con esta limitación documentada.
+
+## 2026-11-22 — Feature #85 `asesores_sin_telegram` (done)
+- Se retiró la condición que impedía a asesores sin Telegram tomar conversaciones y se actualizó la prueba para exigir una toma exitosa. La revisión estática aprobó la feature y confirmó que la API interna de vinculación se conserva mientras el panel deja de ofrecer el enlace.
+- La suite no se ejecutó: `./init.sh` falló antes de pytest por CRLF en `find_python.sh`, y `python -m pytest` indicó que pytest no está instalado en el Python de Windows. Por instrucción del usuario, se cerró la feature al quedar solo pendiente esta ejecución.
+
+## 2026-11-22 — Feature #88 `modo_conversacional_general` (done)
+- Implementa el fallback conversacional en el orquestador cuando la búsqueda RAG termina sin fragmentos; reutiliza memoria de sesión existente, historial y outbox, con guardia de términos de negocio y prompt injection.
+- Revisión estática aprobada y `python -m compileall` correcto. **Las pruebas no se ejecutaron**, por decisión del usuario; queda registrado que `./init.sh` no pudo completarse por configuración de Python/pytest y finales CRLF en el hook.

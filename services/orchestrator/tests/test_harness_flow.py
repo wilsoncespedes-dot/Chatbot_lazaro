@@ -650,6 +650,7 @@ def test_r48_r50_repeated_failure_escalates_with_the_original_reason(env):
     """R48, R50: la racha se ejecuta por regla y conserva el motivo de fallo."""
     env.settings.auto_handover_failure_threshold = 1
     env.rag.results = []
+    env.llm.reply = '{"mode":"manual_required","answer":""}'
     _prepare(env, ConversationState.ACTIVE)
 
     env.post(text="¿algo?", update_id=1)

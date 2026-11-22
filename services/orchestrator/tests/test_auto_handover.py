@@ -30,6 +30,7 @@ def _valid_reply() -> str:
 
 def _fail(env, update_id: int, user: int = 10, chat: int = 100):
     env.rag.results = []
+    env.llm.reply = json.dumps({"mode": "manual_required", "answer": ""})
     return env.post(update_id=update_id, user=user, chat=chat)
 
 

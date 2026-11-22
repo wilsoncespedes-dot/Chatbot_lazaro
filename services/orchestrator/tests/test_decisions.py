@@ -17,16 +17,20 @@ def _chunk(cid: str, text: str) -> SearchResult:
     return SearchResult(chunk_id=cid, manual="M", text=text, score=0.8)
 
 
-def test_empty_search_does_not_call_llm(env):
-    """R13"""
+def test_empty_search_calls_llm_for_general_conversation(env):
+    """R1, R2: un no-hit RAG permite responder una consulta general."""
     env.rag.results = []
-    env.post()
-    assert env.llm.calls == []
+    env.llm.reply = json.dumps({"mode": "general", "answer": "La luna refleja luz."})
+    env.post(text="¿Por qué cambia la luna?")
+    assert len(env.llm.calls) == 1
+    assert env.gateway.sent == [(100, "La luna refleja luz.")]
+    assert ("conversation_reply", "general") in env.events()
 
 
 def test_empty_search_sends_no_answer_reply(env):
     """R14"""
     env.rag.results = []
+    env.llm.reply = json.dumps({"mode": "manual_required", "answer": ""})
     env.post()
     assert env.gateway.sent == [(100, NO_ANSWER)]
 
@@ -35,6 +39,7 @@ def test_empty_search_requests_handover_no_relevant_chunks(env):
     """R15; #32: con umbral 1 el primer fallo deriva y envía ACK una vez."""
     env.settings.auto_handover_failure_threshold = 1
     env.rag.results = []
+    env.llm.reply = json.dumps({"mode": "manual_required", "answer": ""})
     env.post()
     assert len(env.handover.requests) == 1
     assert env.handover.requests[0].reason == "no_relevant_chunks"

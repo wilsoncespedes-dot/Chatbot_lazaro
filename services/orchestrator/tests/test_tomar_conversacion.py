@@ -236,17 +236,21 @@ def test_take_without_valid_csrf_is_403_without_effects(env_factory, panel):
     assert env.repo.panel_audit[-1].result == "forbidden"
 
 
-def test_unlinked_advisor_cannot_take(env_factory, panel):
-    """R3: un asesor sin Telegram vinculado recibe 403."""
+def test_unlinked_advisor_can_take(env_factory, panel):
+    """R2, R3: un asesor sin Telegram vinculado puede tomar una conversación."""
     env = env_factory()
-    panel.login(env, telegram_user_id=None)
+    profile = panel.login(env, telegram_user_id=None)
     contact = _bot_conversation(env)
+    env.handover.take_case_id = "case-new"
+    env.handover.take_created = True
 
     response = _take(env, contact.id, panel.CSRF)
 
-    assert response.status_code == 403
-    assert env.handover.taken == []
-    assert env.repo.get_conversation_state(contact.id) == ConversationState.ACTIVE
+    assert response.status_code == 303
+    assert response.headers["location"] == "/asesor/cases/case-new"
+    assert len(env.handover.taken) == 1
+    assert env.handover.taken[0].advisor_id == profile.id
+    assert env.repo.get_conversation_state(contact.id) == ConversationState.WITH_ADVISOR
 
 
 def test_non_advisor_role_is_denied(env_factory, panel):

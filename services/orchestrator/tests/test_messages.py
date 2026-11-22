@@ -98,6 +98,7 @@ def test_rag_answer_event_saved(env):
 def test_no_results_event_saved(env):
     """R10"""
     env.rag.results = []
+    env.llm.reply = '{"mode":"manual_required","answer":""}'
     env.post()
     event = next(e for e in env.repo.events if e.type == "no_results")
     assert (event.type, event.reason, event.at) == ("no_results", "no_relevant_chunks", FIXED_NOW)
@@ -115,6 +116,7 @@ def test_handover_event_saved(env):
         env.repo.contacts[10].id, ConversationEvent.ADVISOR_RESOLVED, env.adapters
     )
     env.rag.results = []
+    env.llm.reply = '{"mode":"manual_required","answer":""}'
     env.post(text="algo raro", update_id=2)
     assert ("handover", "no_relevant_chunks") in env.events()
     assert all(e.at == FIXED_NOW for e in env.repo.events)

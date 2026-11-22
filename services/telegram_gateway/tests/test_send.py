@@ -1,7 +1,8 @@
 """Tests de POST /send del telegram_gateway."""
 from __future__ import annotations
 
-from lazaro_contracts import ErrorResponse
+from lazaro_contracts import ErrorResponse, TextBlock
+from telegram_gateway.adapters.telegram import TelegramChannelAdapter
 
 SERVICE_TOKEN = "svc-token"  # igual que en conftest.py
 
@@ -39,6 +40,19 @@ def test_send_invalid_body_returns_422(env):
     r = env.client.post("/send", json={"chat_id": 9}, headers=HEADERS)
     assert r.status_code == 422
     assert r.json()["error"] == "validation_error"
+
+
+def test_telegram_channel_sends_all_parts_of_long_text(env):
+    """R5: respuestas mayores al límite se entregan completas en mensajes consecutivos."""
+    text = ("Información importante para el cliente.\n\n" * 160).strip()
+    adapter = TelegramChannelAdapter(env.telegram)
+
+    adapter.send("9", [TextBlock(type="text", text=text)])
+
+    assert len(env.telegram.sent) > 1
+    assert all(len(part) <= 4096 for _, part in env.telegram.sent)
+    sent_text = " ".join(part for _, part in env.telegram.sent)
+    assert " ".join(sent_text.split()) == " ".join(text.split())
 
 
 def test_send_canonical_signed_options_renders_inline_keyboard(env):

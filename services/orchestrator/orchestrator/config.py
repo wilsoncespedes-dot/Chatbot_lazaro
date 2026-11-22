@@ -15,6 +15,7 @@ from lazaro_contracts.production import (
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .classifier import parse_keywords
 from .privacy import normalize_privacy_text
 from .purchase_intent import parse_phrases, phrases_valid
 
@@ -29,6 +30,14 @@ DEFAULT_SOCIAL_MESSAGES = (
     "genial,entendido,de acuerdo,listo,cómo estás,cómo va,hasta luego,adiós,nos vemos"
 )
 DEFAULT_SOCIAL_REPLY = "¡Hola! Gracias por escribirnos. ¿En qué puedo ayudarte?"
+DEFAULT_CONVERSATIONAL_BUSINESS_TERMS = (
+    "Lázaro,producto,productos,servicio,servicios,precio,precios,plan,planes,"
+    "tarifa,tarifas,factura,facturas,pago,pagos,cuenta,cuentas,cliente,clientes,"
+    "usuario,usuarios,política,políticas,proceso,procesos,operación,operaciones,"
+    "licencia,licencias,contrato,contratos,pedido,pedidos,reserva,reservas,"
+    "soporte,horario,horarios,garantía,garantías,manual,manuales,instalar,instalo,"
+    "instala,instale,instalación,configurar,configuro,configura,configuración"
+)
 
 REQUIRED_IN_PRODUCTION = (
     "SERVICE_TOKEN",
@@ -182,6 +191,8 @@ class Settings(BaseSettings):
     )
     # harness de IA por estado (#39)
     harness_router_enabled: bool = False
+    conversational_mode_enabled: bool = True
+    conversational_business_terms: str = DEFAULT_CONVERSATIONAL_BUSINESS_TERMS
     harness_max_input_chars: int = Field(default=2000, ge=100, le=4096)
     harness_injection_patterns: str = (
         "ignora tus instrucciones,ignora tus reglas,ignora las instrucciones,"
@@ -670,6 +681,16 @@ class Settings(BaseSettings):
     @property
     def social_message_list(self) -> list[str]:
         return [p.strip() for p in self.social_messages.split(",") if p.strip()]
+
+    @field_validator("conversational_business_terms")
+    @classmethod
+    def _validate_conversational_business_terms(cls, value: str) -> str:
+        parse_keywords(value)
+        return value
+
+    @property
+    def conversational_business_term_list(self) -> list[str]:
+        return list(parse_keywords(self.conversational_business_terms))
 
     @property
     def identity_logout_command_list(self) -> tuple[str, ...]:

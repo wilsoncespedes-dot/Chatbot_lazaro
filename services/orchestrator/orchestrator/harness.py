@@ -201,6 +201,16 @@ def matches_any(text: str, phrases: list[str] | tuple[str, ...]) -> bool:
     return False
 
 
+def matches_any_phrase(text: str, phrases: list[str] | tuple[str, ...]) -> bool:
+    """True si una frase normalizada coincide con palabras completas del texto."""
+    normalized = _social_key(text)
+    padded = f" {normalized} "
+    return any(
+        (key := _social_key(phrase)) and f" {key} " in padded
+        for phrase in phrases
+    )
+
+
 def _social_key(text: str) -> str:
     """Normaliza para comparación exacta: sin tildes, sin puntuación."""
     return " ".join(re.sub(r"[^a-z0-9]+", " ", normalize_text(text)).split())

@@ -60,6 +60,22 @@ def test_bot_reply_and_message_share_a_transaction(env):
     assert row["blocks"][0]["text"] == "Respuesta final"
 
 
+def test_long_bot_reply_keeps_complete_history_and_queues_multiple_blocks(env):
+    """R5: el historial conserva la respuesta y el outbox guarda sus partes completas."""
+    contact = _link(env)
+    text = ("Respuesta completa con todos los pasos.\n\n" * 120).strip()
+
+    assert _send(contact, text, env.adapters)
+
+    [message] = [row for row in env.repo.messages if row.role == "bot"]
+    [(outbox)] = env.repo.outbox.values()
+    parts = [block["text"] for block in outbox["blocks"]]
+    assert message.text == text
+    assert len(parts) > 1
+    assert all(len(part) <= 3500 for part in parts)
+    assert " ".join(" ".join(parts).split()) == " ".join(text.split())
+
+
 def test_advisor_reply_is_enqueued(env):
     """R18: la respuesta del asesor se guarda con su outbox."""
     contact = _link(env)

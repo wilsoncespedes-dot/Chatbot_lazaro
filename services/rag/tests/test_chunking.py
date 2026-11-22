@@ -22,6 +22,18 @@ def test_short_text_gives_single_chunk():
     assert chunk_text("  \n ", 100, 20) == []
 
 
+def test_chunks_prefer_sentence_boundaries_and_split_overlong_sentences_by_word():
+    """R3, R4: respeta frases y mantiene el máximo al dividir una frase extensa."""
+    text = "Primera oración. Segunda oración. " + "palabra " * 40
+
+    chunks = chunk_text(text, 45, 10)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 45 for chunk in chunks)
+    assert chunks[0] == "Primera oración. Segunda oración."
+    assert "palabra palabra" in " ".join(chunks)
+
+
 def test_chunk_order_starts_at_one(env):
     """R4: el orden de los fragmentos guardados empieza en 1 y es consecutivo."""
     env.upload(make_docx(" ".join(["texto"] * 100)))

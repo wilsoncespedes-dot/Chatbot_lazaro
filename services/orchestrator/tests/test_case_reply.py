@@ -58,6 +58,7 @@ def test_no_advisors_after_no_relevant_chunks_also_informs_client(env):
     env.settings.auto_handover_failure_threshold = 1
     env.handover.status = "no_advisors"
     env.rag.results = []
+    env.llm.reply = '{"mode":"manual_required","answer":""}'
     env.post(update_id=1)
     assert env.gateway.sent == [
         (100, env.settings.no_answer_reply), (100, env.settings.no_advisors_reply)
