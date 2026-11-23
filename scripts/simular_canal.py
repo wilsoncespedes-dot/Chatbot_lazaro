@@ -14,6 +14,13 @@ negocio sale de `--cuenta` o de `TIKTOK_BUSINESS_ID`, y el client key de
 `TIKTOK_CLIENT_KEY`:
 
     python scripts/simular_canal.py --canal tiktok --usuario cliente-demo --texto "Hola"
+
+Con `--canal facebook` o `--canal instagram` (fase 7) arma una notificación de
+Meta (`object` `page` o `instagram`, evento `messaging[]`), la firma con
+`X-Hub-Signature-256` usando `META_APP_SECRET` y la envía a `/webhooks/messenger`.
+La cuenta sale de `--cuenta` o de `META_PAGE_ID` / `META_INSTAGRAM_ACCOUNT_ID`:
+
+    python scripts/simular_canal.py --canal facebook --usuario psid-demo --texto "Hola"
 """
 from __future__ import annotations
 
@@ -46,6 +53,11 @@ TIKTOK_CHANNEL = "tiktok"
 TIKTOK_SECRET_ENV = "TIKTOK_WEBHOOK_SECRET"
 TIKTOK_ACCOUNT_ENV = "TIKTOK_BUSINESS_ID"
 TIKTOK_CLIENT_KEY_ENV = "TIKTOK_CLIENT_KEY"
+
+META_CHANNELS = ("facebook", "instagram")
+META_SECRET_ENV = "META_APP_SECRET"
+META_ACCOUNT_ENV = {"facebook": "META_PAGE_ID", "instagram": "META_INSTAGRAM_ACCOUNT_ID"}
+META_WEBHOOK_PATH = "/webhooks/messenger"
 
 
 def _utcnow() -> datetime:
@@ -118,6 +130,37 @@ def tiktok_headers(secret: str, body: bytes, now: datetime) -> dict[str, str]:
     }
 
 
+def build_meta_body(
+    channel: str, account_id: str, user: str, text: str, message_id: str, now: datetime
+) -> bytes:
+    """Notificación `messaging[]` de Meta; el `object` decide Messenger o Instagram."""
+    millis = int(now.timestamp() * 1000)
+    payload = {
+        "object": "page" if channel == "facebook" else "instagram",
+        "entry": [
+            {
+                "id": account_id,
+                "time": millis,
+                "messaging": [
+                    {
+                        "sender": {"id": user},
+                        "recipient": {"id": account_id},
+                        "timestamp": millis,
+                        "message": {"mid": message_id, "text": text},
+                    }
+                ],
+            }
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def meta_headers(secret: str, body: bytes) -> dict[str, str]:
+    """`X-Hub-Signature-256: sha256=<hex>` sobre el cuerpo crudo (como Meta)."""
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return {"Content-Type": "application/json", "X-Hub-Signature-256": f"sha256={digest}"}
+
+
 def urllib_post(url: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, str]:
     request = Request(url, data=body, headers=dict(headers), method="POST")
     try:
@@ -181,21 +224,31 @@ def main(
         default=None,
         help=(
             f"variable de entorno con el secreto (por defecto {DEFAULT_SECRET_ENV}; "
-            f"{TIKTOK_SECRET_ENV} con --canal {TIKTOK_CHANNEL})"
+            f"{TIKTOK_SECRET_ENV} con --canal {TIKTOK_CHANNEL} y {META_SECRET_ENV} "
+            "con --canal facebook/instagram)"
         ),
     )
     parser.add_argument(
         "--cuenta",
         default=None,
-        help=f"id de la cuenta de negocio (TikTok: por defecto {TIKTOK_ACCOUNT_ENV})",
+        help=(
+            f"id de la cuenta de negocio (TikTok: {TIKTOK_ACCOUNT_ENV}; "
+            "Meta: META_PAGE_ID o META_INSTAGRAM_ACCOUNT_ID)"
+        ),
     )
     args = parser.parse_args(arguments)
     values = os.environ if env is None else env
 
-    platform = args.canal if args.canal == TIKTOK_CHANNEL else None
-    secret_env = args.secreto_env or (
-        TIKTOK_SECRET_ENV if platform == TIKTOK_CHANNEL else DEFAULT_SECRET_ENV
-    )
+    if args.canal == TIKTOK_CHANNEL:
+        platform: str | None = TIKTOK_CHANNEL
+        default_secret_env = TIKTOK_SECRET_ENV
+    elif args.canal in META_CHANNELS:
+        platform = "meta"
+        default_secret_env = META_SECRET_ENV
+    else:
+        platform = None
+        default_secret_env = DEFAULT_SECRET_ENV
+    secret_env = args.secreto_env or default_secret_env
     secret = values.get(secret_env, "").strip()
     if not secret:
         print(
@@ -223,6 +276,17 @@ def main(
         )
         target = f"{args.url.rstrip('/')}/webhooks/{TIKTOK_CHANNEL}"
         headers = tiktok_headers(secret, body, current)
+    elif platform == "meta":
+        account_env = META_ACCOUNT_ENV[args.canal]
+        account = (args.cuenta or values.get(account_env, "")).strip()
+        if not account:
+            print(f"Falta --cuenta o la variable {account_env}.", file=sys.stderr)
+            return 2
+        body = build_meta_body(
+            args.canal, account, args.usuario, args.texto, message_id, current
+        )
+        target = f"{args.url.rstrip('/')}{META_WEBHOOK_PATH}"
+        headers = meta_headers(secret, body)
     try:
         if platform is None:
             body = build_body(args.canal, args.usuario, args.texto, message_id, current)

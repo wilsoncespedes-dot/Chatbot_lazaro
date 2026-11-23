@@ -137,7 +137,8 @@ def test_canonical_send_fails_closed_outside_window():
         headers=HEADERS,
     )
     assert response.status_code == 422
-    assert response.json()["error"] == "validation_error"
+    # Fase 7: la ventana cerrada tiene código propio (outbox `fuera_de_ventana`).
+    assert response.json()["error"] == "channel_window_closed"
     assert whatsapp.sent == []
 
 

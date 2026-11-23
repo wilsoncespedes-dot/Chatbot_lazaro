@@ -541,7 +541,8 @@ def test_send_text_outside_window_returns_422_without_http():
         headers=HEADERS,
     )
     assert response.status_code == 422
-    assert response.json()["error"] == "validation_error"
+    # Fase 7: código propio para que la outbox quede `fuera_de_ventana`.
+    assert response.json()["error"] == "channel_window_closed"
     assert calls == []
 
 

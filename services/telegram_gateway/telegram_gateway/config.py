@@ -61,6 +61,20 @@ class Settings(BaseSettings):
     whatsapp_interactive_body_text: str = "Elige una opción:"
     whatsapp_window_hours: int = 24
 
+    # Messenger e Instagram Messaging (Graph API de Meta, página vinculada).
+    meta_messenger_enabled: bool = False
+    meta_instagram_enabled: bool = False
+    meta_page_id: str = ""
+    meta_instagram_account_id: str = ""
+    # Solo siembra/rota: el gateway lo guarda cifrado en `canales.config_secreta`
+    # y, tras el primer arranque, puede quitarse del entorno.
+    meta_page_access_token: SecretStr = SecretStr("")
+    meta_app_secret: SecretStr = SecretStr("")
+    meta_webhook_verify_token: SecretStr = SecretStr("")
+    meta_graph_base_url: str = "https://graph.facebook.com"
+    meta_graph_api_version: str = "v26.0"
+    meta_messaging_window_hours: int = Field(default=24, ge=1, le=24)
+
     # TikTok Business Messaging (fase 6). Acceso sujeto a autorización de TikTok.
     tiktok_enabled: bool = False
     tiktok_client_key: str = ""
@@ -115,11 +129,23 @@ class Settings(BaseSettings):
     def _normalize_graph_base_url(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator("meta_graph_base_url")
+    @classmethod
+    def _normalize_meta_graph_base_url(cls, value: str) -> str:
+        return value.rstrip("/")
+
     @field_validator("whatsapp_graph_api_version")
     @classmethod
     def _validate_graph_api_version(cls, value: str) -> str:
         if not re.fullmatch(r"v\d+\.\d+", value):
             raise ValueError("WHATSAPP_GRAPH_API_VERSION no tiene el formato v<mayor>.<menor>")
+        return value
+
+    @field_validator("meta_graph_api_version")
+    @classmethod
+    def _validate_meta_graph_api_version(cls, value: str) -> str:
+        if not re.fullmatch(r"v\d+\.\d+", value):
+            raise ValueError("META_GRAPH_API_VERSION no tiene el formato v<mayor>.<menor>")
         return value
 
     @field_validator("whatsapp_template_language")
@@ -159,6 +185,31 @@ class Settings(BaseSettings):
         if missing:
             raise ValueError(
                 "configuración de WhatsApp incompleta: faltan " + ", ".join(missing)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_meta_messaging(self) -> "Settings":
+        """R1: exige credenciales Graph y el id de Instagram si está habilitado."""
+        if not self.meta_messenger_enabled and not self.meta_instagram_enabled:
+            return self
+        missing: list[str] = []
+        if not self.meta_page_id:
+            missing.append("META_PAGE_ID")
+        # El Page Access Token se guarda cifrado: hace falta la clave de canales.
+        if not self.channel_secrets_key.get_secret_value():
+            missing.append("CHANNEL_SECRETS_KEY")
+        if not self.meta_app_secret.get_secret_value():
+            missing.append("META_APP_SECRET")
+        if not self.meta_webhook_verify_token.get_secret_value():
+            missing.append("META_WEBHOOK_VERIFY_TOKEN")
+        if self.meta_instagram_enabled and not self.meta_instagram_account_id:
+            missing.append("META_INSTAGRAM_ACCOUNT_ID")
+        if not self.meta_graph_base_url.startswith("https://"):
+            missing.append("META_GRAPH_BASE_URL")
+        if missing:
+            raise ValueError(
+                "configuración de Meta incompleta: faltan " + ", ".join(missing)
             )
         return self
 

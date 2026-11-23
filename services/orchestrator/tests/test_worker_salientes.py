@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from lazaro_contracts import TextBlock
 
 from orchestrator.domain import (
@@ -12,6 +13,7 @@ from orchestrator.domain import (
     destination_key,
 )
 from orchestrator.queue import run_outbox_once
+from migrations.testing import database_url_for_tests, migrated_database
 
 FIXED = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -80,6 +82,24 @@ def test_channel_rejected_is_not_retried(env):
     assert row["attempts"] == 1
 
 
+def test_window_closed_is_left_fuera_de_ventana_and_logged(env, caplog):
+    """Fase 7: 422 channel_window_closed deja la fila en fuera_de_ventana, sin reintento."""
+    row_id = _enqueue(env)
+    env.gateway.window_closed = True
+    with caplog.at_level("WARNING", logger="orchestrator.queue"):
+        assert run_outbox_once(env.settings, env.adapters)
+    row = env.repo.outbox[row_id]
+    assert row["status"] == "fuera_de_ventana"
+    assert row["last_error"] == "ChannelOutOfWindow"
+    assert row["attempts"] == 1
+    assert row["locked_until"] is None
+    assert f"outbox_fuera_de_ventana id={row_id} channel=telegram" in caplog.text
+    # No vuelve a reclamarse ni aparece como envío fallido del panel.
+    env.gateway.window_closed = False
+    assert not run_outbox_once(env.settings, env.adapters)
+    assert env.repo.list_failed_outbound(10) == []
+
+
 def test_order_by_destination(env):
     """R26: una fila anterior no terminal bloquea a las posteriores del destino."""
     first = _enqueue(env, text="uno")
@@ -127,3 +147,41 @@ def test_expired_sending_lease_is_redelivered(env):
     row = env.repo.outbox[row_id]
     assert row["status"] == "sent"
     assert row["attempts"] == 2
+
+
+# ── Postgres real (TEST_DATABASE_URL) ───────────────────────────────────────
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not database_url_for_tests(),
+    reason="requiere TEST_DATABASE_URL con un Postgres local desechable",
+)
+def test_postgres_fail_outbound_can_leave_row_fuera_de_ventana():
+    """Fase 7: el estado se guarda en Postgres y la fila no vuelve a reclamarse."""
+    from orchestrator.adapters.repository import PostgresRepository
+
+    with migrated_database() as url:
+        repo = PostgresRepository(url)
+        now = datetime.now(timezone.utc)
+        row_id = repo.enqueue_outbound(
+            OutboxEntry(
+                contact_id=None,
+                destination_key=destination_key("facebook", "psid-1"),
+                channel="facebook",
+                destination="psid-1",
+                kind="reply",
+                blocks=[TextBlock(type="text", text="Hola")],
+            )
+        )
+        claimed = repo.claim_outbound(now + timedelta(seconds=1), 60)
+        assert claimed is not None and claimed.id == row_id
+        repo.fail_outbound(
+            row_id, now, "ChannelOutOfWindow", status="fuera_de_ventana"
+        )
+        assert repo.claim_outbound(now + timedelta(minutes=5), 60) is None
+        assert repo.list_failed_outbound(10) == []
+        rows = repo._run(
+            "SELECT status, last_error FROM outbox WHERE id = %s", (row_id,), fetch=True
+        )
+        assert [tuple(row) for row in rows] == [("fuera_de_ventana", "ChannelOutOfWindow")]

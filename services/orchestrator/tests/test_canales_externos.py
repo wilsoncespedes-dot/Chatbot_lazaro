@@ -15,7 +15,7 @@ NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 USER = "cliente-externo-1"
 CHAT = "conversacion-1"
 
-EXTERNAL_CHANNELS = ["tiktok"]
+EXTERNAL_CHANNELS = ["tiktok", "facebook", "instagram"]
 
 
 def _post(env, channel: str, message_id: str):

@@ -1,10 +1,12 @@
 # Chatbot Lázaro Software
 
-Chatbot de atención y soporte por **Telegram y WhatsApp**: responde con los
-manuales (RAG sobre pgvector), no inventa, identifica al cliente con login web
-y pasa la conversación a un **asesor humano** en un panel propio cuando no
-puede resolver. Microservicios en **Python + FastAPI**, con Docker, en un
-monorepo.
+Plataforma de atención y soporte multicanal: responde con los manuales (RAG
+sobre pgvector), no inventa, identifica al cliente con login web y pasa la
+conversación a un **asesor humano** en un panel propio cuando no puede resolver.
+Incluye adaptadores de Telegram, WhatsApp Cloud, TikTok Business Messaging,
+Facebook Messenger e Instagram Messaging; los proveedores externos requieren
+sus propias cuentas, permisos y credenciales. Microservicios en **Python +
+FastAPI**, con Docker, en un monorepo.
 
 - Qué hace el producto: [`docs/especificacion.md`](docs/especificacion.md)
 - Contexto y decisiones: [`docs/proyecto.md`](docs/proyecto.md)
@@ -121,21 +123,23 @@ normalizado (`NormalizedMessage`) y una respuesta abstracta (`ResponseBlocks`).
 Cada canal vive en un adaptador del `telegram_gateway`.
 
 ```
- Canal externo ──► [gateway: adaptador del canal] ──► cola de entrada (Postgres)
- (Telegram, WhatsApp,        │  puerto Canal                    │
-  webhook, simulado)         │                          worker procesar_entrantes
-        ▲                    │                                  ▼
-        │                    │                      NÚCLEO (orquestador)
-        │                    │                      RAG · handover · MCP · IA
-        │                    │                                  │
-        └── POST /send ◄─ worker enviar_salientes ◄── outbox (Postgres)
+Canal externo ──► [gateway: adaptador del canal] ──► cola de entrada (Postgres)
+  (Telegram, WhatsApp,        │  puerto Canal                    │
+    TikTok, Messenger,         │                          worker procesar_entrantes
+    Instagram, webhook,        │                                  │
+    simulado)                  │                                  ▼
+         ▲                    │                      NÚCLEO (orquestador)
+         │                    │                      RAG · handover · MCP · IA
+         │                    │                                  │
+         └── POST /send ◄─ worker enviar_salientes ◄── outbox (Postgres)
 ```
 
 - **Puerto:** `Canal` (`services/telegram_gateway/telegram_gateway/ports/canal.py`):
   `recibir_mensaje`, `enviar_mensaje`, `identificar_usuario`, `capacidades`.
 - **Adaptadores:** un módulo por tipo en `telegram_gateway/adapters/channels/`
-  (`telegram`, `whatsapp_cloud`, `webhook_generico`, `simulado`), registrados en
-  `ChannelRegistry` sin `if/else` por canal.
+  (`telegram`, `whatsapp_cloud`, `tiktok`, `meta_messenger`, `meta_instagram`,
+  `webhook_generico`, `simulado`), registrados en `ChannelRegistry` sin `if/else`
+  por canal.
 - **Cola y workers:** los mensajes entrantes y salientes pasan por tablas de
   Postgres con reintentos y backoff; los workers son `procesar_entrantes` y
   `enviar_salientes` (`python -m orchestrator.workers …`, ver `docker-compose.yml`).
@@ -167,6 +171,33 @@ Twilio u otro puente.
 4. Añade pruebas con adaptadores falsos y crea el canal desde `/admin`.
 
 El núcleo no cambia en ninguno de los dos casos.
+
+### Integraciones directas
+
+- **TikTok Business Messaging:** configura `TIKTOK_ENABLED` y las variables
+  `TIKTOK_*` de `.env.example`; registra `https://<dominio>/webhooks/tiktok` en
+  la app de TikTok y suscribe el evento `DIRECT_MESSAGE`. La firma se verifica
+  con `TIKTOK_WEBHOOK_SECRET` (vacío = todo webhook recibe 401). El acceso está
+  sujeto a aprobación y disponibilidad regional de TikTok. La cuenta debe
+  autorizar la app y proporcionar su `open_id` y refresh token. Los gráficos
+  llegan como enlace (TikTok no recibe imágenes del bot).
+- **Messenger e Instagram:** habilita `META_MESSENGER_ENABLED` y/o
+  `META_INSTAGRAM_ENABLED` (canales `facebook` e `instagram`). Registra
+  `https://<dominio>/webhooks/messenger` en el producto Webhooks de Meta (el GET
+  de verificación usa `META_WEBHOOK_VERIFY_TOKEN`) y suscribe `messages`; para
+  Instagram se usa una cuenta profesional vinculada a la Page configurada. Los
+  mensajes de usuarios externos requieren el acceso avanzado/revisión que exige
+  Meta. El Page Access Token se guarda cifrado en `canales`; tras el primer
+  arranque puede quitarse `META_PAGE_ACCESS_TOKEN` del entorno.
+- **Ventana de atención:** si el canal rechaza una respuesta por ventana (Meta
+  24 h, WhatsApp, cupo de TikTok), la fila de la outbox queda en
+  `fuera_de_ventana` (no se reintenta ni cuenta como envío fallido) y se registra
+  `outbox_fuera_de_ventana` en el log del worker.
+- TikTok permite hasta 10 mensajes por conversación en 48 horas; el gateway
+  aplica ese límite con un contador en Redis.
+- Las pruebas son locales y usan dobles HTTP; no verifican credenciales ni
+  permisos de apps reales. Los secretos y tokens se configuran fuera del
+  repositorio.
 
 ### Webhook de entrada y callback
 
@@ -271,7 +302,7 @@ Descripción de diseño en [`docs/architecture.md`](docs/architecture.md).
 | Estado | Qué |
 |---|---|
 | **Funciona de verdad** (probado con adaptadores falsos y tests; en producción solo con tus claves) | Núcleo sin nombres de canal, registro de canales y secretos cifrados, webhook genérico firmado con callback, cola de entrada y outbox con reintentos, RAG con manuales, traspaso a asesor y panel, bandeja unificada, asignación de asesores, importación de clientes, servidor MCP de solo lectura, panel de administración de canales |
-| **Real pero depende de credenciales externas** | Telegram y WhatsApp Cloud API: requieren tokens y URL pública `https`; no se han verificado aquí contra las plataformas reales |
+| **Real pero depende de credenciales externas** | Telegram, WhatsApp Cloud API, TikTok Business Messaging, Facebook Messenger e Instagram Messaging: requieren tokens, permisos de app y URL pública `https`; no se han verificado aquí contra las plataformas reales |
 | **Simulado / DEMOSTRACIÓN** | Canal `simulado` (buzón y `scripts/simular_canal.py`) y ofertas `demo_ofertas` del MCP: datos ficticios etiquetados |
 | **Solo propuesta** | `LazaroClientSource`, consulta de datos de negocios de Lázaro por API, login por empresa |
 
@@ -280,7 +311,7 @@ Descripción de diseño en [`docs/architecture.md`](docs/architecture.md).
 ```
 .
 ├── contracts/         # CONTRATOS.md + modelos Pydantic compartidos (lazaro_contracts)
-├── services/          # telegram_gateway (Telegram y WhatsApp), orchestrator, rag, handover
+├── services/          # telegram_gateway (adaptadores de canales), orchestrator, rag, handover
 ├── eval/              # Evaluación con preguntas de ejemplo y casos de ataque
 ├── scripts/           # cargar_manual, configurar_webhook, workers de vencimiento y purga
 ├── docs/              # especificacion, proyecto, architecture, conventions, despliegue…

@@ -295,3 +295,55 @@ def test_tiktok_mode_requires_its_own_secret_and_account(capsys):
     assert _run(post=post, env={"TIKTOK_WEBHOOK_SECRET": TIKTOK_SECRET}, argv=argv) == 2
     assert "TIKTOK_BUSINESS_ID" in capsys.readouterr().err
     assert post.calls == []
+
+
+# ── Fase 7: Messenger e Instagram con el formato y la firma de Meta ─────────
+
+META_SECRET = "meta-app-secret-de-prueba"
+
+
+@pytest.mark.parametrize(
+    ("channel", "account_env", "account", "object_type"),
+    [
+        ("facebook", "META_PAGE_ID", "page-123", "page"),
+        ("instagram", "META_INSTAGRAM_ACCOUNT_ID", "ig-456", "instagram"),
+    ],
+)
+def test_meta_mode_builds_a_signed_notification_the_gateway_accepts(
+    channel, account_env, account, object_type, capsys
+):
+    """Fase 7: --canal facebook/instagram firma con META_APP_SECRET y va a /webhooks/messenger."""
+    import json
+
+    from telegram_gateway.meta_messaging import parse_meta_webhook
+    from telegram_gateway.whatsapp_cloud import verify_signature as verify_meta
+
+    post = _Post()
+    argv = ["--canal", channel, "--usuario", USER, "--texto", TEXT, "--id-mensaje", "mid-1"]
+    env = {"META_APP_SECRET": META_SECRET, account_env: account}
+    assert _run(post=post, env=env, argv=argv) == 0
+
+    url, body, headers = post.calls[0]
+    assert url == f"{BASE_URL}/webhooks/messenger"
+    assert verify_meta(META_SECRET, body, headers["X-Hub-Signature-256"])
+    payload = json.loads(body)
+    assert payload["object"] == object_type
+    page_id = account if channel == "facebook" else ""
+    instagram_id = account if channel == "instagram" else ""
+    [message] = parse_meta_webhook(payload, channel, page_id, instagram_id, NOW)
+    assert message.channel == channel
+    assert message.external_user_id == USER
+    assert message.external_message_id == "mid-1"
+    assert message.text == TEXT
+    assert META_SECRET not in capsys.readouterr().out
+
+
+def test_meta_mode_requires_app_secret_and_account(capsys):
+    """Fase 7: sin META_APP_SECRET o sin cuenta sale con 2 y no envía nada."""
+    post = _Post()
+    argv = ["--canal", "facebook", "--usuario", USER, "--texto", TEXT]
+    assert _run(post=post, env={"LAZARO_CANAL_SECRETO": SECRET}, argv=argv) == 2
+    assert "META_APP_SECRET" in capsys.readouterr().err
+    assert _run(post=post, env={"META_APP_SECRET": META_SECRET}, argv=argv) == 2
+    assert "META_PAGE_ID" in capsys.readouterr().err
+    assert post.calls == []

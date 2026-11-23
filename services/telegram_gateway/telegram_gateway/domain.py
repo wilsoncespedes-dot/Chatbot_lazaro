@@ -30,7 +30,9 @@ if TYPE_CHECKING:
     from .adapters.whatsapp_window import WhatsAppWindowStore
     from .adapters.channel_repository import ChannelRepository
     from .adapters.mailbox import MailboxRepository
+    from .adapters.meta_messaging import MetaMessagingApi
     from .adapters.inbound_retry import InboundRetryStore
+    from .adapters.meta_window import MetaMessageWindowStore
     from .adapters.tiktok_api import TikTokApi
     from .adapters.tiktok_quota import TikTokMessageQuotaStore
     from .registry import ChannelRegistry
@@ -50,7 +52,9 @@ class TelegramError(DomainError):
 
 
 class ChannelWindowClosed(DomainError):
-    code = "validation_error"
+    # Fase 7: código propio para que el orquestador deje la fila de outbox en
+    # `fuera_de_ventana` en lugar de `failed` (antes era `validation_error`).
+    code = "channel_window_closed"
     status_code = 422
 
 
@@ -240,6 +244,15 @@ BUILTIN_CHANNEL_SEEDS: tuple[ChannelSeed, ...] = (
         "tiktok", "TikTok", "tiktok", "tiktok", "#111827",
         {"consent_mode": "texto"},
     ),
+    # Fase 7: Facebook Messenger e Instagram (activos si META_*_ENABLED=true).
+    ChannelSeed(
+        "facebook", "Facebook Messenger", "meta_messenger", "facebook", "#0866FF",
+        {"consent_mode": "texto"},
+    ),
+    ChannelSeed(
+        "instagram", "Instagram", "meta_instagram", "instagram", "#C13584",
+        {"consent_mode": "texto"},
+    ),
 )
 
 
@@ -264,6 +277,9 @@ class Adapters:
     # Fase 6: cliente HTTP de TikTok (refresco OAuth y envío).
     tiktok: "TikTokApi | None" = None
     tiktok_quota: "TikTokMessageQuotaStore | None" = None
+    # Fase 7: Messenger e Instagram Messaging usan la API Graph de Meta.
+    meta: "MetaMessagingApi | None" = None
+    meta_window: "MetaMessageWindowStore | None" = None
 
 
 @dataclass(frozen=True)

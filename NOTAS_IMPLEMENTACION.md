@@ -402,3 +402,118 @@ el secreto propio del webhook, los PENDIENTE, los tests de aceptación y el simu
   sobre el árbol exacto de este commit. El pytest completo de esta fase se ejecutó
   junto con el del cierre, porque OpenCode dejó las fases 6 y 7 entrelazadas en el
   árbol de trabajo.
+
+## Fase 7 — Facebook Messenger e Instagram Messaging
+
+Origen: OpenCode escribió la primera versión durante la pausa. Aquí se alineó con
+el encargo en seis puntos:
+
+- el id del canal pasa a ser `facebook` (era `messenger`);
+- la ruta pasa a `/webhooks/messenger` (era `/meta/webhook`);
+- `supports_images=True`, con envío de imágenes;
+- se añade el estado `fuera_de_ventana` en el outbox;
+- el Page token se guarda cifrado;
+- Messenger e Instagram se añaden al simulador.
+
+Detalle de lo implementado:
+
+- **Adaptador**
+  - Está en `telegram_gateway/adapters/channels/meta_messenger.py`.
+  - Registra dos tipos en `ChannelRegistry`: `meta_messenger`, con canal
+    `facebook`, y `meta_instagram`, con canal `instagram`.
+  - Los dos canales se siembran en `canales` y aparecen en el panel de canales.
+    Están gestionados por el entorno y se activan con `META_MESSENGER_ENABLED` y
+    `META_INSTAGRAM_ENABLED`.
+- **Webhook compartido `GET/POST /webhooks/messenger`**
+  - El GET es el handshake: compara `hub.verify_token` con
+    `META_WEBHOOK_VERIFY_TOKEN` y devuelve `hub.challenge`; si no coincide, 403.
+    La query se borra del scope para que el token no llegue al access log.
+  - El POST verifica `X-Hub-Signature-256` sobre el cuerpo crudo con
+    `META_APP_SECRET`; si es inválida, 401.
+  - El handshake y la firma reutilizan `verify_subscription` y `verify_signature`
+    de `whatsapp_cloud.py`.
+  - La ruta se registra antes de la genérica `/webhooks/{canal_id}`.
+- **Normalización**
+  - El canal sale de `object`: `page` es `facebook` e `instagram` es `instagram`.
+    Instagram entregado con objeto `page` se reconoce por
+    `META_INSTAGRAM_ACCOUNT_ID`, y un lote mixto se reparte entre los dos canales.
+  - De `messaging[]` sale un `NormalizedMessage` con el `sender.id` (PSID o IGSID)
+    como usuario y como chat.
+  - Se ignoran los `is_echo` y los eventos sin `message` (read, delivery…), así
+    que no generan respuesta.
+  - Se deduplica por canal y `mid`.
+- **Salida**
+  - Usa el Send API, `POST /{META_PAGE_ID}/messages` con
+    `messaging_type=RESPONSE`, y el token va en Bearer, nunca en la URL.
+  - El texto se divide en trozos de 950 bytes UTF-8.
+  - Las imágenes van como
+    `attachment{type:image,payload{url,is_reusable:false}}`. `is_reusable` es
+    false porque la URL firmada del gráfico caduca.
+  - Un gráfico de la fase 5 llega como imagen seguida del resumen en texto.
+- **Page Access Token cifrado**
+  - **Decisión:** el token se guarda con Fernet (`CHANNEL_SECRETS_KEY`) en
+    `canales.config_secreta`, en la credencial `page_access_token`.
+    `META_PAGE_ACCESS_TOKEN` solo lo siembra: si tiene valor y difiere del
+    guardado, lo reemplaza (así se rota); si está vacío, se usa el cifrado.
+  - **Motivo:** como en TikTok, el secreto de larga duración vive cifrado en la
+    BD y puede quitarse del `.env` tras el primer arranque.
+  - Por eso, al habilitar Meta la configuración exige `CHANNEL_SECRETS_KEY` y ya
+    no exige `META_PAGE_ACCESS_TOKEN`.
+- **Ventana de 24 h y estado `fuera_de_ventana`**
+  - Cada entrada guarda en Redis la hora del último mensaje del cliente, con
+    clave SHA-256 y TTL igual a la ventana.
+  - Si al responder han pasado 24 h o más, o no hay registro, o Redis no
+    responde (falla cerrado), el gateway responde
+    `422 channel_window_closed` y registra `meta_fuera_de_ventana channel=…`.
+  - **Decisión:** el `ChannelWindowClosed` del gateway deja de usar
+    `validation_error` y pasa a tener código propio.
+  - El cliente HTTP del orquestador lo traduce a `ChannelOutOfWindow`, una
+    subclase de `ChannelRejected`.
+  - `run_outbox_once` deja entonces la fila en `status='fuera_de_ventana'`, con
+    `last_error='ChannelOutOfWindow'`, sin reintentarla. Registra
+    `outbox_fuera_de_ventana id=… channel=…`, sin datos del cliente.
+  - No hay migración: `outbox.status` es TEXT sin CHECK.
+  - La fila no vuelve a reclamarse, no bloquea el orden del destino y no aparece
+    en «envíos fallidos» del panel, que solo lista `failed`.
+  - **Efecto lateral asumido:** el mismo estado cubre la ventana de WhatsApp y el
+    cupo de 10 mensajes cada 48 h de TikTok, que antes acababan en `failed`. Se
+    actualizaron los tests que comprobaban el código antiguo:
+    - `test_whatsapp_webhook`
+    - `test_multicanal`
+- **Simulador**: se lanza con
+  `python scripts/simular_canal.py --canal facebook|instagram --usuario <psid> --texto "Hola"`.
+  Necesita `META_APP_SECRET` y `META_PAGE_ID` o `META_INSTAGRAM_ACCOUNT_ID` en el
+  entorno.
+- **Tests**
+  - `services/telegram_gateway/tests/test_meta_messaging.py`:
+    - Facebook e Instagram firmados llegan con su canal;
+    - una firma inválida da 401;
+    - un GET con el token correcto devuelve el challenge, y con otro token da 403;
+    - un eco o un evento read/delivery no generan respuesta;
+    - una imagen sale por el Send API;
+    - el token se guarda cifrado y se rota;
+    - fuera de la ventana se responde 422 `channel_window_closed`.
+  - `services/orchestrator/tests/test_worker_salientes.py`: `fuera_de_ventana`,
+    en memoria y en Postgres real.
+  - `services/orchestrator/tests/test_adapters.py`: traducción del 422.
+  - `services/orchestrator/tests/test_canales_externos.py`: `facebook` e
+    `instagram` responden por el outbox.
+  - `scripts/tests/test_simular_canal.py`: el modo Meta.
+- PENDIENTE: confirmar con la doc oficial de Meta lo siguiente. No se hizo
+  ninguna llamada real a Meta.
+  - La versión `META_GRAPH_API_VERSION=v26.0`.
+  - Que el límite de 950 bytes por mensaje es conservador.
+  - Que Instagram responde por `/{PAGE_ID}/messages` con el Page token.
+  - Que `is_reusable:false` acepta URLs con query string.
+- **Acceso externo**
+  - Instagram requiere una cuenta profesional vinculada a la Page.
+  - Para escribir a usuarios que no son del equipo de la app hacen falta el
+    acceso avanzado y la revisión de Meta.
+- Fuentes que citó OpenCode:
+  - [webhooks](https://developers.facebook.com/docs/messenger-platform/webhooks)
+  - [Send API](https://developers.facebook.com/docs/messenger-platform/send-messages/)
+  - [Instagram](https://developers.facebook.com/docs/messenger-platform/instagram/features/send-message/)
+- **Fuera del commit:** OpenCode también tocó `feature_list.json` (quitó el
+  `later` de `esqueleto_instagram`) y `progress/*`. Es contabilidad del arnés, que
+  el encargo pidió no usar, así que esos cambios se dejan sin commitear para que
+  el humano decida.

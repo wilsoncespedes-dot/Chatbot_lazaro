@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -47,6 +48,8 @@ from .adapters.channel_repository import (
 from .adapters.dedup import RedisDedupStore
 from .adapters.inbound_retry import FakeInboundRetryStore, PostgresInboundRetryStore
 from .adapters.mailbox import FakeMailboxRepository, PostgresMailboxRepository
+from .adapters.meta_messaging import HttpMetaMessagingApi
+from .adapters.meta_window import RedisMetaMessageWindowStore
 from .adapters.message_buffer import RedisMessageBuffer
 from .adapters.orchestrator import HttpOrchestratorClient
 from .adapters.telegram import HttpTelegramClient
@@ -61,7 +64,9 @@ from .domain import (
     ChannelStoreUnavailable,
     ChannelSendFailed,
     DomainError,
+    PayloadTooLarge,
     WebhookForbidden,
+    WebhookUnauthorized,
     send_through_channel,
 )
 from .grouping import GroupingWorker
@@ -69,7 +74,8 @@ from .inbound import InboundRetryWorker
 from .registry import CHANNEL_REGISTRY, ChannelContext, ChannelRegistry
 from .secret_cipher import SecretCipher
 from .webhook_service import WebhookService
-from .whatsapp_cloud import verify_subscription
+from .whatsapp_cloud import verify_signature, verify_subscription
+from .meta_messaging import meta_channels_for_payload
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,8 @@ SERVICE_NAME = "telegram_gateway"
 LEGACY_SEND_CHANNEL = "telegram"
 WEBHOOK_PATH = "/telegram/webhook"
 WHATSAPP_WEBHOOK_PATH = "/whatsapp/webhook"
+# Fase 7: Messenger e Instagram comparten webhook (handshake GET + POST firmado).
+META_WEBHOOK_PATH = "/webhooks/messenger"
 # Fase 2: las URLs históricas entran por el webhook común con estos canales.
 TELEGRAM_CHANNEL_ID = "telegram"
 WHATSAPP_CHANNEL_ID = "whatsapp"
@@ -84,7 +92,7 @@ TIKTOK_CHANNEL_ID = "tiktok"
 TIKTOK_WEBHOOK_PATH = "/webhooks/tiktok"
 # Los webhooks no usan X-Service-Token: se protegen con su propio secreto/firma.
 PUBLIC_PATHS: frozenset[str] = frozenset(
-    {"/health", WEBHOOK_PATH, WHATSAPP_WEBHOOK_PATH}
+    {"/health", WEBHOOK_PATH, WHATSAPP_WEBHOOK_PATH, META_WEBHOOK_PATH}
 )
 
 
@@ -127,9 +135,23 @@ def build_default_adapters(settings: Settings) -> Adapters:
             httpx.Client(timeout=settings.http_timeout_seconds),
         )
         tiktok_quota = RedisTikTokMessageQuotaStore(settings.redis_url)
+    meta: HttpMetaMessagingApi | None = None
+    meta_window: RedisMetaMessageWindowStore | None = None
+    if settings.meta_messenger_enabled or settings.meta_instagram_enabled:
+        meta = HttpMetaMessagingApi(
+            settings.meta_graph_base_url,
+            settings.meta_graph_api_version,
+            settings.meta_page_id,
+            httpx.Client(timeout=settings.http_timeout_seconds),
+        )
+        meta_window = RedisMetaMessageWindowStore(
+            settings.redis_url, settings.meta_messaging_window_hours * 3600
+        )
     return Adapters(
         tiktok=tiktok,
         tiktok_quota=tiktok_quota,
+        meta=meta,
+        meta_window=meta_window,
         telegram=HttpTelegramClient(
             settings.telegram_bot_token,
             settings.http_timeout_seconds,
@@ -216,7 +238,13 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     async def verify_service_token(request: Request, call_next):
         # Los webhooks los autentica su adaptador dentro de WebhookService.
         if request.url.path in PUBLIC_PATHS:
-            return await call_next(request)
+            try:
+                return await call_next(request)
+            finally:
+                if request.method == "GET" and request.url.path == META_WEBHOOK_PATH:
+                    # Meta incluye el verify token en la query del handshake;
+                    # se elimina del scope antes de que Uvicorn escriba access logs.
+                    request.scope["query_string"] = b""
         if request.url.path.startswith("/webhooks/"):
             return await call_next(request)
         token = request.headers.get(SERVICE_TOKEN_HEADER)
@@ -324,6 +352,58 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         await _receive(WHATSAPP_CHANNEL_ID, request, own_route=True)
         return {"ok": True}
 
+    @app.get(META_WEBHOOK_PATH)
+    def meta_webhook_verify(request: Request):
+        if not settings.meta_messenger_enabled and not settings.meta_instagram_enabled:
+            raise StarletteHTTPException(status_code=404, detail="not_found")
+        challenge = verify_subscription(
+            request.query_params,
+            settings.meta_webhook_verify_token.get_secret_value(),
+        )
+        if challenge is None:
+            raise WebhookForbidden("Verificación del webhook de Meta rechazada.")
+        return PlainTextResponse(
+            challenge,
+            media_type="text/plain",
+            headers={"Content-Type": "text/plain"},
+        )
+
+    @app.post(META_WEBHOOK_PATH)
+    async def meta_webhook(request: Request) -> dict:
+        if not settings.meta_messenger_enabled and not settings.meta_instagram_enabled:
+            raise StarletteHTTPException(status_code=404, detail="not_found")
+        body = await request.body()
+        if len(body) > settings.webhook_max_body_bytes:
+            raise PayloadTooLarge("El cuerpo del webhook supera el tamaño máximo.")
+        if not verify_signature(
+            settings.meta_app_secret.get_secret_value(),
+            body,
+            request.headers.get("X-Hub-Signature-256"),
+        ):
+            raise WebhookUnauthorized("Firma del webhook ausente o no válida.")
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {"ok": True}
+        channel_ids = meta_channels_for_payload(
+            payload, settings.meta_page_id, settings.meta_instagram_account_id
+        )
+        for channel_id in channel_ids:
+            if channel_id == "facebook" and not settings.meta_messenger_enabled:
+                continue
+            if channel_id == "instagram" and not settings.meta_instagram_enabled:
+                continue
+            await run_in_threadpool(
+                partial(webhook_service.receive, own_route=True),
+                channel_id,
+                request.headers,
+                body,
+            )
+        return {"ok": True}
+
+    # Las rutas fijas de Meta y TikTok van antes que la genérica para que
+    # `/webhooks/messenger` y `/webhooks/tiktok` no se traten como canales con
+    # firma Lázaro.
     # Fase 6: TikTok firma con su propio esquema; la ruta fija va antes que la
     # genérica para que `/webhooks/tiktok` no se trate como canal con firma Lázaro.
     @app.post(TIKTOK_WEBHOOK_PATH)

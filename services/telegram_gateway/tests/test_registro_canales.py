@@ -15,6 +15,8 @@ from lazaro_contracts import (
 )
 
 from telegram_gateway.adapters.channels import (
+    FacebookMessengerChannel,
+    InstagramMessagingChannel,
     SimuladoChannel,
     TelegramChannel,
     WhatsAppCloudChannel,
@@ -147,17 +149,21 @@ def test_registry_unknown_type_raises_explicit_error():
 
 def test_default_registry_contains_environment_and_generic_adapters():
     """R9, R31: el registry global incluye Telegram, WhatsApp, genérico, simulado
-    y el canal TikTok gestionado por el entorno."""
+    y los canales de TikTok y Meta gestionados por el entorno."""
     assert CHANNEL_REGISTRY.adapter_types() == (
         "telegram",
         "webhook_generico",
         "whatsapp_cloud",
         "simulado",
         "tiktok",
+        "meta_messenger",
+        "meta_instagram",
     )
     assert CHANNEL_REGISTRY.get("telegram") is TelegramChannel
     assert CHANNEL_REGISTRY.get("whatsapp_cloud") is WhatsAppCloudChannel
     assert CHANNEL_REGISTRY.get("simulado") is SimuladoChannel
+    assert CHANNEL_REGISTRY.get("meta_messenger") is FacebookMessengerChannel
+    assert CHANNEL_REGISTRY.get("meta_instagram") is InstagramMessagingChannel
     assert CHANNEL_REGISTRY.creatable_types() == ("webhook_generico", "simulado")
 
 

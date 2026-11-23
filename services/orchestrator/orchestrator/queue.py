@@ -15,6 +15,8 @@ from pydantic import TypeAdapter
 from .config import Settings
 from .domain import (
     Adapters,
+    OUTBOX_OUT_OF_WINDOW,
+    ChannelOutOfWindow,
     ChannelRejected,
     InboundQueueRow,
     ServiceUnavailable,
@@ -81,6 +83,14 @@ def run_outbox_once(settings: Settings, adapters: Adapters) -> bool:
     try:
         blocks = [_BLOCK_ADAPTER.validate_python(block) for block in row.blocks]
         adapters.gateway.send_channel_blocks(row.channel, row.destination, blocks)
+    except ChannelOutOfWindow:
+        # Fase 7: no se reintenta ni cuenta como fallo del canal; queda a la vista
+        # con su propio estado para reenviarla por plantilla o por un asesor.
+        repository.fail_outbound(
+            row.id, adapters.clock(), "ChannelOutOfWindow", status=OUTBOX_OUT_OF_WINDOW
+        )
+        logger.warning("outbox_fuera_de_ventana id=%s channel=%s", row.id, row.channel)
+        return True
     except ChannelRejected:
         repository.fail_outbound(row.id, adapters.clock(), "ChannelRejected")
         logger.error("outbox_failed id=%s channel=%s code=ChannelRejected", row.id, row.channel)

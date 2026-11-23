@@ -511,6 +511,16 @@ class ChannelRejected(ServiceUnavailable):
     """Interna: el gateway rechazó el envío con 422 (ventana/capacidad del canal)."""
 
 
+class ChannelOutOfWindow(ChannelRejected):
+    """Interna (fase 7): 422 `channel_window_closed`; la fila queda `fuera_de_ventana`."""
+
+
+# Fase 7: estado terminal de la outbox para respuestas que el canal no admite
+# por su ventana de atención (Meta 24 h, WhatsApp, cupo de TikTok).
+OUTBOX_OUT_OF_WINDOW = "fuera_de_ventana"
+GATEWAY_WINDOW_CLOSED_CODE = "channel_window_closed"
+
+
 class InvalidAnswer(Exception):
     """Interna: la salida del LLM incumple el formato o las citas; `reason` ∈ INVALID_REASONS."""
 

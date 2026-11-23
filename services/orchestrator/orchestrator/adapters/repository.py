@@ -133,7 +133,9 @@ class Repository(Protocol):
         self, row_id: int, next_attempt_at: datetime, error: str
     ) -> None: ...
 
-    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None: ...
+    def fail_outbound(
+        self, row_id: int, now: datetime, error: str, status: str = "failed"
+    ) -> None: ...
 
     def list_failed_outbound(self, limit: int) -> list[FailedSend]: ...
 
@@ -1549,12 +1551,14 @@ class FakeRepository:
             row["last_error"] = error
             row["locked_until"] = None
 
-    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None:
+    def fail_outbound(
+        self, row_id: int, now: datetime, error: str, status: str = "failed"
+    ) -> None:
         with self._queue_lock:
             row = self.outbox.get(row_id)
             if row is None:
                 return
-            row["status"] = "failed"
+            row["status"] = status
             row["last_error"] = error
             row["finished_at"] = now
             row["locked_until"] = None
@@ -4689,11 +4693,14 @@ class PostgresRepository:
             (next_attempt_at, error, row_id),
         )
 
-    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None:
+    def fail_outbound(
+        self, row_id: int, now: datetime, error: str, status: str = "failed"
+    ) -> None:
+        # Fase 7: `status` es 'failed' o 'fuera_de_ventana' (estados terminales).
         self._run(
-            "UPDATE outbox SET status = 'failed', last_error = %s, "
+            "UPDATE outbox SET status = %s, last_error = %s, "
             "finished_at = %s, locked_until = NULL WHERE id = %s",
-            (error, now, row_id),
+            (status, error, now, row_id),
         )
 
     def list_failed_outbound(self, limit: int) -> list[FailedSend]:
