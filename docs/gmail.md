@@ -58,47 +58,44 @@ cuando confirmes que el proyecto OAuth tiene permiso para abrir esa bandeja.
 ## Activar el procesamiento
 
 La primera sincronización guarda el `historyId` actual y no importa correos
-anteriores. El script es de una sola ejecución; debe ejecutarse cada 60 segundos
-desde un scheduler:
+anteriores. Con Docker Compose no hay que programar nada: el servicio
+`gmail_sync_worker` (imagen del gateway) ejecuta en bucle
 
 ```text
-python scripts/sincronizar_gmail.py
+python sincronizar_gmail.py --intervalo
 ```
 
+cada 60 segundos (configurable con `GMAIL_SYNC_INTERVAL_SECONDS`) y se reinicia
+solo si se cae. Sin `--intervalo` el script hace una única pasada y devuelve 1 si algún
+canal falla, por si se prefiere un scheduler externo
+(`python scripts/sincronizar_gmail.py`).
+
 Variables necesarias: `TELEGRAM_GATEWAY_URL` (URL interna del servicio) y
-`SERVICE_TOKEN`. Se procesan solo canales Gmail activos. El comando falla si
-algún canal falla y el scheduler puede reintentarlo. Mensajes de `INBOX` se
-deduplican por el ID que asigna Gmail; los correos enviados por la propia
-bandeja se ignoran.
+`SERVICE_TOKEN`, ambas del `.env`. Se procesan solo canales Gmail activos; sin
+ninguno, el worker solo consulta la lista de canales. Un fallo en una pasada se
+registra y se reintenta en la siguiente. Mensajes de `INBOX` se deduplican por el
+ID que asigna Gmail; los correos enviados por la propia bandeja se ignoran.
 
-### Cierre pendiente del despliegue en AWS
+Para ver su actividad: `docker compose logs -f gmail_sync_worker` (registra
+`gmail_channel_synced channel_id=... status=... processed=N`, nunca texto ni
+credenciales).
 
-El despliegue de producción se encuentra en AWS, pero se debe confirmar qué
-servicio ejecuta Lázaro antes de configurar el scheduler:
+### Despliegue en AWS (EC2)
 
-- **EC2:** instalar un timer de `systemd` o `cron` en la instancia y ejecutar el
-  script desde un entorno que tenga el código y `httpx` disponibles.
-- **ECS/Fargate:** usar EventBridge Scheduler para lanzar una tarea recurrente
-  cada minuto. La imagen de esa tarea debe incluir el script y sus dependencias;
-  la imagen actual del gateway no copia `scripts/sincronizar_gmail.py`.
-- **Otro servicio AWS:** elegir un scheduler que pueda ejecutar el script y
-  alcanzar el endpoint interno del gateway.
+Producción corre en una instancia EC2 con Docker Compose, por lo que el
+`gmail_sync_worker` se despliega con el resto de servicios en cada push a la
+rama de despliegue. No hace falta cron, `systemd` ni EventBridge. (En
+ECS/Fargate habría que lanzar la misma imagen del gateway con el comando
+anterior como servicio o tarea programada.)
 
-En todos los casos, proporcionar `TELEGRAM_GATEWAY_URL` y `SERVICE_TOKEN` desde
-la configuración segura del entorno. No incluir tokens ni credenciales OAuth en
-el payload del scheduler, comandos guardados, ni logs.
+Checklist de la conexión:
 
-Checklist para completar la conexión:
-
-- [ ] Confirmar si el servicio de producción es EC2, ECS/Fargate u otro.
-- [ ] Configurar una ejecución recurrente del script cada 60 segundos.
-- [ ] Ejecutar una sincronización inicial; esta fija el cursor y no importa
-  mensajes anteriores.
+- [x] Producción es EC2 con Docker Compose.
+- [x] Sincronización recurrente cada 60 s: servicio `gmail_sync_worker`.
+- [x] Sincronización inicial ejecutada (`status=initialized`): fijó el cursor
+  sin importar mensajes anteriores.
 - [ ] Enviar un correo nuevo de texto plano desde otra cuenta y comprobar que
   Lázaro lo recibe y responde dentro del mismo hilo.
-
-AWS documenta [cómo conectar a una instancia EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-to-linux-instance.html)
-y [cómo programar tareas de ECS con EventBridge Scheduler](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/tasks-scheduled-eventbridge-scheduler.html).
 
 Si Gmail responde que el cursor ya venció, el endpoint de sincronización devuelve
 `gmail_history_expired` sin saltar el problema. Un administrador puede ejecutar

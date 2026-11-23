@@ -1,18 +1,28 @@
-"""Sincroniza todos los canales Gmail activos mediante el gateway.
+"""Sincroniza todos los canales Gmail activos mediante el gateway: una vez o en bucle.
 
-Uso: python scripts/sincronizar_gmail.py
-Requiere `TELEGRAM_GATEWAY_URL` y `SERVICE_TOKEN`; ejecútalo con un scheduler.
+Uso: python scripts/sincronizar_gmail.py [--intervalo [segundos]]
+Requiere `TELEGRAM_GATEWAY_URL` y `SERVICE_TOKEN`. Sin `--intervalo` hace una
+pasada (para un scheduler externo); con `--intervalo` repite cada
+`GMAIL_SYNC_INTERVAL_SECONDS` (60 por defecto), como el servicio
+`gmail_sync_worker` de docker-compose.
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
-from typing import Any
+import time
+from typing import Any, Callable
 
 import httpx
 
+DEFAULT_INTERVAL_SECONDS = 60
+INTERVAL_ENV = "GMAIL_SYNC_INTERVAL_SECONDS"
+
 logger = logging.getLogger("sincronizar_gmail")
+
+_FROM_ENV = object()
 
 
 def run(client: Any, base_url: str, service_token: str, timeout: float = 30) -> bool:
@@ -61,7 +71,39 @@ def run(client: Any, base_url: str, service_token: str, timeout: float = 30) -> 
         return False
 
 
-def main(client: Any | None = None) -> int:
+def _resolve_interval(raw_option: object, parser: argparse.ArgumentParser) -> float:
+    if raw_option is _FROM_ENV:
+        raw = os.environ.get(INTERVAL_ENV, "").strip()
+        if not raw:
+            return float(DEFAULT_INTERVAL_SECONDS)
+    else:
+        raw = str(raw_option)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value <= 0:
+        parser.error("--intervalo debe ser un número mayor que 0")
+    return value
+
+
+def main(
+    argv: list[str] | None = None,
+    client: Any | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    max_rounds: int | None = None,
+) -> int:
+    parser = argparse.ArgumentParser(description="Sincroniza los canales Gmail activos.")
+    parser.add_argument(
+        "--intervalo",
+        nargs="?",
+        const=_FROM_ENV,
+        default=None,
+        help=f"segundos entre pasadas; sin valor usa {INTERVAL_ENV} (60)",
+    )
+    args = parser.parse_args(argv)
+    interval = None if args.intervalo is None else _resolve_interval(args.intervalo, parser)
+
     base_url = os.environ.get("TELEGRAM_GATEWAY_URL", "").rstrip("/")
     token = os.environ.get("SERVICE_TOKEN", "")
     if not base_url or not token:
@@ -70,7 +112,19 @@ def main(client: Any | None = None) -> int:
     owns_client = client is None
     http = client or httpx.Client()
     try:
-        return 0 if run(http, base_url, token) else 1
+        if interval is None:
+            return 0 if run(http, base_url, token) else 1
+        # En bucle un fallo no detiene el worker: se reintenta en la próxima pasada.
+        rounds = 0
+        while True:
+            try:
+                run(http, base_url, token)
+            except Exception as exc:  # noqa: BLE001 - el worker no debe morir
+                logger.error("gmail_sync_failed error=%s", type(exc).__name__)
+            rounds += 1
+            if max_rounds is not None and rounds >= max_rounds:
+                return 0
+            sleep(interval)
     finally:
         if owns_client:
             http.close()

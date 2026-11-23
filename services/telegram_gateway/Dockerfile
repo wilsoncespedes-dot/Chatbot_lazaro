@@ -6,6 +6,8 @@ COPY services/telegram_gateway/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/contracts-requirements.txt -r /tmp/requirements.txt
 COPY contracts/lazaro_contracts ./lazaro_contracts
 COPY services/telegram_gateway/telegram_gateway ./telegram_gateway
+# Script del worker gmail_sync_worker (mismo entorno y dependencias que el gateway).
+COPY scripts/sincronizar_gmail.py ./sincronizar_gmail.py
 RUN useradd --create-home --uid 10001 app
 USER app
 EXPOSE 8000

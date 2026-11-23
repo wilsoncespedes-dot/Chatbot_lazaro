@@ -325,3 +325,8 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - A solicitud del usuario, `docs/gmail.md` deja claro que producción usa AWS, pero falta confirmar EC2/ECS/u otro servicio para elegir y programar el scheduler cada 60 s. Incluye checklist de sincronización inicial y correo de prueba.
 - Se subirán los archivos locales restantes solicitados por el usuario. No se leyó ni se agregó `.env`; credenciales OAuth no se copiaron al repositorio.
 - Sincronización real pendiente; el usuario indicó haber guardado las credenciales del canal.
+
+## 2026-11-23 — Gmail conectado en AWS (EC2)
+- Producción confirmada: EC2 con Docker Compose. Canal `soporte-gmail` activo; sincronización inicial manual con `status=initialized` (credenciales OAuth válidas, cursor fijado).
+- Nuevo servicio `gmail_sync_worker` (imagen del gateway) que ejecuta `sincronizar_gmail.py --intervalo` cada `GMAIL_SYNC_INTERVAL_SECONDS` (60 s); el script mantiene la pasada única sin `--intervalo`.
+- Tests: `scripts/tests/test_sincronizar_gmail.py` (bucle, intervalo, errores) y `services/telegram_gateway/tests/test_gmail_sync_worker_compose.py`. scripts 123, contracts 963, gateway 610 (+2 skipped), handover 450, mcp_lectura 23 en verde; imagen del gateway construida.
