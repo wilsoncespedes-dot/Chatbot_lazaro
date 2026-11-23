@@ -487,50 +487,7 @@ class FakeCaseRepository:
         return counts, closed_active_cases
 
 
-# Turno global para crear el esquema: la misma clave en todos los servicios que
-# comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
-SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
-
-_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS handover_cases ("
-    "case_id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, chat_id BIGINT NOT NULL, "
-    "reason TEXT NOT NULL, status TEXT NOT NULL, advisor_id TEXT NULL, "
-    "last_messages JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
-    "assigned_at TIMESTAMPTZ NULL, closed_at TIMESTAMPTZ NULL, closed_by TEXT NULL)",
-    "CREATE TABLE IF NOT EXISTS handover_notifications ("
-    "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
-    "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL, delivered BOOLEAN NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS handover_denials ("
-    "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
-    "action TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS handover_auto_assignments ("
-    "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, advisor_id TEXT NOT NULL, "
-    "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS handover_assignment_pointer ("
-    "strategy TEXT PRIMARY KEY, last_advisor_id TEXT NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS handover_requests ("
-    "id BIGSERIAL PRIMARY KEY, requested_case_id TEXT NOT NULL, case_id TEXT NULL, "
-    "contact_id TEXT NOT NULL, reason TEXT NOT NULL, received_at TIMESTAMPTZ NOT NULL, "
-    "result TEXT NOT NULL, advisors_configured INTEGER NOT NULL, "
-    "notices_delivered INTEGER NOT NULL, messages_count INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS privacy_purge_runs ("
-    "id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ NOT NULL, "
-    "cutoff TIMESTAMPTZ NOT NULL, counts JSONB NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS handover_advisors ("
-    "profile_id TEXT PRIMARY KEY, telegram_user_id TEXT NULL, "
-    "role TEXT NOT NULL DEFAULT 'asesor')",
-    "CREATE UNIQUE INDEX IF NOT EXISTS handover_advisors_telegram "
-    "ON handover_advisors (telegram_user_id) WHERE telegram_user_id IS NOT NULL",
-    "CREATE TABLE IF NOT EXISTS handover_roster_state ("
-    "singleton_id INTEGER PRIMARY KEY, generation INTEGER NOT NULL)",
-    "INSERT INTO handover_roster_state (singleton_id, generation) "
-    "VALUES (1, 0) ON CONFLICT (singleton_id) DO NOTHING",
-    "ALTER TABLE handover_cases ADD COLUMN IF NOT EXISTS "
-    "timeout_claimed_at TIMESTAMPTZ NULL",
-    "ALTER TABLE handover_advisors ADD COLUMN IF NOT EXISTS "
-    "role TEXT NOT NULL DEFAULT 'asesor'",
-)
+# El esquema vive en `migrations/` y lo aplica el runner en el despliegue.
 
 _CASE_COLUMNS = (
     "case_id, contact_id, chat_id, reason, status, advisor_id, last_messages, "
@@ -638,14 +595,8 @@ class PostgresCaseRepository:
         ):
             self._discard_connection()
         if self._conn is None:
-            conn = self._connect()
-            cur = conn.cursor()
-            # handover y sus workers arrancan a la vez: un turno evita el deadlock.
-            cur.execute(SCHEMA_LOCK_SQL)
-            for statement in _SCHEMA:
-                cur.execute(statement)
-            conn.commit()
-            self._conn = conn
+            # Sin DDL al conectar: el esquema lo crea `migrations/runner.py`.
+            self._conn = self._connect()
         self._last_used = time.monotonic()
         return self._conn
 

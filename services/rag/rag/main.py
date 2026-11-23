@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -22,6 +23,7 @@ from lazaro_contracts import (
     SearchRequest,
     SearchResponse,
 )
+from lazaro_contracts.production import require_service_token
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -67,7 +69,13 @@ def create_app(
         )
     if repository is None:
         repository = PgVectorChunkRepository(settings.database_url, settings.embeddings_dim)
-    app = FastAPI(title=SERVICE_NAME)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        require_service_token(settings.service_token)
+        yield
+
+    app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):

@@ -14,10 +14,13 @@ from lazaro_contracts import LastMessage
 
 from handover.adapters.gateway import HttpGatewayClient
 from handover.adapters.repository import (
-    SCHEMA_LOCK_SQL,
     FakeCaseRepository,
     PostgresCaseRepository,
 )
+from migrations import section
+
+# El esquema de handover vive en migrations/0001 (sección «handover»).
+HANDOVER_DDL = section("handover")
 from handover.domain import Case, Denial, HandoverRequestRecord, ServiceUnavailable
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -79,7 +82,7 @@ def test_postgres_repository_uses_parameters_only():
     repo.mark_timed_out("case-1")
     repo.update_last_messages("case-1", case.last_messages)
 
-    schema = [sql for sql, params in conn.log if sql.startswith("CREATE TABLE")]
+    schema = [sql for sql in HANDOVER_DDL if sql.startswith("CREATE TABLE")]
     assert any("handover_cases" in sql for sql in schema)
     assert any("handover_notifications" in sql for sql in schema)
     statements = [
@@ -87,7 +90,6 @@ def test_postgres_repository_uses_parameters_only():
         for sql, params in conn.log
         if not sql.startswith(("CREATE", "ALTER"))
         and "handover_roster_state" not in sql
-        and sql != SCHEMA_LOCK_SQL
     ]
     assert len(statements) == 10
     for sql, params in statements:
@@ -166,16 +168,11 @@ def test_postgres_update_last_messages_writes_only_last_messages():
 
 def test_postgres_schema_adds_claim_and_role_columns_if_not_exists():
     """R28 (#49): los ALTER aditivos se ejecutan una vez, tras los CREATE TABLE."""
-    conn = _FakeConn()
-    repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
-    repo.get_case("a")
-    repo.get_case("b")
-
-    creates = [index for index, (sql, _) in enumerate(conn.log) if sql.startswith("CREATE TABLE")]
-    alters = [index for index, (sql, _) in enumerate(conn.log) if sql.startswith("ALTER TABLE")]
+    creates = [index for index, sql in enumerate(HANDOVER_DDL) if sql.startswith("CREATE TABLE")]
+    alters = [index for index, sql in enumerate(HANDOVER_DDL) if sql.startswith("ALTER TABLE")]
     assert len(creates) == 9
     assert len(alters) == 2
-    statements = [conn.log[index][0] for index in alters]
+    statements = [HANDOVER_DDL[index] for index in alters]
     assert (
         "ALTER TABLE handover_cases ADD COLUMN IF NOT EXISTS "
         "timeout_claimed_at TIMESTAMPTZ NULL"
@@ -188,7 +185,7 @@ def test_postgres_schema_adds_claim_and_role_columns_if_not_exists():
 
 
 def test_postgres_repository_connects_lazily_and_once():
-    """R26: la conexión se abre en el primer uso y el esquema se crea una sola vez."""
+    """R26: la conexión se abre en el primer uso y nunca ejecuta DDL (lo hace el runner)."""
     calls = []
     conn = _FakeConn()
     repo = PostgresCaseRepository("postgresql://x", connect=lambda: calls.append(1) or conn)
@@ -196,7 +193,7 @@ def test_postgres_repository_connects_lazily_and_once():
     repo.get_case("a")
     repo.get_case("b")
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 9
+    assert not any(sql.startswith(("CREATE", "ALTER")) for sql, _ in conn.log)
 
 
 def test_postgres_repository_reads_cases_from_rows():
@@ -274,20 +271,17 @@ def _statements(conn: _FakeConn) -> list[tuple[str, tuple]]:
         for sql, params in conn.log
         if not sql.startswith(("CREATE", "ALTER"))
         and "handover_roster_state" not in sql
-        and sql != SCHEMA_LOCK_SQL
     ]
 
 
-def test_schema_bootstrap_takes_the_global_lock_first():
-    """El primer comando de una conexión nueva es el turno global de esquema,
-    antes de cualquier CREATE: evita el deadlock con los workers al arrancar."""
+def test_connection_never_runs_schema_ddl():
+    """Fase 1: sin turno global ni CREATE al conectar; el esquema lo aplica el runner."""
     conn = _FakeConn()
     repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
     repo.get_case("case-1")
-    assert conn.log[0][0] == SCHEMA_LOCK_SQL
-    assert "pg_advisory_xact_lock" in SCHEMA_LOCK_SQL
-    first_create = next(i for i, (sql, _) in enumerate(conn.log) if sql.startswith("CREATE"))
-    assert first_create == 1
+    assert conn.log
+    assert all("pg_advisory" not in sql for sql, _ in conn.log)
+    assert not any(sql.startswith(("CREATE", "ALTER")) for sql, _ in conn.log)
 
 
 def test_postgres_repository_add_denial_uses_parameters_only():
@@ -297,7 +291,7 @@ def test_postgres_repository_add_denial_uses_parameters_only():
     evil = "'; DROP TABLE x; --"
     repo.add_denial(Denial(case_id=evil, advisor_id="111", action="reply", at=NOW))
     assert any(
-        sql.startswith("CREATE TABLE IF NOT EXISTS handover_denials") for sql, _ in conn.log
+        sql.startswith("CREATE TABLE IF NOT EXISTS handover_denials") for sql in HANDOVER_DDL
     )
     statements = _statements(conn)
     assert len(statements) == 1
@@ -432,7 +426,7 @@ def test_postgres_repository_connects_once_with_concurrent_first_use():
     for thread in threads:
         thread.join(timeout=5)
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql, _ in conn.log) == 9
+    assert not any(sql.startswith(("CREATE", "ALTER")) for sql, _ in conn.log)
 
 
 def test_fake_close_if_still_allowed_checks_state_and_assignee():
@@ -509,11 +503,7 @@ def test_postgres_close_if_still_allowed_uses_parameters_only():
 
 def test_postgres_creates_requests_table_if_not_exists():
     """R16, R2, R19: cuarta tabla con las 10 columnas y sin texto de mensajes."""
-    conn = _FakeConn()
-    repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
-    repo.get_case("case-1")
-
-    statements = [sql for sql, _ in conn.log if sql.startswith("CREATE TABLE")]
+    statements = [sql for sql in HANDOVER_DDL if sql.startswith("CREATE TABLE")]
     assert len(statements) == 9
     table = next(sql for sql in statements if "handover_requests" in sql)
     assert table.startswith("CREATE TABLE IF NOT EXISTS handover_requests")

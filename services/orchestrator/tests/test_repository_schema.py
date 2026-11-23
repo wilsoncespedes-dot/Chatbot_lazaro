@@ -1,17 +1,19 @@
-"""Esquema Postgres y migración idempotente de identidad por canal (#36)."""
+"""Esquema Postgres (#36): declarado en `migrations/0001_esquema_inicial.sql`.
+
+El backfill real de contactos y consentimientos se prueba contra Postgres en
+`migrations/tests/test_runner_integracion.py`.
+"""
 from __future__ import annotations
 
 import inspect
-from copy import deepcopy
 from datetime import datetime, timezone
 
-from orchestrator.adapters.repository import (
-    SCHEMA_LOCK_SQL,
-    PostgresRepository,
-    _INDEXES,
-    _MIGRATIONS,
-    _SCHEMA,
-)
+from migrations import section
+from orchestrator.adapters.repository import PostgresRepository
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -26,184 +28,6 @@ def test_two_factor_schema_is_additive_and_idempotent():
     assert "enroll_only BOOLEAN NOT NULL DEFAULT FALSE" in schema
     assert "staff_recovery_codes_profile" in indexes
     assert "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS enroll_only" in migrations
-
-
-class _MigrationCursor:
-    def __init__(self, state: dict) -> None:
-        self.state = state
-
-    def execute(self, sql: str, params=()) -> None:
-        self.state["statements"].append(sql)
-        if sql.startswith("ALTER TABLE contacts ALTER COLUMN telegram_user_id DROP NOT NULL"):
-            self.state["nullable_contacts"] = True
-        elif sql.startswith("ALTER TABLE contacts ALTER COLUMN chat_id DROP NOT NULL"):
-            self.state["nullable_chat"] = True
-        elif sql.startswith("UPDATE contacts SET channel = 'telegram'"):
-            for row in self.state["contacts"].values():
-                if row["channel"] is None:
-                    row["channel"] = "telegram"
-        elif sql.startswith("UPDATE contacts SET external_user_id"):
-            for row in self.state["contacts"].values():
-                if row["external_user_id"] is None and row["telegram_user_id"] is not None:
-                    row["external_user_id"] = str(row["telegram_user_id"])
-        elif sql.startswith("UPDATE contacts SET external_chat_id"):
-            for row in self.state["contacts"].values():
-                if row["external_chat_id"] is None and row["chat_id"] is not None:
-                    row["external_chat_id"] = str(row["chat_id"])
-        elif sql.startswith("ALTER TABLE privacy_consents ALTER COLUMN telegram_user_id"):
-            self.state["nullable_consent"] = True
-        elif sql.startswith("UPDATE privacy_consents SET channel = 'telegram'"):
-            for row in self.state["consents"]:
-                if row["channel"] is None:
-                    row["channel"] = "telegram"
-        elif sql.startswith("UPDATE privacy_consents SET external_user_id"):
-            for row in self.state["consents"]:
-                if row["external_user_id"] is None and row["telegram_user_id"] is not None:
-                    row["external_user_id"] = str(row["telegram_user_id"])
-        elif "contacts_channel_external_user" in sql:
-            self.state["contact_index"] = True
-        elif "privacy_consents_channel_user_version" in sql:
-            self.state["consent_index"] = True
-
-    def fetchall(self):
-        return []
-
-
-class _MigrationConn:
-    def __init__(self, state: dict) -> None:
-        self.state = state
-
-    def cursor(self):
-        return _MigrationCursor(self.state)
-
-    def commit(self) -> None:
-        pass
-
-    def rollback(self) -> None:
-        pass
-
-
-def _legacy_state() -> dict:
-    return {
-        "contacts": {
-            "c1": {
-                "id": "c1",
-                "telegram_user_id": 10,
-                "chat_id": 100,
-                "channel": None,
-                "external_user_id": None,
-                "external_chat_id": None,
-            },
-            "c2": {
-                "id": "c2",
-                "telegram_user_id": 11,
-                "chat_id": 101,
-                "channel": None,
-                "external_user_id": None,
-                "external_chat_id": None,
-            },
-        },
-        "messages": [
-            {
-                "id": 1,
-                "contact_id": "c1",
-                "role": "user",
-                "text": "Hola",
-                "at": NOW,
-            },
-            {
-                "id": 2,
-                "contact_id": "c1",
-                "role": "bot",
-                "text": "Respuesta",
-                "at": NOW,
-            },
-        ],
-        "case_links": [
-            {"case_id": "case-1", "contact_id": "c1", "created_at": NOW}
-        ],
-        "consents": [
-            {
-                "telegram_user_id": 10,
-                "channel": None,
-                "external_user_id": None,
-                "notice_version": "v1",
-                "notice_sha256": "hash-10",
-                "accepted_at": NOW,
-            }
-        ],
-        "statements": [],
-    }
-
-
-def _migrate(state: dict) -> None:
-    repo = PostgresRepository(
-        "postgresql://x", connect=lambda: _MigrationConn(state), run_migrations=True
-    )
-    repo.ensure_schema()
-
-
-def test_legacy_contacts_are_backfilled_preserving_ids_and_relations():
-    """R17: el backfill asigna canal y ids externos sin cambiar ids de contacto."""
-    state = _legacy_state()
-    messages_before = deepcopy(state["messages"])
-    links_before = deepcopy(state["case_links"])
-
-    _migrate(state)
-
-    assert state["contacts"]["c1"]["id"] == "c1"
-    assert state["contacts"]["c1"]["channel"] == "telegram"
-    assert state["contacts"]["c1"]["external_user_id"] == "10"
-    assert state["contacts"]["c1"]["external_chat_id"] == "100"
-    assert state["contacts"]["c2"]["external_user_id"] == "11"
-    assert state["nullable_contacts"] is True
-    assert state["nullable_chat"] is True
-    assert state["contact_index"] is True
-    assert state["messages"] == messages_before
-    assert state["case_links"] == links_before
-    assert {
-        message["contact_id"] for message in state["messages"]
-    } <= set(state["contacts"])
-    assert {
-        link["contact_id"] for link in state["case_links"]
-    } <= set(state["contacts"])
-
-
-def test_legacy_consents_are_backfilled_without_losing_version_hash_or_date():
-    """R18: el consentimiento histórico conserva versión, hash y fecha."""
-    state = _legacy_state()
-
-    _migrate(state)
-
-    [consent] = state["consents"]
-    assert (consent["channel"], consent["external_user_id"]) == ("telegram", "10")
-    assert consent["notice_version"] == "v1"
-    assert consent["notice_sha256"] == "hash-10"
-    assert consent["accepted_at"] == NOW
-    assert state["nullable_consent"] is True
-    assert state["consent_index"] is True
-
-
-def test_migration_is_idempotent_when_run_more_than_once():
-    """R17, R18: ejecutar el backfill otra vez no duplica ni reescribe datos."""
-    state = _legacy_state()
-
-    _migrate(state)
-    first_contacts = deepcopy(state["contacts"])
-    first_consents = deepcopy(state["consents"])
-    first_messages = deepcopy(state["messages"])
-    first_links = deepcopy(state["case_links"])
-
-    _migrate(state)
-
-    assert state["contacts"] == first_contacts
-    assert state["consents"] == first_consents
-    assert state["messages"] == first_messages
-    assert state["case_links"] == first_links
-    assert len(state["contacts"]) == 2
-    assert len(state["consents"]) == 1
-    assert len(state["messages"]) == 2
-    assert len(state["case_links"]) == 1
 
 
 def test_schema_declares_channel_identity_columns():
@@ -341,20 +165,21 @@ class _ContactConn:
         pass
 
 
-def test_schema_bootstrap_takes_the_global_lock_before_any_ddl():
-    """El orquestador y sus workers (procesar_entrantes, enviar_salientes)
-    arrancan a la vez: el turno global va antes de cualquier CREATE/ALTER para
-    que Postgres no detecte un deadlock y el proceso no caiga al arrancar."""
+def test_connection_never_runs_ddl():
+    """Fase 1: el servicio ya no crea tablas al conectar (deadlock de 5d1a398);
+    el esquema lo aplica una sola vez `migrations/runner.py` en el despliegue."""
     log: list = []
     repo = PostgresRepository("postgresql://x", connect=lambda: _ContactConn(log))
     repo.get_case_contact("case-1")
-    assert log[0][0] == SCHEMA_LOCK_SQL == "SELECT pg_advisory_xact_lock(7301984)"
-    assert all(not sql.startswith(("CREATE", "ALTER")) for sql, _ in log[:1])
-    assert log[1][0].lstrip().startswith("CREATE")
+    assert log, "la consulta debe ejecutarse"
+    assert all(
+        not sql.lstrip().upper().startswith(("CREATE", "ALTER", "SELECT PG_ADVISORY"))
+        for sql, _ in log
+    )
 
 
-def test_schema_lock_key_is_shared_by_every_service():
-    """La misma clave en todos los servicios que comparten la base."""
+def test_no_service_bootstraps_schema_on_connect():
+    """Ningún repositorio conserva DDL de arranque ni el turno global de esquema."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3]
@@ -363,10 +188,12 @@ def test_schema_lock_key_is_shared_by_every_service():
         "services/handover/handover/adapters/repository.py",
         "services/telegram_gateway/telegram_gateway/adapters/channel_repository.py",
         "services/telegram_gateway/telegram_gateway/adapters/mailbox.py",
+        "services/rag/rag/adapters/repository.py",
+        "services/mcp_lectura/mcp_lectura/schema.py",
     ):
         text = (root / module).read_text(encoding="utf-8")
-        assert f'SCHEMA_LOCK_SQL = "{SCHEMA_LOCK_SQL}"' in text, module
-        assert "execute(SCHEMA_LOCK_SQL)" in text, module
+        assert "SCHEMA_LOCK_SQL" not in text, module
+        assert "CREATE TABLE" not in text, module
 
 
 def test_get_case_contact_selects_all_six_columns():

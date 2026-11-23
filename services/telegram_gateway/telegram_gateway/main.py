@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
+from lazaro_contracts.production import require_service_token
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -191,6 +192,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         nonlocal grouping_worker
+        require_service_token(settings.service_token)
         if settings.message_grouping_enabled and adapters.buffer is not None:
             grouping_worker = GroupingWorker(settings, adapters)
             grouping_worker.start()

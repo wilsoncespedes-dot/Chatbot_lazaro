@@ -8,7 +8,6 @@ import pytest
 
 import orchestrator.client_id as client_id_module
 import orchestrator.domain as domain_module
-from orchestrator.adapters.repository import _MIGRATIONS
 from orchestrator.client_id import (
     ALPHABET,
     PublicIdGenerationError,
@@ -22,6 +21,12 @@ from orchestrator.domain import (
     renew_credential,
     revoke_credential,
 )
+
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 PASSWORD = "clave-segura-123"

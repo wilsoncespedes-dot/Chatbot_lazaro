@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import FastAPI, Query, Request
+from lazaro_contracts.production import require_service_token
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from lazaro_contracts import (
@@ -110,6 +111,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        require_service_token(settings.service_token)
         try:
             roster = await run_in_threadpool(adapters.repository.get_roster)
         except Exception:

@@ -80,3 +80,21 @@ def production_problems(
         if name == "DATABASE_URL" and DEVELOPMENT_DATABASE_MARKER in text:
             problems.append(name)
     return list(dict.fromkeys(problems))
+
+
+class InsecureServiceToken(RuntimeError):
+    """SERVICE_TOKEN vacío o con un valor de ejemplo: el servicio no arranca."""
+
+
+def require_service_token(token: str | None) -> None:
+    """Falla en cualquier APP_ENV si SERVICE_TOKEN está vacío o es un ejemplo.
+
+    Complementa `production_problems` (que además exige longitud mínima solo en
+    producción): con `cambia-esto` u otro marcador ningún servicio arranca.
+    """
+    candidate = (token or "").strip()
+    if not candidate or candidate.lower() in PLACEHOLDERS:
+        raise InsecureServiceToken(
+            "SERVICE_TOKEN está vacío o conserva un valor de ejemplo "
+            "(p. ej. 'cambia-esto'); define un token aleatorio largo."
+        )

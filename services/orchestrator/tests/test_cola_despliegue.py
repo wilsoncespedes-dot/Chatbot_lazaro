@@ -9,10 +9,15 @@ import yaml
 from lazaro_contracts import TextBlock
 from pydantic import ValidationError
 
-from orchestrator.adapters.repository import _INDEXES, _SCHEMA
 from orchestrator.config import Settings
 from orchestrator.domain import InboundEntry, OutboxEntry, destination_key
 from orchestrator.queue import run_inbox_once, run_outbox_once
+
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 
 ROOT = Path(__file__).resolve().parents[3]
 

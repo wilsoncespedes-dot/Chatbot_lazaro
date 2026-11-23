@@ -84,6 +84,7 @@ def test_compose_gateway_waits_for_healthy_postgres_and_redis():
     dependencies = compose["services"]["telegram_gateway"]["depends_on"]
     assert dependencies == {
         "postgres": {"condition": "service_healthy"},
+        "migrate": {"condition": "service_completed_successfully"},
         "redis": {"condition": "service_healthy"},
     }
 

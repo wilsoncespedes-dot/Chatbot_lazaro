@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from migrations import schema_sql
 from mcp_lectura import schema
 from mcp_lectura.adapters import FakeDemoOffers, FakeRagSearch, PostgresDemoOffers
 from mcp_lectura.tools import (
@@ -71,7 +72,7 @@ def test_demo_rows_marked():
 
 def test_demo_ddl_enforces_marker():
     """R13: el esquema obliga a que toda fila sea de demostración."""
-    ddl = "\n".join(schema.DDL)
+    ddl = schema_sql()  # el DDL vive en migrations/0001
     assert "CREATE TABLE IF NOT EXISTS demo_ofertas" in ddl
     assert "es_demo BOOLEAN NOT NULL DEFAULT TRUE" in ddl
     assert "CHECK (es_demo)" in ddl

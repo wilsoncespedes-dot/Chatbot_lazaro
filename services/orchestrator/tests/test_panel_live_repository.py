@@ -1,7 +1,12 @@
 """Repositorio y esquema de eventos del panel en tiempo real (#53)."""
 from __future__ import annotations
 
-from orchestrator.adapters.repository import _INDEXES, _SCHEMA
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
+
 
 
 def test_postgres_schema_declares_panel_events():

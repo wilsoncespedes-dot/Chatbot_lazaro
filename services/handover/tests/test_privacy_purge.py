@@ -186,7 +186,8 @@ def test_postgres_purge_rolls_back_when_a_step_fails():
     repo = PostgresCaseRepository("postgresql://x", connect=lambda: conn)
     with pytest.raises(RuntimeError):
         repo.purge_personal_data(CUTOFF, ACTIVE_CUTOFF, NOW)
-    assert conn.commits == 1
+    # sin DDL al conectar (fase 1) no hay commit previo: nada se confirma
+    assert conn.commits == 0
     assert conn.rollbacks == 1
 
 
@@ -197,7 +198,7 @@ def test_postgres_purge_uses_parameters_and_the_documented_order():
     counts, closed = repo.purge_personal_data(CUTOFF, ACTIVE_CUTOFF, NOW)
     assert counts == {"handover_cases": 1, "handover_requests": 2}
     assert closed == 1
-    assert conn.commits == 2 and conn.rollbacks == 0
+    assert conn.commits == 1 and conn.rollbacks == 0
     statements = [(sql, params) for sql, params in conn.log if not sql.startswith(("CREATE", "ALTER"))]
     starts = [
         "SELECT case_id FROM handover_cases",

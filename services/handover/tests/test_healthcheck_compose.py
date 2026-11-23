@@ -72,9 +72,15 @@ def test_startup_dependencies_wait_for_healthy_dependencies() -> None:
             rf"{dependency}:\s*\n\s+condition:\s*service_healthy",
             gateway_dependencies,
         )
+    # Fase 1: además esperan a que el runner de migraciones termine bien.
+    assert re.search(
+        r"migrate:\s*\n\s+condition:\s*service_completed_successfully",
+        gateway_dependencies,
+    )
     orchestrator = _service("orchestrator")
     assert re.search(
         r"depends_on:\s*\n\s+postgres:\s*\n\s+condition:\s*service_healthy"
+        r"\s*\n\s+migrate:\s*\n\s+condition:\s*service_completed_successfully"
         r"\s*\n\s+redis:\s*\n\s+condition:\s*service_healthy",
         orchestrator,
     )

@@ -6,6 +6,8 @@ import logging
 import re
 import uuid
 from contextlib import asynccontextmanager
+
+from lazaro_contracts.production import require_service_token
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -263,6 +265,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        require_service_token(settings.service_token)
         await run_in_threadpool(publish_advisor_roster, adapters)
         try:
             await run_in_threadpool(

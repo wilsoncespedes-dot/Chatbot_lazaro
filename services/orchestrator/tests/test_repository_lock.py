@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from orchestrator.adapters.repository import _SCHEMA, PostgresRepository
+from orchestrator.adapters.repository import PostgresRepository
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -72,7 +72,7 @@ def test_postgres_repository_serializes_statements_across_threads():
 
 
 def test_postgres_repository_connects_once_with_concurrent_first_use():
-    """R3: el primer uso concurrente abre una sola conexión y crea el esquema una vez."""
+    """R3: el primer uso concurrente abre una sola conexión y no ejecuta DDL."""
     calls = []
     statements: list[str] = []
     errors = []
@@ -120,7 +120,8 @@ def test_postgres_repository_connects_once_with_concurrent_first_use():
     assert errors == []
     assert all(not thread.is_alive() for thread in threads)
     assert calls == [1]
-    assert sum(sql.startswith("CREATE TABLE") for sql in statements) == len(_SCHEMA)
+    # El esquema lo crea `migrations/runner.py` en el despliegue, nunca el servicio.
+    assert not any(sql.lstrip().startswith(("CREATE", "ALTER")) for sql in statements)
 
 
 def test_postgres_repository_releases_lock_after_error():

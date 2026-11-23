@@ -1,12 +1,12 @@
 """Esquema y arranque vacío de las respuestas rápidas del bot (#71)."""
 from __future__ import annotations
 
-from orchestrator.adapters.repository import (
-    FakeRepository,
-    _INDEXES,
-    _MIGRATIONS,
-    _SCHEMA,
-)
+from orchestrator.adapters.repository import FakeRepository
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 
 
 def test_schema_declares_quick_replies_and_images_idempotently():

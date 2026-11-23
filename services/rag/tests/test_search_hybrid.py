@@ -285,8 +285,9 @@ def test_pgvector_hybrid_uses_spanish_full_text_and_parameterized_sql():
 
 def test_pgvector_schema_adds_the_active_spanish_gin_index():
     """R1: existe un índice GIN de texto español limitado a fragmentos activos."""
-    repo = PgVectorChunkRepository("postgresql://x", 3, connect=lambda: _HybridConn())
-    schema = repo._schema()
+    from migrations import section
+
+    schema = section("rag")  # el DDL vive en migrations/0001 (fase 1)
     assert any(
         "USING GIN" in statement and "to_tsvector('spanish'" in statement
         for statement in schema

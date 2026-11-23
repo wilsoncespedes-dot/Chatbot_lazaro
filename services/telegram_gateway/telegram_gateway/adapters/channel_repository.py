@@ -13,22 +13,7 @@ from urllib.parse import unquote, urlparse
 from ..domain import ChannelRecord, ChannelSeed
 
 IDLE_PROBE_SECONDS = 10.0
-# Turno global para crear el esquema: la misma clave en todos los servicios que
-# comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
-SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
-
-_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS canales ("
-    "id TEXT PRIMARY KEY, nombre TEXT NOT NULL, tipo_adaptador TEXT NOT NULL, "
-    "icono TEXT NOT NULL, color TEXT NOT NULL, config JSONB NOT NULL DEFAULT '{}'::jsonb, "
-    "activo BOOLEAN NOT NULL DEFAULT TRUE, creado_en TIMESTAMPTZ NOT NULL DEFAULT now())",
-    "ALTER TABLE canales ADD COLUMN IF NOT EXISTS config_secreta TEXT NULL",
-    "ALTER TABLE canales ADD COLUMN IF NOT EXISTS activo_segun_entorno "
-    "BOOLEAN NOT NULL DEFAULT FALSE",
-    # #66: pistas de credenciales (`…` + últimos 4 caracteres), nunca el valor.
-    "ALTER TABLE canales ADD COLUMN IF NOT EXISTS pistas_credenciales "
-    "JSONB NOT NULL DEFAULT '{}'::jsonb",
-)
+# El esquema vive en `migrations/` y lo aplica el runner en el despliegue.
 _CHANNEL_COLUMNS = (
     "id, nombre, tipo_adaptador, icono, color, config, activo, creado_en, "
     "(config_secreta IS NOT NULL) AS has_secrets, activo_segun_entorno, "
@@ -313,18 +298,8 @@ class PostgresChannelRepository:
         ):
             self._discard_connection()
         if self._conn is None:
-            conn = self._connect()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(SCHEMA_LOCK_SQL)
-                for statement in _SCHEMA:
-                    cursor.execute(statement)
-                conn.commit()
-                self._conn = conn
-            except Exception:
-                with suppress(Exception):
-                    conn.close()
-                raise
+            # Sin DDL al conectar: el esquema lo crea `migrations/runner.py`.
+            self._conn = self._connect()
         self._last_used = self._clock()
         return self._conn
 

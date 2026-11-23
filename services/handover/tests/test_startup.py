@@ -42,7 +42,7 @@ def _build_adapters() -> tuple[Adapters, FakeCaseRepository, FakeGatewayClient]:
 def test_create_app_starts_without_advisor_chat_ids():
     """R44: sin ADVISOR_CHAT_IDS create_app devuelve la app y /health responde 200."""
     adapters, _, _ = _build_adapters()
-    app = create_app(Settings(), adapters)
+    app = create_app(Settings(service_token=TOKEN), adapters)
     assert isinstance(app, FastAPI)
     assert TestClient(app).get("/health").status_code == 200
 
@@ -59,7 +59,7 @@ def test_startup_log_reports_roster_count(caplog):
         1,
     )
     caplog.set_level(logging.INFO)
-    with TestClient(create_app(Settings(), adapters)):
+    with TestClient(create_app(Settings(service_token=TOKEN), adapters)):
         pass
     assert any(r.getMessage() == "advisors_configured count=3" for r in caplog.records)
     assert all(r.getMessage() != "no_advisors_configured" for r in caplog.records)
@@ -69,7 +69,7 @@ def test_startup_warns_when_no_advisors(caplog):
     """R15: con el roster vacío se registra WARNING no_advisors_configured y count=0."""
     adapters, _, _ = _build_adapters()
     caplog.set_level(logging.INFO)
-    with TestClient(create_app(Settings(), adapters)):
+    with TestClient(create_app(Settings(service_token=TOKEN), adapters)):
         pass
     messages = [r.getMessage() for r in caplog.records]
     assert "advisors_configured count=0" in messages
@@ -84,7 +84,7 @@ def test_startup_log_does_not_contain_profile_ids(caplog):
         [AdvisorRosterEntry(profile_id="perfil-secreto-987", role="asesor")], 1
     )
     caplog.set_level(logging.DEBUG)
-    with TestClient(create_app(Settings(), adapters)):
+    with TestClient(create_app(Settings(service_token=TOKEN), adapters)):
         pass
     assert caplog.records
     for record in caplog.records:
@@ -157,7 +157,7 @@ def test_startup_logs_orphan_case_count(caplog):
     repo.create_case(_case("c-closed", "closed"))
     caplog.set_level(logging.INFO)
 
-    with TestClient(create_app(Settings(), adapters)) as client:
+    with TestClient(create_app(Settings(service_token=TOKEN), adapters)) as client:
         assert client.get("/health").status_code == 200
 
     messages = [record.getMessage() for record in caplog.records]
@@ -176,7 +176,7 @@ def test_startup_without_orphans_logs_zero_and_no_warning(caplog):
     repo.create_case(_case("c-open", "open"))
     caplog.set_level(logging.INFO)
 
-    with TestClient(create_app(Settings(), adapters)):
+    with TestClient(create_app(Settings(service_token=TOKEN), adapters)):
         pass
 
     messages = [record.getMessage() for record in caplog.records]
@@ -194,7 +194,7 @@ def test_startup_orphan_count_failure_warns_and_starts(monkeypatch, caplog):
     monkeypatch.setattr(repo, "count_assigned_by_advisor", boom)
     caplog.set_level(logging.INFO)
 
-    with TestClient(create_app(Settings(), adapters)) as client:
+    with TestClient(create_app(Settings(service_token=TOKEN), adapters)) as client:
         assert client.get("/health").status_code == 200
 
     messages = [record.getMessage() for record in caplog.records]
@@ -212,7 +212,7 @@ def test_create_app_does_not_count_orphans(monkeypatch):
         raise AssertionError("no debe contar huérfanos")
 
     monkeypatch.setattr(repo, "count_assigned_by_advisor", boom)
-    app = create_app(Settings(), adapters)
+    app = create_app(Settings(service_token=TOKEN), adapters)
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert calls == []

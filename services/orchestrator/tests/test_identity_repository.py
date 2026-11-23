@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from orchestrator.accounts import hash_password_scrypt
-from orchestrator.adapters.repository import FakeRepository, PostgresRepository, _INDEXES, _SCHEMA
+from orchestrator.adapters.repository import FakeRepository, PostgresRepository
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 PASSWORD_HASH = hash_password_scrypt("clave-segura-123", 16384)
