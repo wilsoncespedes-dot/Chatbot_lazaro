@@ -109,3 +109,57 @@ pendientes, variables nuevas y pasos de despliegue.
   entregarse antes que uno anterior que espera en la cola de reintento.
 - `migrations/testing.py`: helper `migrated_database()` para tests de integración
   con una base desechable migrada (requiere `TEST_DATABASE_URL`).
+
+## Fase 3 — Memoria por contacto sin login
+
+- **`MEMORY_ENABLED` por defecto `true`** y **`MEMORY_CONTEXT_MESSAGES` por defecto
+  20** (era 6; el máximo ya era 20). En los tests, `conftest.make_env` fija
+  `memory_enabled=False` (igual que con `identity_login_required`): las suites
+  históricas prueban el flujo sin memoria y los tests de memoria la activan.
+- **Migración 0003**: `contact_facts (contact_id, clave, valor, fuente_mensaje_id,
+  actualizado)`, PK `(contact_id, clave)` y `CHECK` con las 5 claves (`nombre`,
+  `empresa`, `producto_interes`, `pedido_caso`, `preferencia_contacto`); y
+  `contact_memory (contact_id, resumen, mensajes_pendientes, actualizado)`. Ambas con
+  `REFERENCES contacts(id) ON DELETE CASCADE`: rechazar el consentimiento (R29) y la
+  retención por inactividad borran la memoria del contacto con él.
+  `fuente_mensaje_id` es solo trazabilidad, sin FK, porque la retención borra
+  mensajes por antigüedad y el hecho sigue siendo válido.
+- **Dos niveles.** Contacto (canal + id externo): hechos + resumen + últimos 20
+  mensajes, siempre que llegue al LLM. Cliente con login: `client_memory` y el
+  historial de la sesión (#40, sin cambios). Con sesión, el prompt lleva ambos.
+- **Extracción** (`_update_contact_memory`, tras responder): el LLM recibe los
+  hechos actuales, el resumen y los últimos `MEMORY_FACTS_INPUT_MESSAGES` mensajes
+  y devuelve `{"hechos": {...}, "resumen": "..."}`. Corre cada
+  `MEMORY_FACTS_EVERY_MESSAGES` (5) mensajes o antes si el texto trae una frase de
+  `MEMORY_FACT_TRIGGER_PHRASES` ("me llamo", "trabajo en", "me interesa"…). Un
+  fallo nunca rompe la respuesta (evento `memory_failed`). Motivo: no gastar una
+  llamada al LLM por mensaje.
+- **Filtro sensible reutilizado** (`is_sensitive`/`clean_summary` de `memory.py`):
+  los mensajes con datos sensibles no entran al extractor, y cada valor y frase del
+  resumen se filtra otra vez antes de guardarse. **Limitación**: un número de
+  pedido de 6+ dígitos no se guarda (umbral `MEMORY_SENSITIVE_MIN_DIGITS`), y un
+  mensaje que mezcla nombre y número largo no aporta el nombre.
+- **"¿Qué plan te dije?"** no puede contestarlo el RAG (exige citas de los
+  manuales). Si el mensaje contiene una frase de `MEMORY_RECALL_PHRASES` y hay
+  memoria, se responde con un prompt propio que solo ve la memoria del contacto
+  (`{"answer": ...}`, sin cifras que no estén en esa memoria). Si el modelo falla
+  o inventa, se responde con los hechos guardados ("Ana, esto es lo que tengo
+  anotado: te llamas Ana; te interesa plan Pro."). Sin memoria, el mensaje sigue
+  el flujo normal. Evento `memory_answer` con `llm` o `fallback`.
+- **En el prompt RAG** los hechos van en `<datos_contacto>` y el resumen en
+  `<resumen_contacto>`, marcados como datos no citables (`CONTACT_CONTEXT_NOTE`)
+  para que el modelo pueda llamar al contacto por su nombre. Sin memoria el prompt
+  es el mismo byte a byte (R26).
+- **Login**: los hechos del contacto pasan a `client_memory` como "Nombre: Ana",
+  "Producto de interés: plan Pro"… (reemplazan un ítem con la misma etiqueta) y la
+  memoria del contacto se vacía. Durante una sesión no se extraen hechos al nivel
+  del contacto, y el historial anónimo empieza después de la última sesión cerrada.
+  Motivo: R49 — otro cliente que inicie sesión en el mismo chat no debe heredar
+  datos del anterior.
+- **Con `IDENTITY_LOGIN_REQUIRED=true`** (valor del `.env.example`) un contacto sin
+  sesión recibe el enlace de acceso y no llega al LLM; la memoria por contacto
+  sigue acumulando lo que diga antes del login y se fusiona al iniciar sesión. Con
+  `false` el contacto conversa sin login y usa su memoria. No se cambió ese valor
+  (fuera del alcance de la fase).
+- **Supresión por cliente**: borra también la memoria de los contactos de sus
+  sesiones; `removed_counts` gana la clave `contact_facts`.

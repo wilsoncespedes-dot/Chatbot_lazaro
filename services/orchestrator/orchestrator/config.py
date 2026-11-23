@@ -239,13 +239,30 @@ class Settings(BaseSettings):
     client_data_unavailable_reply: str = (
         "No se pudo consultar tus datos. Inténtalo de nuevo más tarde."
     )
-    # memoria por cliente (#40)
-    memory_enabled: bool = False
+    # memoria por cliente (#40) y por contacto sin login (fase 3)
+    memory_enabled: bool = True
     memory_max_items: int = Field(default=20, ge=1, le=100)
     memory_item_max_chars: int = Field(default=300, ge=50, le=1000)
     memory_summary_max_chars: int = Field(default=1500, ge=200, le=4000)
     memory_input_max_messages: int = Field(default=200, ge=10, le=1000)
-    memory_context_messages: int = Field(default=6, ge=0, le=20)
+    memory_context_messages: int = Field(default=20, ge=0, le=20)
+    # Fase 3: el extractor de hechos corre cada N mensajes del contacto o antes,
+    # si el mensaje contiene una frase de dato nuevo.
+    memory_facts_every_messages: int = Field(default=5, ge=1, le=100)
+    memory_facts_input_messages: int = Field(default=20, ge=2, le=200)
+    memory_fact_max_chars: int = Field(default=120, ge=20, le=300)
+    memory_fact_trigger_phrases: str = (
+        "me llamo,mi nombre es,soy de la empresa,trabajo en,trabajo para,mi empresa,"
+        "me interesa,estoy interesado,estoy interesada,quiero el plan,quiero contratar,"
+        "quiero comprar,mi pedido,mi caso,numero de caso,mi ticket,prefiero que,"
+        "llamame,escribeme,contactame"
+    )
+    # Preguntas sobre lo que el contacto dijo antes: se responden con su memoria.
+    memory_recall_phrases: str = (
+        "te dije,te comente,te conte,te mencione,te habia dicho,recuerdas mi,"
+        "te acuerdas de mi,como me llamo,cual es mi nombre,sabes mi nombre,"
+        "sabes quien soy,que sabes de mi"
+    )
     memory_panel_summaries: int = Field(default=5, ge=1, le=50)
     memory_sensitive_min_digits: int = Field(default=6, ge=4, le=20)
     memory_sensitive_keywords: str = (
@@ -761,6 +778,22 @@ class Settings(BaseSettings):
         return tuple(
             token.strip()
             for token in self.memory_sensitive_keywords.split(",")
+            if token.strip()
+        )
+
+    @property
+    def memory_fact_trigger_list(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.memory_fact_trigger_phrases.split(",")
+            if token.strip()
+        )
+
+    @property
+    def memory_recall_phrase_list(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.memory_recall_phrases.split(",")
             if token.strip()
         )
 

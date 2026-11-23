@@ -174,6 +174,9 @@ def test_r40_r41_r42_r43_r44_r45_only_the_requested_client_is_deleted(env_factor
     env.repo.add_message(contact_q.id, "user", "mensaje de Q", NOW - timedelta(minutes=5))
     env.repo.set_client_memory(client_p, ("Memoria P",), "sp", NOW)
     env.repo.set_client_memory(client_q, ("Memoria Q",), "sq", NOW)
+    # Fase 3: la memoria por contacto del chat de P también se borra.
+    env.repo.save_contact_memory(contact_p.id, {"nombre": "P"}, "", None, NOW)
+    env.repo.save_contact_memory(contact_q.id, {"nombre": "Q"}, "", None, NOW)
     env.repo.upsert_conversation_summary(
         "sp", client_p, contact_p.id, "telegram", "Resumen P", "session_end", NOW
     )
@@ -188,6 +191,7 @@ def test_r40_r41_r42_r43_r44_r45_only_the_requested_client_is_deleted(env_factor
         "messages": 1,
         "conversation_summaries": 1,
         "client_memory": 1,
+        "contact_facts": 1,
         "case_notes": 0,
         "privacy_consents": 0,
         "consentimientos_cliente": 0,
@@ -197,6 +201,8 @@ def test_r40_r41_r42_r43_r44_r45_only_the_requested_client_is_deleted(env_factor
         "antes del login",
         "mensaje de Q",
     ]
+    assert env.repo.get_contact_memory(contact_p.id).facts == ()
+    assert env.repo.get_contact_memory(contact_q.id).facts == (("nombre", "Q"),)
     assert client_p not in env.repo.client_memory
     assert env.repo.client_memory[client_q].items == ("Memoria Q",)
     assert set(env.repo.conversation_summaries) == {"sq"}
@@ -404,6 +410,7 @@ def test_r44_postgres_suppression_is_parameterized_and_atomic():
         "messages": 2,
         "conversation_summaries": 1,
         "client_memory": 1,
+        "contact_facts": 0,
         "case_notes": 0,
         "privacy_consents": 0,
         "consentimientos_cliente": 0,

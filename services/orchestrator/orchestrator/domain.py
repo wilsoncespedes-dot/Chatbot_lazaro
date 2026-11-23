@@ -127,13 +127,21 @@ from .harness import (
     parse_router_answer,
 )
 from .memory import (
+    CONTACT_CONTEXT_NOTE,
+    MEMORY_ANSWER_PROMPT,
     MEMORY_CONTEXT_NOTE,
+    FactsInvalid,
     PromptContext,
     SummaryInvalid,
+    build_facts_prompt,
     build_summary_prompt,
+    clean_contact_facts,
     clean_memory_items,
     clean_summary,
+    fallback_memory_answer,
     is_sensitive,
+    merge_facts_into_memory,
+    parse_facts_answer,
     parse_summary_answer,
     session_window,
 )
@@ -1265,7 +1273,10 @@ def _neutralize(text: str) -> str:
 
 
 def _neutralize_context(text: str) -> str:
-    for tag in ("memoria", "historial", "mensaje", "item"):
+    for tag in (
+        "memoria", "historial", "mensaje", "item",
+        "datos_contacto", "dato", "resumen_contacto",
+    ):
         text = re.sub(rf"</\s*{tag}", f"[/{tag}", text, flags=re.IGNORECASE)
     return _neutralize(text)
 
@@ -1330,18 +1341,7 @@ def build_llm_prompt(
 ) -> tuple[str, str]:
     parts: list[str] = []
     if context is not None:
-        if context.memory:
-            items = "".join(
-                f"<item>{_neutralize_context(item)}</item>" for item in context.memory
-            )
-            parts.append(f"<memoria>{items}</memoria>")
-        if context.history:
-            history = "".join(
-                f'<mensaje rol="{role.replace(chr(34), chr(39))}">'
-                f"{_neutralize_context(text)}</mensaje>"
-                for role, text in context.history
-            )
-            parts.append(f"<historial>{history}</historial>")
+        parts.extend(_context_blocks(context))
     if previous:
         # #64 R4: solo para entender a qué se refiere la pregunta actual.
         parts.append(f"<pregunta_anterior>{_neutralize(previous)}</pregunta_anterior>")
@@ -1352,7 +1352,73 @@ def build_llm_prompt(
     system = LLM_SYSTEM_PROMPT
     if context is not None:
         system = f"{LLM_SYSTEM_PROMPT} {MEMORY_CONTEXT_NOTE}"
+        if context.facts or context.summary:
+            system = f"{system} {CONTACT_CONTEXT_NOTE}"
     return system, "\n".join(parts)
+
+
+def _context_blocks(context: PromptContext) -> list[str]:
+    """Bloques de contexto como DATOS: hechos y resumen del contacto, memoria, historial."""
+    parts: list[str] = []
+    if context.facts:
+        facts = "".join(
+            f'<dato clave="{key}">{_neutralize_context(value)}</dato>'
+            for key, value in context.facts
+        )
+        parts.append(f"<datos_contacto>{facts}</datos_contacto>")
+    if context.summary:
+        parts.append(
+            f"<resumen_contacto>{_neutralize_context(context.summary)}</resumen_contacto>"
+        )
+    if context.memory:
+        items = "".join(
+            f"<item>{_neutralize_context(item)}</item>" for item in context.memory
+        )
+        parts.append(f"<memoria>{items}</memoria>")
+    if context.history:
+        history = "".join(
+            f'<mensaje rol="{role.replace(chr(34), chr(39))}">'
+            f"{_neutralize_context(text)}</mensaje>"
+            for role, text in context.history
+        )
+        parts.append(f"<historial>{history}</historial>")
+    return parts
+
+
+MEMORY_ANSWER_MAX_CHARS = 1000
+
+
+def build_memory_answer_prompt(question: str, context: PromptContext) -> tuple[str, str]:
+    """Fase 3: "¿qué te dije?" con solo la memoria del propio contacto como datos."""
+    parts = _context_blocks(context)
+    parts.append(f"<pregunta>{_neutralize(question)}</pregunta>")
+    return MEMORY_ANSWER_PROMPT, "\n".join(parts)
+
+
+def parse_memory_answer(raw: str, context: PromptContext) -> str | None:
+    """`{"answer": ...}` breve y sin cifras que no estén en la memoria; si no, None."""
+    try:
+        data = json.loads(_strip_code_fence(raw))
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or set(data) != {"answer"}:
+        return None
+    answer = data["answer"]
+    if not isinstance(answer, str):
+        return None
+    answer = answer.strip()
+    if not answer or len(answer) > MEMORY_ANSWER_MAX_CHARS:
+        return None
+    known: set[str] = extract_numbers(context.summary)
+    for _, value in context.facts:
+        known |= extract_numbers(value)
+    for item in context.memory:
+        known |= extract_numbers(item)
+    for _, text in context.history:
+        known |= extract_numbers(text)
+    if not _answer_numbers(answer) <= known:
+        return None
+    return answer
 
 
 def _contact_destination(contact: Contact) -> str:
@@ -1757,9 +1823,8 @@ def login_client(
             )
             raise SessionConflict("Ya hay una sesión activa. Cierra la otra sesión o espera.")
 
-    result = repo.start_client_session(
-        hash_token(token), profile.id, adapters.new_id(), now
-    )
+    session_id = adapters.new_id()
+    result = repo.start_client_session(hash_token(token), profile.id, session_id, now)
     if result == "invalid_link":
         raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
     if result == "conflict":
@@ -1783,6 +1848,7 @@ def login_client(
 
     repo.clear_identity_login_failures(normalized)
     repo.add_identity_audit(profile.id, link.contact_id, "login", status, now)
+    _merge_contact_memory(profile.id, link.contact_id, session_id, settings, adapters)
     contact = _link_contact(link)
     if repo.get_conversation_state(link.contact_id) in (
         None,
@@ -1969,16 +2035,53 @@ def _memory_failed(contact_id: str, reason: str, adapters: Adapters) -> None:
         logger.error("memory_failed_event_error contact_id=%s", contact_id)
 
 
+def _contact_messages(
+    contact_id: str, limit: int, adapters: Adapters
+) -> list[tuple[int, str, str, datetime]]:
+    """Fase 3: últimos mensajes del contacto posteriores a su última sesión cerrada.
+
+    Lo hablado dentro de una sesión de cliente es de ese cliente (R49): al cerrar
+    sesión el contacto vuelve a empezar su historial anónimo.
+    """
+    repo = adapters.repository
+    since = repo.last_session_end(contact_id)
+    return repo.recent_contact_messages(contact_id, since, limit)
+
+
 def _memory_context(
-    contact: Contact, current_at: datetime, settings: Settings, adapters: Adapters
+    contact: Contact,
+    current_at: datetime,
+    settings: Settings,
+    adapters: Adapters,
+    current_text: str | None = None,
 ) -> PromptContext | None:
-    """Memoria e historial de la sesión activa; sin sesión no hay contexto (R21–R24)."""
+    """Fase 3: hechos y resumen del contacto siempre (con o sin login).
+
+    Con sesión activa se suman la memoria del cliente y el historial de la sesión
+    (R21–R24); sin sesión, los últimos mensajes del contacto sin el actual.
+    """
     if not settings.memory_enabled:
         return None
     repo = adapters.repository
+    stored = repo.get_contact_memory(contact.id)
     session = repo.get_active_session_by_contact(contact.id)
     if session is None:
-        return None
+        history: tuple[tuple[str, str], ...] = ()
+        limit = settings.memory_context_messages
+        if limit > 0:
+            rows = _contact_messages(contact.id, limit + 1, adapters)
+            if (
+                current_text is not None
+                and rows
+                and rows[-1][1] == "user"
+                and _same_text(rows[-1][2], current_text)
+            ):
+                rows = rows[:-1]
+            history = tuple((role, text) for _, role, text, _ in rows[-limit:])
+        context = PromptContext(
+            memory=(), history=history, facts=stored.facts, summary=stored.summary
+        )
+        return None if context.is_empty() else context
     raw_items, _ = repo.get_client_memory(session.profile_id)
     memory = clean_memory_items(
         raw_items,
@@ -2009,7 +2112,140 @@ def _memory_context(
             for role, text, at in rows
             if at < current_at
         )[-settings.memory_context_messages:]
-    return PromptContext(memory=memory, history=history)
+    return PromptContext(
+        memory=memory, history=history, facts=stored.facts, summary=stored.summary
+    )
+
+
+def _answer_from_memory(
+    contact: Contact, text: str, settings: Settings, adapters: Adapters
+) -> bool:
+    """Fase 3: "¿qué plan te dije?" se responde con la memoria del propio contacto.
+
+    False si no hay nada guardado: el mensaje sigue el flujo normal.
+    """
+    try:
+        context = _memory_context(
+            contact, adapters.clock(), settings, adapters, current_text=text
+        )
+    except Exception:
+        logger.exception("memory_answer_context_error contact_id=%s", contact.id)
+        return False
+    if context is None or context.is_empty():
+        return False
+    system, user = build_memory_answer_prompt(text, context)
+    try:
+        raw = adapters.llm.complete(system, user)
+    except ServiceUnavailable:
+        raw = ""
+    answer = parse_memory_answer(raw, context)
+    origin = "llm"
+    if answer is None:
+        origin = "fallback"
+        answer = fallback_memory_answer(context.facts)
+        if not answer and context.memory:
+            answer = f"Esto es lo que tengo anotado: {'; '.join(context.memory)}."
+        if not answer:
+            return False
+    adapters.repository.add_event(contact.id, "memory_answer", origin, adapters.clock())
+    _send(contact, answer, adapters)
+    return True
+
+
+def _update_contact_memory(
+    contact: Contact, text: str, settings: Settings, adapters: Adapters
+) -> None:
+    """Fase 3: el LLM extrae hechos del contacto cada N mensajes o al ver un dato nuevo.
+
+    Nunca rompe el flujo del mensaje. Con sesión activa no hace nada: lo hablado
+    en la sesión pasa a `client_memory` al cerrarla (#40).
+    """
+    if not settings.memory_enabled:
+        return
+    repo = adapters.repository
+    now = adapters.clock()
+    try:
+        if repo.get_active_session_by_contact(contact.id) is not None:
+            return
+        pending = repo.bump_contact_memory_pending(contact.id, now)
+        new_data = not matches_any(
+            text, settings.memory_recall_phrase_list
+        ) and matches_any(text, settings.memory_fact_trigger_list)
+        if not new_data and pending < settings.memory_facts_every_messages:
+            return
+        keywords = settings.memory_sensitive_keyword_list
+        min_digits = settings.memory_sensitive_min_digits
+        rows = _contact_messages(
+            contact.id, settings.memory_facts_input_messages, adapters
+        )
+        source = next((row[0] for row in reversed(rows) if row[1] == "user"), None)
+        messages = [
+            (role, body)
+            for _, role, body, _ in rows
+            if not is_sensitive(body, keywords, min_digits)
+        ]
+        if not messages:
+            repo.save_contact_memory(contact.id, {}, None, None, now)
+            return
+        system, user = build_facts_prompt(repo.get_contact_memory(contact.id), messages)
+        try:
+            raw = adapters.llm.complete(system, user)
+        except ServiceUnavailable:
+            # el contador sigue: se reintenta con el próximo mensaje
+            _memory_failed(contact.id, "llm_unavailable", adapters)
+            return
+        try:
+            answer = parse_facts_answer(raw)
+        except FactsInvalid:
+            repo.save_contact_memory(contact.id, {}, None, None, now)
+            _memory_failed(contact.id, "invalid_facts", adapters)
+            return
+        facts = clean_contact_facts(
+            answer.hechos, keywords, min_digits, settings.memory_fact_max_chars
+        )
+        summary = None
+        if answer.resumen is not None:
+            summary = clean_summary(
+                answer.resumen, keywords, min_digits, settings.memory_summary_max_chars
+            )
+        repo.save_contact_memory(contact.id, facts, summary, source, now)
+    except Exception:
+        logger.exception("contact_memory_error contact_id=%s", contact.id)
+        _memory_failed(contact.id, "error", adapters)
+
+
+def _merge_contact_memory(
+    profile_id: str,
+    contact_id: str,
+    session_id: str,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """Fase 3: al iniciar sesión los hechos del contacto pasan a `client_memory`.
+
+    El contacto queda sin hechos ni resumen: otro cliente que luego inicie sesión
+    en el mismo chat no los hereda (R49).
+    """
+    if not settings.memory_enabled:
+        return
+    repo = adapters.repository
+    try:
+        stored = repo.get_contact_memory(contact_id)
+        if stored.facts:
+            items, _ = repo.get_client_memory(profile_id)
+            merged = clean_memory_items(
+                merge_facts_into_memory(items, stored.facts),
+                settings.memory_sensitive_keyword_list,
+                settings.memory_sensitive_min_digits,
+                settings.memory_max_items,
+                settings.memory_item_max_chars,
+            )
+            repo.set_client_memory(profile_id, merged, session_id, adapters.clock())
+        if stored.facts or stored.summary:
+            repo.clear_contact_memory(contact_id)
+    except Exception:
+        logger.exception("contact_memory_merge_error contact_id=%s", contact_id)
+        _memory_failed(contact_id, "merge_failed", adapters)
 
 
 def _summarize_session(
@@ -2415,7 +2651,9 @@ def _tool_rag(
             _auto_handover(contact, "no_relevant_chunks", settings, adapters)
         return "no_relevant_chunks"
 
-    context = _memory_context(contact, adapters.clock(), settings, adapters)
+    context = _memory_context(
+        contact, adapters.clock(), settings, adapters, current_text=ctx.text
+    )
     system, user = build_llm_prompt(ctx.text, chunks, context, previous)
     try:
         answer = adapters.llm.complete(system, user)
@@ -2938,6 +3176,15 @@ def _resolve_and_run(
         text, settings.social_message_list
     ):
         _send(contact, settings.social_reply, adapters)
+        return
+
+    # Fase 3: "¿qué plan te dije?" se responde con la memoria del contacto.
+    if (
+        state == ConversationState.ACTIVE
+        and settings.memory_enabled
+        and matches_any(text, settings.memory_recall_phrase_list)
+        and _answer_from_memory(contact, text, settings, adapters)
+    ):
         return
 
     operational = operational_settings(settings, adapters)
@@ -3732,6 +3979,19 @@ def _apply_identity_rules(
 
 
 def _route_consented_text(
+    contact: Contact,
+    text: str,
+    received_at: datetime,
+    update_id: int,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """Enruta el texto y, ya respondido, actualiza la memoria del contacto (fase 3)."""
+    _route_text(contact, text, received_at, update_id, settings, adapters)
+    _update_contact_memory(contact, text, settings, adapters)
+
+
+def _route_text(
     contact: Contact,
     text: str,
     received_at: datetime,

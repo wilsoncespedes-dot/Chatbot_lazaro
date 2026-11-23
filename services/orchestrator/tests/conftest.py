@@ -227,6 +227,9 @@ def make_env(**settings_overrides) -> Env:
         # R44: las suites históricas prueban el flujo previo sin login; los
         # tests de #38 activan el login explícitamente.
         "identity_login_required": False,
+        # Fase 3: la memoria viene activa por defecto; las suites históricas
+        # prueban el flujo sin ella y los tests de memoria la activan.
+        "memory_enabled": False,
     }
     values.update(settings_overrides)
     settings = Settings(**values)

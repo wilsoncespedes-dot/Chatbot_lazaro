@@ -20,20 +20,28 @@ MEMORY_VARS = (
     "MEMORY_PANEL_SUMMARIES",
     "MEMORY_SENSITIVE_MIN_DIGITS",
     "MEMORY_SENSITIVE_KEYWORDS",
+    "MEMORY_FACTS_EVERY_MESSAGES",
+    "MEMORY_FACTS_INPUT_MESSAGES",
+    "MEMORY_FACT_MAX_CHARS",
+    "MEMORY_FACT_TRIGGER_PHRASES",
+    "MEMORY_RECALL_PHRASES",
     "SUPPRESSION_EXECUTOR_ROLES",
 )
 
 
-def test_r52_memory_defaults_are_safe_and_off():
-    """R52: apagada por defecto y con los límites documentados."""
+def test_r52_memory_defaults_are_safe_and_on():
+    """R52 + fase 3: activa por defecto, últimos 20 mensajes y límites documentados."""
     settings = Settings()
 
-    assert settings.memory_enabled is False
+    assert settings.memory_enabled is True
     assert settings.memory_max_items == 20
     assert settings.memory_item_max_chars == 300
     assert settings.memory_summary_max_chars == 1500
     assert settings.memory_input_max_messages == 200
-    assert settings.memory_context_messages == 6
+    assert settings.memory_context_messages == 20
+    assert settings.memory_facts_every_messages == 5
+    assert settings.memory_fact_trigger_list
+    assert settings.memory_recall_phrase_list
     assert settings.memory_panel_summaries == 5
     assert settings.memory_sensitive_min_digits == 6
     assert settings.suppression_executor_roles == "admin"
@@ -74,6 +82,9 @@ def test_r52_env_example_and_render_declare_the_new_variables():
         ("memory_panel_summaries", 51),
         ("memory_sensitive_min_digits", 3),
         ("memory_sensitive_min_digits", 21),
+        ("memory_facts_every_messages", 0),
+        ("memory_facts_input_messages", 1),
+        ("memory_fact_max_chars", 19),
     ],
 )
 def test_r54_numeric_memory_variables_out_of_range_fail_at_start(field, value):

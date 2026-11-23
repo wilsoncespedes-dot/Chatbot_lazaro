@@ -1,15 +1,16 @@
 """Persistencia (contactos, historial, eventos, update_id, casos) detrás de un Repository."""
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import threading
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import unquote, urlparse
 
 from lazaro_contracts import LastMessage
@@ -46,7 +47,7 @@ from ..domain import (
     destination_key,
 )
 from ..legacy import LEGACY_CHANNEL
-from ..memory import in_window, session_window
+from ..memory import FACT_KEYS, ContactMemory, in_window, session_window
 from ..privacy import (
     ConversationTexts,
     conversation_text_settings,
@@ -593,6 +594,28 @@ class Repository(Protocol):
         now: datetime,
     ) -> None: ...
 
+    # Fase 3: memoria por contacto (canal + id externo), sin login.
+    def get_contact_memory(self, contact_id: str) -> ContactMemory: ...
+
+    def save_contact_memory(
+        self,
+        contact_id: str,
+        facts: Mapping[str, str],
+        summary: str | None,
+        source_message_id: int | None,
+        now: datetime,
+    ) -> None: ...
+
+    def clear_contact_memory(self, contact_id: str) -> None: ...
+
+    def bump_contact_memory_pending(self, contact_id: str, now: datetime) -> int: ...
+
+    def recent_contact_messages(
+        self, contact_id: str, since: datetime | None, limit: int
+    ) -> list[tuple[int, str, str, datetime]]: ...
+
+    def last_session_end(self, contact_id: str) -> datetime | None: ...
+
     def upsert_conversation_summary(
         self,
         session_id: str,
@@ -808,6 +831,9 @@ class RagStreak:
     state: str
 
 
+_FAKE_MESSAGE_IDS = itertools.count(1)
+
+
 @dataclass
 class StoredMessage:
     contact_id: str
@@ -815,6 +841,8 @@ class StoredMessage:
     text: str
     at: datetime
     canal_id: str | None = None
+    # Fase 3: id creciente como `messages.id` (fuente de los hechos del contacto).
+    id: int = field(default_factory=lambda: next(_FAKE_MESSAGE_IDS), compare=False)
 
 
 @dataclass
@@ -1110,6 +1138,10 @@ class FakeRepository:
         self.identity_audits: list[IdentityAudit] = []
         self.identity_overrides: dict[str, str] = {}
         self.client_memory: dict[str, StoredClientMemory] = {}
+        # Fase 3: contact_id → {clave: (valor, fuente_mensaje_id, actualizado)}
+        self.contact_facts: dict[str, dict[str, tuple[str, int | None, datetime]]] = {}
+        # Fase 3: contact_id → (resumen, mensajes_pendientes, actualizado)
+        self.contact_memory_rows: dict[str, tuple[str, int, datetime]] = {}
         self.conversation_summaries: dict[str, StoredConversationSummary] = {}
         self.case_profiles: dict[str, str | None] = {}
         self.advisor_presence: dict[str, tuple[str, datetime]] = {}
@@ -2672,6 +2704,8 @@ class FakeRepository:
             if key[0] != contact_id
         }
         self.conversation_states.pop(contact_id, None)
+        # Fase 3: en Postgres, ON DELETE CASCADE desde contacts.
+        self.clear_contact_memory(contact_id)
         self.contacts = {
             key: stored for key, stored in self.contacts.items() if stored.id != contact_id
         }
@@ -2755,6 +2789,8 @@ class FakeRepository:
             self.contacts.pop(telegram_user_id, None)
         for contact_id in inactive_ids:
             self.contact_created_at.pop(contact_id, None)
+            # Fase 3: en Postgres, ON DELETE CASCADE desde contacts.
+            self.clear_contact_memory(contact_id)
 
         kept_messages = [message for message in self.messages if message.at >= cutoff]
         deleted_messages = len(self.messages) - len(kept_messages)
@@ -3254,6 +3290,66 @@ class FakeRepository:
             updated_at=now,
         )
 
+    def get_contact_memory(self, contact_id: str) -> ContactMemory:
+        stored = self.contact_facts.get(contact_id, {})
+        facts = tuple(
+            (key, stored[key][0]) for key in FACT_KEYS if key in stored
+        )
+        row = self.contact_memory_rows.get(contact_id)
+        return ContactMemory(facts=facts, summary=row[0] if row else "")
+
+    def save_contact_memory(
+        self,
+        contact_id: str,
+        facts: Mapping[str, str],
+        summary: str | None,
+        source_message_id: int | None,
+        now: datetime,
+    ) -> None:
+        unknown = set(facts) - set(FACT_KEYS)
+        if unknown:  # el CHECK de la tabla real rechaza la fila
+            raise ValueError(f"clave no permitida: {sorted(unknown)}")
+        stored = self.contact_facts.setdefault(contact_id, {})
+        for key, value in facts.items():
+            stored[key] = (value, source_message_id, now)
+        previous = self.contact_memory_rows.get(contact_id)
+        resumen = summary if summary is not None else (previous[0] if previous else "")
+        self.contact_memory_rows[contact_id] = (resumen, 0, now)
+
+    def clear_contact_memory(self, contact_id: str) -> None:
+        self.contact_facts.pop(contact_id, None)
+        self.contact_memory_rows.pop(contact_id, None)
+
+    def bump_contact_memory_pending(self, contact_id: str, now: datetime) -> int:
+        resumen, pending, updated = self.contact_memory_rows.get(
+            contact_id, ("", 0, now)
+        )
+        self.contact_memory_rows[contact_id] = (resumen, pending + 1, updated)
+        return pending + 1
+
+    def recent_contact_messages(
+        self, contact_id: str, since: datetime | None, limit: int
+    ) -> list[tuple[int, str, str, datetime]]:
+        selected = [
+            message
+            for message in self.messages
+            if message.contact_id == contact_id
+            and (since is None or message.at > since)
+        ]
+        selected.sort(key=lambda message: message.id)
+        return [
+            (message.id, message.role, message.text, message.at)
+            for message in selected[-limit:]
+        ] if limit > 0 else []
+
+    def last_session_end(self, contact_id: str) -> datetime | None:
+        ends = [
+            session.ended_at
+            for session in self.client_sessions.values()
+            if session.contact_id == contact_id and session.ended_at is not None
+        ]
+        return max(ends) if ends else None
+
     def upsert_conversation_summary(
         self,
         session_id: str,
@@ -3409,6 +3505,10 @@ class FakeRepository:
             }
 
             deleted_memory = 1 if self.client_memory.pop(request.profile_id, None) else 0
+            deleted_contact_facts = 0
+            for contact_id in session_contact_ids:
+                deleted_contact_facts += len(self.contact_facts.get(contact_id, {}))
+                self.clear_contact_memory(contact_id)
 
             self.privacy_consents = kept_consents
 
@@ -3436,6 +3536,7 @@ class FakeRepository:
                 "messages": deleted_messages,
                 "conversation_summaries": deleted_summaries,
                 "client_memory": deleted_memory,
+                "contact_facts": deleted_contact_facts,
                 "case_notes": deleted_notes,
                 "privacy_consents": deleted_consents,
                 "consentimientos_cliente": deleted_client_consents,
@@ -6624,6 +6725,128 @@ class PostgresRepository:
             (profile_id, json.dumps(list(items), ensure_ascii=False), source_session_id, now),
         )
 
+    def get_contact_memory(self, contact_id: str) -> ContactMemory:
+        rows = self._run(
+            "SELECT clave, valor FROM contact_facts WHERE contact_id = %s",
+            (contact_id,),
+            fetch=True,
+        )
+        stored = {str(row[0]): str(row[1]) for row in rows}
+        summary_rows = self._run(
+            "SELECT resumen FROM contact_memory WHERE contact_id = %s",
+            (contact_id,),
+            fetch=True,
+        )
+        return ContactMemory(
+            facts=tuple((key, stored[key]) for key in FACT_KEYS if key in stored),
+            summary=str(summary_rows[0][0]) if summary_rows else "",
+        )
+
+    def save_contact_memory(
+        self,
+        contact_id: str,
+        facts: Mapping[str, str],
+        summary: str | None,
+        source_message_id: int | None,
+        now: datetime,
+    ) -> None:
+        """Hechos y resumen en una transacción; reinicia los mensajes pendientes."""
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                for key, value in facts.items():
+                    cur.execute(
+                        "INSERT INTO contact_facts "
+                        "(contact_id, clave, valor, fuente_mensaje_id, actualizado) "
+                        "VALUES (%s, %s, %s, %s, %s) "
+                        "ON CONFLICT (contact_id, clave) DO UPDATE SET "
+                        "valor = EXCLUDED.valor, "
+                        "fuente_mensaje_id = EXCLUDED.fuente_mensaje_id, "
+                        "actualizado = EXCLUDED.actualizado",
+                        (contact_id, key, value, source_message_id, now),
+                    )
+                cur.execute(
+                    "INSERT INTO contact_memory "
+                    "(contact_id, resumen, mensajes_pendientes, actualizado) "
+                    "VALUES (%s, COALESCE(CAST(%s AS TEXT), ''), 0, %s) "
+                    "ON CONFLICT (contact_id) DO UPDATE SET "
+                    "resumen = COALESCE(CAST(%s AS TEXT), contact_memory.resumen), "
+                    "mensajes_pendientes = 0, actualizado = EXCLUDED.actualizado",
+                    (contact_id, summary, now, summary),
+                )
+                conn.commit()
+            except Exception as exc:
+                with suppress(Exception):
+                    conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def clear_contact_memory(self, contact_id: str) -> None:
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM contact_facts WHERE contact_id = %s", (contact_id,)
+                )
+                cur.execute(
+                    "DELETE FROM contact_memory WHERE contact_id = %s", (contact_id,)
+                )
+                conn.commit()
+            except Exception as exc:
+                with suppress(Exception):
+                    conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def bump_contact_memory_pending(self, contact_id: str, now: datetime) -> int:
+        rows = self._run(
+            "INSERT INTO contact_memory "
+            "(contact_id, resumen, mensajes_pendientes, actualizado) "
+            "VALUES (%s, '', 1, %s) "
+            "ON CONFLICT (contact_id) DO UPDATE SET "
+            "mensajes_pendientes = contact_memory.mensajes_pendientes + 1 "
+            "RETURNING mensajes_pendientes",
+            (contact_id, now),
+            fetch=True,
+        )
+        return int(rows[0][0])
+
+    def recent_contact_messages(
+        self, contact_id: str, since: datetime | None, limit: int
+    ) -> list[tuple[int, str, str, datetime]]:
+        if limit <= 0:
+            return []
+        if since is None:
+            rows = self._run(
+                "SELECT id, role, text, at FROM ("
+                "SELECT id, role, text, at FROM messages WHERE contact_id = %s "
+                "ORDER BY id DESC LIMIT %s) recent ORDER BY id",
+                (contact_id, limit),
+                fetch=True,
+            )
+        else:
+            rows = self._run(
+                "SELECT id, role, text, at FROM ("
+                "SELECT id, role, text, at FROM messages "
+                "WHERE contact_id = %s AND at > %s "
+                "ORDER BY id DESC LIMIT %s) recent ORDER BY id",
+                (contact_id, since, limit),
+                fetch=True,
+            )
+        return [(int(row[0]), row[1], row[2], row[3]) for row in rows]
+
+    def last_session_end(self, contact_id: str) -> datetime | None:
+        rows = self._run(
+            "SELECT max(ended_at) FROM client_sessions WHERE contact_id = %s",
+            (contact_id,),
+            fetch=True,
+        )
+        return rows[0][0] if rows else None
+
     def upsert_conversation_summary(
         self,
         session_id: str,
@@ -6753,6 +6976,20 @@ class PostgresRepository:
                 )
                 deleted_memory = len(list(cur.fetchall()))
 
+                deleted_contact_facts = 0
+                if session_contact_ids:
+                    # Fase 3: memoria de los contactos con los que el cliente habló.
+                    cur.execute(
+                        "DELETE FROM contact_facts WHERE contact_id = ANY(%s) "
+                        "RETURNING contact_id",
+                        (session_contact_ids,),
+                    )
+                    deleted_contact_facts = len(list(cur.fetchall()))
+                    cur.execute(
+                        "DELETE FROM contact_memory WHERE contact_id = ANY(%s)",
+                        (session_contact_ids,),
+                    )
+
                 cur.execute(
                     "DELETE FROM privacy_consents p "
                     "WHERE EXISTS (SELECT 1 FROM contacts c "
@@ -6789,6 +7026,7 @@ class PostgresRepository:
                     "messages": deleted_messages,
                     "conversation_summaries": deleted_summaries,
                     "client_memory": deleted_memory,
+                    "contact_facts": deleted_contact_facts,
                     "case_notes": deleted_notes,
                     "privacy_consents": deleted_consents,
                     "consentimientos_cliente": deleted_client_consents,
