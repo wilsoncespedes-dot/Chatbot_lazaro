@@ -52,6 +52,7 @@ Todo error tiene la forma `{"error": "<codigo>", "message": "<texto>"}` (modelo
 | 415  | `unsupported_format` | `/manuals` | el archivo no es PDF ni DOCX |
 | 422  | `empty_document`     | `/manuals` | archivo vacío o sin texto extraíble |
 | 422  | `channel_inactive` | `/send` | el canal existe, pero está inactivo |
+| 422  | `channel_window_closed` | `/send` | la ventana de atención del canal está cerrada (la outbox marca `fuera_de_ventana`) |
 | 502  | `telegram_error`     | `/send` | la API de Telegram falla |
 | 502  | `upstream_error`     | `/send` (variante canónica), `/cases/{id}/reply` | falla el adaptador del canal o la llamada a `POST /send` del gateway |
 | 503  | `channel_secrets_unavailable` | `/send`, `/channels…` | falta la clave de secretos, es inválida o no permite descifrar un secreto guardado |
@@ -196,8 +197,11 @@ degrada los bloques según las capacidades antes de comprobar ventana o plantill
 no está disponible, `502 upstream_error`; si PostgreSQL falla,
 `503 channel_store_unavailable`; y si los secretos guardados no se pueden
 descifrar, `503 channel_secrets_unavailable`. Una respuesta que el adaptador no
-puede enviar por ventana o plantilla responde `422 validation_error`; si falla
-el envío, `502 upstream_error`.
+puede enviar porque la ventana de atención está cerrada (Meta 24 h, WhatsApp,
+cupo de TikTok) responde `422 channel_window_closed`, y el worker de la outbox
+deja la fila en estado `fuera_de_ventana` sin reintentarla. Si exige una
+plantilla no aprobada responde `422 validation_error`; si falla el envío,
+`502 upstream_error`.
 
 ### Degradación por capacidades
 

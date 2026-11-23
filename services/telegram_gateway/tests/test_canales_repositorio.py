@@ -109,7 +109,7 @@ def _record(**changes) -> ChannelRecord:
 
 
 def test_postgres_repository_creates_schema_and_migration_columns_on_connect():
-    """R27: la primera conexión crea canales y añade columnas idempotentemente."""
+    """R27: canales y sus columnas se declaran en la migración, no al conectar."""
     connections: list[_Connection] = []
     repo = _repo(connections)
     assert repo.list_channels() == [
@@ -126,15 +126,16 @@ def test_postgres_repository_creates_schema_and_migration_columns_on_connect():
             active_follows_environment=True,
         )
     ]
+    from migrations import section
+
     statements = [sql for sql, _ in connections[0].log]
-    assert any(sql.startswith("CREATE TABLE IF NOT EXISTS canales") for sql in statements)
-    assert any(
-        "ADD COLUMN IF NOT EXISTS config_secreta" in sql for sql in statements
-    )
-    assert any(
-        "ADD COLUMN IF NOT EXISTS activo_segun_entorno" in sql for sql in statements
-    )
-    assert len([sql for sql in statements if sql.startswith("CREATE TABLE")]) == 1
+    # Fase 1: la conexión ya no ejecuta DDL; el esquema vive en migrations/0001.
+    assert not any(sql.startswith(("CREATE", "ALTER")) for sql in statements)
+    ddl = section("telegram_gateway: canales")
+    assert any(sql.startswith("CREATE TABLE IF NOT EXISTS canales") for sql in ddl)
+    assert any("ADD COLUMN IF NOT EXISTS config_secreta" in sql for sql in ddl)
+    assert any("ADD COLUMN IF NOT EXISTS activo_segun_entorno" in sql for sql in ddl)
+    assert len([sql for sql in ddl if sql.startswith("CREATE TABLE")]) == 1
 
 
 def test_postgres_channel_queries_keep_values_in_parameters_and_hide_secret_column():
@@ -176,7 +177,7 @@ def test_seed_inserts_missing_rows_and_resynchronizes_only_environment_rows():
     assert "activo_segun_entorno" in insert
     assert "AND activo_segun_entorno" in update
     assert "IS DISTINCT FROM %s" in update
-    assert connections[0].commits >= 2
+    assert connections[0].commits >= 1  # sin el commit del DDL de arranque (fase 1)
 
 
 def test_postgres_repository_discards_connection_error_and_reconnects_next_call():

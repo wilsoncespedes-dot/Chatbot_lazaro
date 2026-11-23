@@ -6,6 +6,8 @@ import logging
 import re
 import uuid
 from contextlib import asynccontextmanager
+
+from lazaro_contracts.production import require_service_token
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -68,7 +70,6 @@ from .domain import (
     get_client_status,
     issue_link_token,
     process_channel_message,
-    process_message,
     publish_advisor_roster,
     purge_personal_data,
     renew_credential,
@@ -77,9 +78,9 @@ from .domain import (
     send_expiry_notices,
 )
 from .identity_routes import create_identity_router
-from .legacy import LEGACY_CHANNEL, legacy_from_normalized
 from .panel_live_routes import create_panel_live_router
 from .quick_replies_routes import create_quick_replies_router
+from .charts_routes import create_charts_router
 from .simulator_routes import create_simulator_router
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        require_service_token(settings.service_token)
         await run_in_threadpool(publish_advisor_roster, adapters)
         try:
             await run_in_threadpool(
@@ -390,13 +392,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     app.router.routes.extend(create_envios_router(settings, adapters).routes)
     app.router.routes.extend(create_admin_channels_router(settings, adapters).routes)
     app.router.routes.extend(create_quick_replies_router(settings, adapters).routes)
-
-    def _mark_dedup(dedup: DedupKey) -> bool:
-        if dedup.kind == "update":
-            return adapters.repository.mark_update_if_new(dedup.update_id)
-        return adapters.repository.mark_message_if_new(
-            dedup.channel, dedup.external_message_id
-        )
+    app.router.routes.extend(create_charts_router(settings, adapters).routes)
 
     def _text_pending(message: NormalizedMessage) -> bool:
         # #65 R18: sin directorio de canales se falla cerrado con upstream_error
@@ -412,85 +408,55 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         # #65 R28-R30: cualquier canal válido; solo se rechaza lo no entrante.
         if isinstance(body, NormalizedMessage) and body.direction != "inbound":
             raise RequestValidationError([])
-        if isinstance(body, NormalizedMessage):
-            normalized = body
-            try:
-                legacy = legacy_from_normalized(body)
-            except (TypeError, ValueError):
-                # Los ids canónicos son texto: si no se pueden representar en el
-                # flujo histórico de Telegram, se procesa con identidad de canal
-                # sin convertirlos ni inventar un `update_id`.
-                legacy = None
-            direct = (
-                (lambda: process_message(legacy, settings, adapters))
-                if legacy is not None
-                else (lambda: process_channel_message(body, settings, adapters))
+        # Fase 2: un único flujo. El contrato histórico de Telegram
+        # (MessageRequest) se convierte al mensaje canónico con la misma
+        # identidad y clave de dedup (`telegram`, str(update_id)).
+        message = (
+            body if isinstance(body, NormalizedMessage) else normalize_legacy_message(body)
+        )
+        # R7: sin consentimiento vigente no se persiste la clave del mensaje en
+        # processed_messages; tras consentir, la clave compuesta es la barrera
+        # persistente. En ambos casos el índice único del inbox impide que una
+        # copia repetida (Redis caído en el gateway) genere otra respuesta.
+        consent_ready = consent_configured(settings, adapters) and _has_current_consent(
+            message.channel, message.external_user_id, settings, adapters
+        )
+        # R46 R16, #65 R24: la frase de un canal en modo `texto` se procesa igual.
+        pending = consent_button_pending(message) or (
+            not consent_ready and _text_pending(message)
+        )
+        dedup = (
+            DedupKey(
+                kind="message",
+                channel=message.channel,
+                external_message_id=message.external_message_id,
             )
-            # R4/R5: el botón de consentimiento se procesa en la petición HTTP
-            # para que un fallo al guardar la evidencia responda 500 (R18 de #35).
-            # R7: sin consentimiento vigente no se persiste la clave del mensaje;
-            # el gateway ya deduplica con TTL. Tras consentir, la clave compuesta
-            # vuelve a ser la barrera persistente.
-            consent_ready = consent_configured(
-                settings, adapters
-            ) and _has_current_consent(
-                normalized.channel,
-                normalized.external_user_id,
-                settings,
-                adapters,
-            )
-            # R46 R16, #65 R24: la frase de un canal en modo `texto` se procesa igual.
-            pending = consent_button_pending(body) or (
-                not consent_ready and _text_pending(body)
-            )
-            dedup = (
-                DedupKey(
-                    kind="message",
-                    channel=normalized.channel,
-                    external_message_id=normalized.external_message_id,
-                )
-                if consent_ready
-                else None
-            )
-            entry = InboundEntry(
-                conversation_key=conversation_key(
-                    normalized.channel, normalized.external_user_id
-                ),
-                channel=normalized.channel,
-                external_user_id=normalized.external_user_id,
-                payload_kind="channel",
-                payload=body.model_dump(mode="json"),
-            )
-        else:
-            legacy = body
-            normalized = normalize_legacy_message(body)
-            direct = lambda: process_message(legacy, settings, adapters)
-            pending = (
-                not _has_current_consent(
-                    LEGACY_CHANNEL,
-                    str(legacy.telegram_user_id),
-                    settings,
-                    adapters,
-                )
-                and _text_pending(normalized)
-            )
-            # R22: la excepción aprobada de #35 conserva únicamente el
-            # `update_id` en `processed_updates`, sin identidad ni payload.
-            dedup = DedupKey(kind="update", update_id=legacy.update_id)
-            entry = InboundEntry(
-                conversation_key=conversation_key(
-                    LEGACY_CHANNEL, str(legacy.telegram_user_id)
-                ),
-                channel=LEGACY_CHANNEL,
-                external_user_id=str(legacy.telegram_user_id),
-                payload_kind="legacy",
-                payload=body.model_dump(mode="json"),
-            )
+            if consent_ready
+            else None
+        )
+        entry = InboundEntry(
+            conversation_key=conversation_key(message.channel, message.external_user_id),
+            channel=message.channel,
+            external_user_id=message.external_user_id,
+            payload_kind="channel",
+            payload=message.model_dump(mode="json"),
+            external_message_id=message.external_message_id,
+        )
         if pending:
-            # R6: la aceptación de consentimiento se procesa en la petición.
-            if dedup is not None and not _mark_dedup(dedup):
+            # R4-R6: el consentimiento se procesa en la petición HTTP para que un
+            # fallo al guardar la evidencia responda 500 (R18 de #35) y el
+            # gateway lo reintente: por eso la reserva se borra si falla.
+            row_id = adapters.repository.begin_direct_inbound(
+                entry, dedup, adapters.clock(), settings.worker_lease_seconds
+            )
+            if row_id is None:
                 return MessageResponse(status="duplicate")
-            direct()
+            try:
+                process_channel_message(message, settings, adapters)
+            except Exception:
+                adapters.repository.abandon_inbound(row_id, dedup)
+                raise
+            adapters.repository.finish_inbound(row_id, adapters.clock())
             return MessageResponse(status="accepted")
         try:
             inserted = adapters.repository.enqueue_inbound(entry, dedup)

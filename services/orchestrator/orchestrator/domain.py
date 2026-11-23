@@ -135,13 +135,21 @@ from .harness import (
     parse_router_answer,
 )
 from .memory import (
+    CONTACT_CONTEXT_NOTE,
+    MEMORY_ANSWER_PROMPT,
     MEMORY_CONTEXT_NOTE,
+    FactsInvalid,
     PromptContext,
     SummaryInvalid,
+    build_facts_prompt,
     build_summary_prompt,
+    clean_contact_facts,
     clean_memory_items,
     clean_summary,
+    fallback_memory_answer,
     is_sensitive,
+    merge_facts_into_memory,
+    parse_facts_answer,
     parse_summary_answer,
     session_window,
 )
@@ -156,13 +164,23 @@ from .panel import (
 )
 from .channel_label import ChannelLabel, label_from_policy, unknown_label
 from .channels import ChannelPolicy, default_policy
-from .legacy import LEGACY_CHANNEL, is_legacy
+from .charts import (
+    CHART_SQL_HINT,
+    chart_from_result,
+    chart_summary,
+    chart_url,
+    render_chart_png,
+    requested_chart_kind,
+)
+from .legacy import LEGACY_CHANNEL, is_legacy, legacy_from_normalized
 from .states import ConversationEvent, ConversationState, transition_state
 from .db_query import (
     DbQueryCommand,
     DbQueryRejected,
     DbQueryUnavailable,
     MalformedDbQuery,
+    QueryResult,
+    ValidatedQuery,
     build_sql_prompt,
     format_rows,
     parse_db_query_command,
@@ -516,6 +534,16 @@ class ServiceUnavailable(Exception):
 
 class ChannelRejected(ServiceUnavailable):
     """Interna: el gateway rechazó el envío con 422 (ventana/capacidad del canal)."""
+
+
+class ChannelOutOfWindow(ChannelRejected):
+    """Interna (fase 7): 422 `channel_window_closed`; la fila queda `fuera_de_ventana`."""
+
+
+# Fase 7: estado terminal de la outbox para respuestas que el canal no admite
+# por su ventana de atención (Meta 24 h, WhatsApp, cupo de TikTok).
+OUTBOX_OUT_OF_WINDOW = "fuera_de_ventana"
+GATEWAY_WINDOW_CLOSED_CODE = "channel_window_closed"
 
 
 class InvalidAnswer(Exception):
@@ -1127,6 +1155,9 @@ class InboundEntry:
     external_user_id: str
     payload_kind: str
     payload: dict
+    # Fase 2: índice único (channel, external_message_id) del inbox; una copia
+    # repetida del mismo mensaje del canal no entra dos veces aunque Redis falle.
+    external_message_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1323,10 +1354,16 @@ def _neutralize(text: str) -> str:
 
 
 def _neutralize_context(text: str) -> str:
-    for tag in ("memoria", "historial", "mensaje", "item"):
+    for tag in (
+        "memoria", "historial", "mensaje", "item",
+        "datos_contacto", "dato", "resumen_contacto",
+    ):
+        # Cierre completo → `[/tag]` (modo conversacional); cualquier cierre parcial
+        # restante (sin `>`) → `[/tag`, igual de inerte (fase 3).
         text = re.sub(
             rf"</\s*{tag}\s*>", f"[/{tag}]", text, flags=re.IGNORECASE
         )
+        text = re.sub(rf"</\s*{tag}", f"[/{tag}", text, flags=re.IGNORECASE)
     return _neutralize(text)
 
 
@@ -1390,18 +1427,7 @@ def build_llm_prompt(
 ) -> tuple[str, str]:
     parts: list[str] = []
     if context is not None:
-        if context.memory:
-            items = "".join(
-                f"<item>{_neutralize_context(item)}</item>" for item in context.memory
-            )
-            parts.append(f"<memoria>{items}</memoria>")
-        if context.history:
-            history = "".join(
-                f'<mensaje rol="{role.replace(chr(34), chr(39))}">'
-                f"{_neutralize_context(text)}</mensaje>"
-                for role, text in context.history
-            )
-            parts.append(f"<historial>{history}</historial>")
+        parts.extend(_context_blocks(context))
     if previous:
         # #64 R4: solo para entender a qué se refiere la pregunta actual.
         parts.append(f"<pregunta_anterior>{_neutralize(previous)}</pregunta_anterior>")
@@ -1412,32 +1438,93 @@ def build_llm_prompt(
     system = LLM_SYSTEM_PROMPT
     if context is not None:
         system = f"{LLM_SYSTEM_PROMPT} {MEMORY_CONTEXT_NOTE}"
+        if context.facts or context.summary:
+            system = f"{system} {CONTACT_CONTEXT_NOTE}"
     return system, "\n".join(parts)
 
 
 def build_conversational_prompt(
     question: str, context: PromptContext | None = None
 ) -> tuple[str, str]:
-    """R7-R8: arma el prompt con el contexto de memoria ya autorizado."""
+    """R7-R8: arma el prompt con el contexto de memoria ya autorizado.
+
+    Usa los mismos bloques de contexto que el RAG (`_context_blocks`): con la
+    memoria por contacto de la fase 3 también incluye datos y resumen del contacto.
+    """
     parts: list[str] = []
     if context is not None:
-        if context.memory:
-            items = "".join(
-                f"<item>{_neutralize_context(item)}</item>" for item in context.memory
-            )
-            parts.append(f"<memoria>{items}</memoria>")
-        if context.history:
-            history = "".join(
-                f'<mensaje rol="{role.replace(chr(34), chr(39))}">'
-                f"{_neutralize_context(text)}</mensaje>"
-                for role, text in context.history
-            )
-            parts.append(f"<historial>{history}</historial>")
+        parts.extend(_context_blocks(context))
     parts.append(f"<pregunta>{_neutralize(question)}</pregunta>")
     system = CONVERSATIONAL_SYSTEM_PROMPT
     if context is not None:
         system = f"{system} {MEMORY_CONTEXT_NOTE}"
+        if context.facts or context.summary:
+            system = f"{system} {CONTACT_CONTEXT_NOTE}"
     return system, "\n".join(parts)
+
+
+def _context_blocks(context: PromptContext) -> list[str]:
+    """Bloques de contexto como DATOS: hechos y resumen del contacto, memoria, historial."""
+    parts: list[str] = []
+    if context.facts:
+        facts = "".join(
+            f'<dato clave="{key}">{_neutralize_context(value)}</dato>'
+            for key, value in context.facts
+        )
+        parts.append(f"<datos_contacto>{facts}</datos_contacto>")
+    if context.summary:
+        parts.append(
+            f"<resumen_contacto>{_neutralize_context(context.summary)}</resumen_contacto>"
+        )
+    if context.memory:
+        items = "".join(
+            f"<item>{_neutralize_context(item)}</item>" for item in context.memory
+        )
+        parts.append(f"<memoria>{items}</memoria>")
+    if context.history:
+        history = "".join(
+            f'<mensaje rol="{role.replace(chr(34), chr(39))}">'
+            f"{_neutralize_context(text)}</mensaje>"
+            for role, text in context.history
+        )
+        parts.append(f"<historial>{history}</historial>")
+    return parts
+
+
+MEMORY_ANSWER_MAX_CHARS = 1000
+
+
+def build_memory_answer_prompt(question: str, context: PromptContext) -> tuple[str, str]:
+    """Fase 3: "¿qué te dije?" con solo la memoria del propio contacto como datos."""
+    parts = _context_blocks(context)
+    parts.append(f"<pregunta>{_neutralize(question)}</pregunta>")
+    return MEMORY_ANSWER_PROMPT, "\n".join(parts)
+
+
+def parse_memory_answer(raw: str, context: PromptContext) -> str | None:
+    """`{"answer": ...}` breve y sin cifras que no estén en la memoria; si no, None."""
+    try:
+        data = json.loads(_strip_code_fence(raw))
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or set(data) != {"answer"}:
+        return None
+    answer = data["answer"]
+    if not isinstance(answer, str):
+        return None
+    answer = answer.strip()
+    if not answer or len(answer) > MEMORY_ANSWER_MAX_CHARS:
+        return None
+    known: set[str] = extract_numbers(context.summary)
+    for _, value in context.facts:
+        known |= extract_numbers(value)
+    for item in context.memory:
+        known |= extract_numbers(item)
+    for _, text in context.history:
+        known |= extract_numbers(text)
+    if not _answer_numbers(answer) <= known:
+        return None
+    return answer
 
 
 def _contact_destination(contact: Contact) -> str:
@@ -1842,9 +1929,8 @@ def login_client(
             )
             raise SessionConflict("Ya hay una sesión activa. Cierra la otra sesión o espera.")
 
-    result = repo.start_client_session(
-        hash_token(token), profile.id, adapters.new_id(), now
-    )
+    session_id = adapters.new_id()
+    result = repo.start_client_session(hash_token(token), profile.id, session_id, now)
     if result == "invalid_link":
         raise LoginLinkInvalid("El enlace no es válido o ya se usó.")
     if result == "conflict":
@@ -1868,6 +1954,7 @@ def login_client(
 
     repo.clear_identity_login_failures(normalized)
     repo.add_identity_audit(profile.id, link.contact_id, "login", status, now)
+    _merge_contact_memory(profile.id, link.contact_id, session_id, settings, adapters)
     contact = _link_contact(link)
     if repo.get_conversation_state(link.contact_id) in (
         None,
@@ -2054,16 +2141,53 @@ def _memory_failed(contact_id: str, reason: str, adapters: Adapters) -> None:
         logger.error("memory_failed_event_error contact_id=%s", contact_id)
 
 
+def _contact_messages(
+    contact_id: str, limit: int, adapters: Adapters
+) -> list[tuple[int, str, str, datetime]]:
+    """Fase 3: últimos mensajes del contacto posteriores a su última sesión cerrada.
+
+    Lo hablado dentro de una sesión de cliente es de ese cliente (R49): al cerrar
+    sesión el contacto vuelve a empezar su historial anónimo.
+    """
+    repo = adapters.repository
+    since = repo.last_session_end(contact_id)
+    return repo.recent_contact_messages(contact_id, since, limit)
+
+
 def _memory_context(
-    contact: Contact, current_at: datetime, settings: Settings, adapters: Adapters
+    contact: Contact,
+    current_at: datetime,
+    settings: Settings,
+    adapters: Adapters,
+    current_text: str | None = None,
 ) -> PromptContext | None:
-    """Memoria e historial de la sesión activa; sin sesión no hay contexto (R21–R24)."""
+    """Fase 3: hechos y resumen del contacto siempre (con o sin login).
+
+    Con sesión activa se suman la memoria del cliente y el historial de la sesión
+    (R21–R24); sin sesión, los últimos mensajes del contacto sin el actual.
+    """
     if not settings.memory_enabled:
         return None
     repo = adapters.repository
+    stored = repo.get_contact_memory(contact.id)
     session = repo.get_active_session_by_contact(contact.id)
     if session is None:
-        return None
+        history: tuple[tuple[str, str], ...] = ()
+        limit = settings.memory_context_messages
+        if limit > 0:
+            rows = _contact_messages(contact.id, limit + 1, adapters)
+            if (
+                current_text is not None
+                and rows
+                and rows[-1][1] == "user"
+                and _same_text(rows[-1][2], current_text)
+            ):
+                rows = rows[:-1]
+            history = tuple((role, text) for _, role, text, _ in rows[-limit:])
+        context = PromptContext(
+            memory=(), history=history, facts=stored.facts, summary=stored.summary
+        )
+        return None if context.is_empty() else context
     raw_items, _ = repo.get_client_memory(session.profile_id)
     memory = clean_memory_items(
         raw_items,
@@ -2094,7 +2218,140 @@ def _memory_context(
             for role, text, at in rows
             if at < current_at
         )[-settings.memory_context_messages:]
-    return PromptContext(memory=memory, history=history)
+    return PromptContext(
+        memory=memory, history=history, facts=stored.facts, summary=stored.summary
+    )
+
+
+def _answer_from_memory(
+    contact: Contact, text: str, settings: Settings, adapters: Adapters
+) -> bool:
+    """Fase 3: "¿qué plan te dije?" se responde con la memoria del propio contacto.
+
+    False si no hay nada guardado: el mensaje sigue el flujo normal.
+    """
+    try:
+        context = _memory_context(
+            contact, adapters.clock(), settings, adapters, current_text=text
+        )
+    except Exception:
+        logger.exception("memory_answer_context_error contact_id=%s", contact.id)
+        return False
+    if context is None or context.is_empty():
+        return False
+    system, user = build_memory_answer_prompt(text, context)
+    try:
+        raw = adapters.llm.complete(system, user)
+    except ServiceUnavailable:
+        raw = ""
+    answer = parse_memory_answer(raw, context)
+    origin = "llm"
+    if answer is None:
+        origin = "fallback"
+        answer = fallback_memory_answer(context.facts)
+        if not answer and context.memory:
+            answer = f"Esto es lo que tengo anotado: {'; '.join(context.memory)}."
+        if not answer:
+            return False
+    adapters.repository.add_event(contact.id, "memory_answer", origin, adapters.clock())
+    _send(contact, answer, adapters)
+    return True
+
+
+def _update_contact_memory(
+    contact: Contact, text: str, settings: Settings, adapters: Adapters
+) -> None:
+    """Fase 3: el LLM extrae hechos del contacto cada N mensajes o al ver un dato nuevo.
+
+    Nunca rompe el flujo del mensaje. Con sesión activa no hace nada: lo hablado
+    en la sesión pasa a `client_memory` al cerrarla (#40).
+    """
+    if not settings.memory_enabled:
+        return
+    repo = adapters.repository
+    now = adapters.clock()
+    try:
+        if repo.get_active_session_by_contact(contact.id) is not None:
+            return
+        pending = repo.bump_contact_memory_pending(contact.id, now)
+        new_data = not matches_any(
+            text, settings.memory_recall_phrase_list
+        ) and matches_any(text, settings.memory_fact_trigger_list)
+        if not new_data and pending < settings.memory_facts_every_messages:
+            return
+        keywords = settings.memory_sensitive_keyword_list
+        min_digits = settings.memory_sensitive_min_digits
+        rows = _contact_messages(
+            contact.id, settings.memory_facts_input_messages, adapters
+        )
+        source = next((row[0] for row in reversed(rows) if row[1] == "user"), None)
+        messages = [
+            (role, body)
+            for _, role, body, _ in rows
+            if not is_sensitive(body, keywords, min_digits)
+        ]
+        if not messages:
+            repo.save_contact_memory(contact.id, {}, None, None, now)
+            return
+        system, user = build_facts_prompt(repo.get_contact_memory(contact.id), messages)
+        try:
+            raw = adapters.llm.complete(system, user)
+        except ServiceUnavailable:
+            # el contador sigue: se reintenta con el próximo mensaje
+            _memory_failed(contact.id, "llm_unavailable", adapters)
+            return
+        try:
+            answer = parse_facts_answer(raw)
+        except FactsInvalid:
+            repo.save_contact_memory(contact.id, {}, None, None, now)
+            _memory_failed(contact.id, "invalid_facts", adapters)
+            return
+        facts = clean_contact_facts(
+            answer.hechos, keywords, min_digits, settings.memory_fact_max_chars
+        )
+        summary = None
+        if answer.resumen is not None:
+            summary = clean_summary(
+                answer.resumen, keywords, min_digits, settings.memory_summary_max_chars
+            )
+        repo.save_contact_memory(contact.id, facts, summary, source, now)
+    except Exception:
+        logger.exception("contact_memory_error contact_id=%s", contact.id)
+        _memory_failed(contact.id, "error", adapters)
+
+
+def _merge_contact_memory(
+    profile_id: str,
+    contact_id: str,
+    session_id: str,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
+    """Fase 3: al iniciar sesión los hechos del contacto pasan a `client_memory`.
+
+    El contacto queda sin hechos ni resumen: otro cliente que luego inicie sesión
+    en el mismo chat no los hereda (R49).
+    """
+    if not settings.memory_enabled:
+        return
+    repo = adapters.repository
+    try:
+        stored = repo.get_contact_memory(contact_id)
+        if stored.facts:
+            items, _ = repo.get_client_memory(profile_id)
+            merged = clean_memory_items(
+                merge_facts_into_memory(items, stored.facts),
+                settings.memory_sensitive_keyword_list,
+                settings.memory_sensitive_min_digits,
+                settings.memory_max_items,
+                settings.memory_item_max_chars,
+            )
+            repo.set_client_memory(profile_id, merged, session_id, adapters.clock())
+        if stored.facts or stored.summary:
+            repo.clear_contact_memory(contact_id)
+    except Exception:
+        logger.exception("contact_memory_merge_error contact_id=%s", contact_id)
+        _memory_failed(contact_id, "merge_failed", adapters)
 
 
 def _conversational_context(
@@ -2108,7 +2365,11 @@ def _conversational_context(
     if not settings.memory_enabled:
         return None
 
-    context = _memory_context(contact, adapters.clock(), settings, adapters)
+    # Fase 3: sin sesión, `_memory_context` ya da los mensajes previos del
+    # contacto; se le pasa el texto actual para que no lo repita en el historial.
+    context = _memory_context(
+        contact, adapters.clock(), settings, adapters, current_text=text
+    )
     if context is not None or settings.identity_login_required:
         return context
 
@@ -2590,7 +2851,9 @@ def _tool_rag(
         _send(contact, conversational.answer, adapters)
         return "conversation_reply"
 
-    context = _memory_context(contact, adapters.clock(), settings, adapters)
+    context = _memory_context(
+        contact, adapters.clock(), settings, adapters, current_text=ctx.text
+    )
     system, user = build_llm_prompt(ctx.text, chunks, context, previous)
     try:
         answer = adapters.llm.complete(system, user)
@@ -2626,46 +2889,203 @@ def _tool_client_data(
         _send(contact, settings.client_data_disabled_reply, adapters)
         return "disabled", ""
 
-    allowlist = settings.client_data_allowlist_map
-    system, user = build_sql_prompt(ctx.text, allowlist)
-    try:
-        raw = adapters.llm.complete(system, user)
-    except ServiceUnavailable:
-        logger.error("client_data_llm_failed contact_id=%s", contact.id)
-        _send(contact, settings.client_data_unavailable_reply, adapters)
-        return "unavailable", ""
-
-    try:
-        sql = parse_sql_answer(raw)
-        validated = validate_sql(
-            sql,
-            allowlist,
-            settings.client_data_views_schema,
-            settings.client_data_max_joins,
-        )
-    except DbQueryRejected:
+    outcome = query_client_data(ctx.text, cliente_id, settings, adapters)
+    if outcome.status == "rejected":
         _send(contact, settings.client_data_rejected_reply, adapters)
         return "rejected", ""
-
-    views = ",".join(validated.views)
-    try:
-        result = adapters.client_data.run(
-            validated,
-            cliente_id,
-            settings.client_data_max_rows,
-            settings.client_data_timeout_ms,
-        )
-    except DbQueryUnavailable:
+    if outcome.status == "unavailable" or outcome.result is None:
         logger.error("client_data_unavailable contact_id=%s", contact.id)
         _send(contact, settings.client_data_unavailable_reply, adapters)
-        return "unavailable", f"views={views}"
+        return "unavailable", outcome.views_detail()
 
+    validated = outcome.validated
+    assert validated is not None
+    result = outcome.result
     text = format_rows(
         result, settings.client_data_max_reply_chars, settings.client_data_truncated_note
     )
     _send(contact, text, adapters)
     sha = hashlib.sha256(validated.sql.encode("utf-8")).hexdigest()
-    detail = f"views={views};rows={len(result.rows)};sql_sha256={sha}"
+    detail = f"{outcome.views_detail()};rows={len(result.rows)};sql_sha256={sha}"
+    return "ok", detail
+
+
+@dataclass(frozen=True)
+class QueryOutcome:
+    """Fase 4: resultado estructurado (columnas + filas) de una consulta en lenguaje natural."""
+
+    status: Literal["ok", "rejected", "unavailable"]
+    result: QueryResult | None = None
+    validated: ValidatedQuery | None = None
+
+    def views_detail(self) -> str:
+        if self.validated is None:
+            return ""
+        return f"views={','.join(self.validated.views)}"
+
+
+def _natural_language_query(
+    question: str,
+    allowlist: dict[str, tuple[str, ...]],
+    schema: str,
+    max_joins: int,
+    max_rows: int,
+    run: Callable[[ValidatedQuery], QueryResult],
+    adapters: Adapters,
+    log_prefix: str,
+    sql_hint: str = "",
+) -> QueryOutcome:
+    """Pregunta → SQL del LLM → validación con LIMIT obligatorio → ejecución."""
+    system, user = build_sql_prompt(question, allowlist, hint=sql_hint)
+    try:
+        raw = adapters.llm.complete(system, user)
+    except ServiceUnavailable:
+        logger.error("%s_llm_failed", log_prefix)
+        return QueryOutcome("unavailable")
+    try:
+        validated = validate_sql(
+            parse_sql_answer(raw), allowlist, schema, max_joins, max_rows=max_rows
+        )
+    except DbQueryRejected:
+        return QueryOutcome("rejected")
+    try:
+        result = run(validated)
+    except DbQueryUnavailable:
+        return QueryOutcome("unavailable", validated=validated)
+    return QueryOutcome("ok", result=result, validated=validated)
+
+
+def query_client_data(
+    question: str,
+    cliente_id: str,
+    settings: Settings,
+    adapters: Adapters,
+    sql_hint: str = "",
+) -> QueryOutcome:
+    """Datos propios del cliente: vistas de `mis_datos` con RLS por `cliente_id`."""
+    return _natural_language_query(
+        question,
+        settings.client_data_allowlist_map,
+        settings.client_data_views_schema,
+        settings.client_data_max_joins,
+        settings.client_data_max_rows,
+        lambda validated: adapters.client_data.run(
+            validated,
+            cliente_id,
+            settings.client_data_max_rows,
+            settings.client_data_timeout_ms,
+        ),
+        adapters,
+        "client_data",
+        sql_hint,
+    )
+
+
+def query_staff_data(
+    question: str, settings: Settings, adapters: Adapters
+) -> QueryOutcome:
+    """Consultas del personal: vistas agregadas de `consultas`."""
+    return _natural_language_query(
+        question,
+        settings.db_query_allowlist_map,
+        settings.db_query_views_schema,
+        settings.db_query_max_joins,
+        settings.db_query_max_rows,
+        lambda validated: adapters.db_query.run(
+            validated, settings.db_query_max_rows, settings.db_query_timeout_ms
+        ),
+        adapters,
+        "db_query",
+    )
+
+
+def _chart_blocks(
+    summary: str, url: str, supports_images: bool, settings: Settings
+) -> list[ResponseBlock]:
+    """Imagen + frase si el canal muestra imágenes; si no, frase + enlace temporal."""
+    if supports_images:
+        return [
+            ImageBlock(type="image", url=url, alt_text=summary[:1024]),
+            TextBlock(type="text", text=summary),
+        ]
+    return [
+        TextBlock(type="text", text=summary),
+        LinkBlock(type="link", text=settings.chart_link_label, url=url),
+    ]
+
+
+def _tool_chart(
+    ctx: ToolContext, settings: Settings, adapters: Adapters
+) -> tuple[str, str]:
+    """Fase 5: datos propios → PNG en el servidor → imagen o enlace firmado.
+
+    Sin datos (o sin una columna numérica que dibujar) responde en texto y
+    nunca envía un gráfico vacío.
+    """
+    contact = ctx.contact
+    cliente_id = active_client_id(contact.id, adapters)
+    if cliente_id is None:
+        _send(contact, settings.client_data_unavailable_reply, adapters)
+        return "no_session", ""
+    if not (settings.charts_enabled and settings.client_data_enabled):
+        _send(contact, settings.chart_disabled_reply, adapters)
+        return "disabled", ""
+
+    outcome = query_client_data(
+        ctx.text, cliente_id, settings, adapters, sql_hint=CHART_SQL_HINT
+    )
+    if outcome.status == "rejected":
+        _send(contact, settings.client_data_rejected_reply, adapters)
+        return "rejected", ""
+    if outcome.status == "unavailable" or outcome.result is None:
+        logger.error("chart_data_unavailable contact_id=%s", contact.id)
+        _send(contact, settings.client_data_unavailable_reply, adapters)
+        return "unavailable", outcome.views_detail()
+
+    result = outcome.result
+    spec = chart_from_result(result, requested_chart_kind(ctx.text, ctx.args))
+    if spec is None:
+        if result.rows:
+            # Hay datos pero no se pueden dibujar (p. ej. una sola cifra): en texto.
+            text = format_rows(
+                result,
+                settings.client_data_max_reply_chars,
+                settings.client_data_truncated_note,
+            )
+            _send(contact, text, adapters)
+            return "text", f"{outcome.views_detail()};rows={len(result.rows)}"
+        _send(contact, settings.chart_no_data_reply, adapters)
+        return "no_data", f"{outcome.views_detail()};rows=0"
+
+    now = adapters.clock()
+    chart_id = uuid.uuid4().hex
+    expires_at = now + timedelta(seconds=settings.chart_link_ttl_seconds)
+    try:
+        png = render_chart_png(spec)
+        adapters.repository.add_chart_image(
+            chart_id, contact.id, png, now, expires_at
+        )
+    except Exception:
+        logger.error("chart_render_failed contact_id=%s", contact.id)
+        _send(contact, settings.client_data_unavailable_reply, adapters)
+        return "unavailable", outcome.views_detail()
+
+    url = chart_url(
+        settings.identity_public_base_url.strip(),
+        chart_id,
+        int(expires_at.timestamp()),
+        settings.chart_link_signing_key.strip(),
+    )
+    summary = chart_summary(spec)
+    supports_images = channel_policy(adapters, contact.channel).supports_images
+    blocks = _chart_blocks(summary, url, supports_images, settings)
+    if not _send_blocks(contact, summary, blocks, adapters):
+        return "unavailable", outcome.views_detail()
+    delivery = "image" if supports_images else "link"
+    detail = (
+        f"{outcome.views_detail()};kind={spec.kind};points={len(spec.values)};"
+        f"delivery={delivery}"
+    )
     return "ok", detail
 
 
@@ -2886,6 +3306,7 @@ _TOOL_EXECUTORS: Mapping[str, Callable[..., object]] = {
     "buscar_base_conocimiento": _tool_rag,
     "consultar_mis_datos": _tool_client_data,
     "consultar_herramientas_mcp": _tool_mcp,
+    "graficar": _tool_chart,
     "escalar_a_asesor": _tool_escalate,
     "crear_solicitud_supresion": _tool_suppression,
     "enviar_link_inicio_sesion": _tool_login_link,
@@ -3115,6 +3536,15 @@ def _resolve_and_run(
         _send(contact, settings.social_reply, adapters)
         return
 
+    # Fase 3: "¿qué plan te dije?" se responde con la memoria del contacto.
+    if (
+        state == ConversationState.ACTIVE
+        and settings.memory_enabled
+        and matches_any(text, settings.memory_recall_phrase_list)
+        and _answer_from_memory(contact, text, settings, adapters)
+    ):
+        return
+
     operational = operational_settings(settings, adapters)
     intent_origin: Literal["phrase", "router"] | None = None
     if operational.purchase_intent_enabled and matches_purchase_phrase(
@@ -3133,9 +3563,30 @@ def _resolve_and_run(
         )
         return
 
+    # Fase 5: "grafícame mis casos por estado" va directo a `graficar` (el router
+    # es opcional y viene apagado por defecto).
+    if (
+        state == ConversationState.ACTIVE
+        and settings.charts_enabled
+        and not injection
+        and matches_any(text, settings.chart_trigger_phrase_list)
+    ):
+        _run_with_intent(
+            "graficar",
+            ToolContext(contact, text, received_at, update_id, state, "keyword"),
+            intent_origin,
+            operational,
+            settings,
+            adapters,
+        )
+        return
+
     if settings.harness_router_enabled and not injection:
         system, user = build_router_prompt(
-            state, text, mcp_enabled=settings.mcp_enabled
+            state,
+            text,
+            mcp_enabled=settings.mcp_enabled,
+            charts_enabled=settings.charts_enabled,
         )
         try:
             raw = adapters.llm.complete(system, user)
@@ -3290,31 +3741,8 @@ def handle_db_query(
         )
         return
 
-    allowlist = settings.db_query_allowlist_map
-    system, user = build_sql_prompt(command.question, allowlist)
-    try:
-        raw = adapters.llm.complete(system, user)
-    except ServiceUnavailable:
-        logger.error("db_query_llm_failed")
-        _finish_db_query(
-            request,
-            profile,
-            "unavailable",
-            settings.db_query_unavailable_reply,
-            settings,
-            adapters,
-        )
-        return
-
-    try:
-        sql = parse_sql_answer(raw)
-        validated = validate_sql(
-            sql,
-            allowlist,
-            settings.db_query_views_schema,
-            settings.db_query_max_joins,
-        )
-    except DbQueryRejected:
+    outcome = query_staff_data(command.question, settings, adapters)
+    if outcome.status == "rejected":
         _finish_db_query(
             request,
             profile,
@@ -3324,16 +3752,10 @@ def handle_db_query(
             adapters,
         )
         return
-
-    views = ",".join(validated.views)
-    try:
-        result = adapters.db_query.run(
-            validated,
-            settings.db_query_max_rows,
-            settings.db_query_timeout_ms,
-        )
-    except DbQueryUnavailable:
-        logger.error("db_query_unavailable")
+    validated = outcome.validated
+    if outcome.status == "unavailable" or outcome.result is None:
+        if validated is not None:
+            logger.error("db_query_unavailable")
         _finish_db_query(
             request,
             profile,
@@ -3341,11 +3763,17 @@ def handle_db_query(
             settings.db_query_unavailable_reply,
             settings,
             adapters,
-            views=views,
-            sql=validated.sql,
+            **(
+                {"views": ",".join(validated.views), "sql": validated.sql}
+                if validated is not None
+                else {}
+            ),
         )
         return
 
+    assert validated is not None
+    result = outcome.result
+    views = ",".join(validated.views)
     text = format_rows(
         result, settings.db_query_max_reply_chars, settings.db_query_truncated_note
     )
@@ -3922,6 +4350,19 @@ def _route_consented_text(
     settings: Settings,
     adapters: Adapters,
 ) -> None:
+    """Enruta el texto y, ya respondido, actualiza la memoria del contacto (fase 3)."""
+    _route_text(contact, text, received_at, update_id, settings, adapters)
+    _update_contact_memory(contact, text, settings, adapters)
+
+
+def _route_text(
+    contact: Contact,
+    text: str,
+    received_at: datetime,
+    update_id: int,
+    settings: Settings,
+    adapters: Adapters,
+) -> None:
     """R9, R10, R11, R12, R14, R28: solo `activa` llega al flujo RAG/LLM."""
     repo = adapters.repository
     state = repo.get_conversation_state(contact.id)
@@ -4010,76 +4451,75 @@ def _has_current_consent(
     return has_current_consent(channel, external_user_id, settings, adapters)
 
 
-def _legacy_consent_gate(
-    request: MessageRequest, settings: Settings, adapters: Adapters
+def _staff_command_request(message: NormalizedMessage) -> MessageRequest | None:
+    """Solo el canal legacy (Telegram) con texto admite los comandos de personal."""
+    try:
+        return legacy_from_normalized(message)
+    except (TypeError, ValueError):
+        return None
+
+
+def _handle_staff_command(
+    message: NormalizedMessage, settings: Settings, adapters: Adapters
 ) -> bool:
-    """R2, R3, R6, R22: resuelve la compuerta solo en memoria para Telegram."""
-    if not consent_configured(settings, adapters):
-        logger.info("privacy_not_configured")
+    """Fase 2: `/start <token>` y `/consultar` del personal en el flujo único.
+
+    El personal vinculado (o quien canjea un token de personal) está exento de
+    la puerta de consentimiento (#35). Si no lo está y no ha consentido,
+    devuelve False y el flujo canónico aplica la puerta como a cualquier texto.
+    """
+    request = _staff_command_request(message)
+    if request is None:
         return False
-    if _has_current_consent(
-        LEGACY_CHANNEL, str(request.telegram_user_id), settings, adapters
-    ):
-        return True
-    _handle_pre_consent_text(
-        LEGACY_CHANNEL,
-        str(request.telegram_user_id),
-        str(request.chat_id),
-        request.text,
-        str(request.update_id),
-        request.received_at,
-        settings,
-        adapters,
-    )
-    return False
-
-
-def process_message(request: MessageRequest, settings: Settings, adapters: Adapters) -> None:
-    repo = adapters.repository
-
     start_token = parse_start_token(request.text)
     db_query = None
     if start_token is None:
         db_query = parse_db_query_command(
             request.text, settings.db_query_max_question_length
         )
-
-    if start_token is not None or db_query is not None:
-        exempt = _is_linked_staff(request, adapters)
-        if not exempt and start_token is not None:
-            role = repo.get_link_token_role(hash_token(start_token), adapters.clock())
-            exempt = role in STAFF_ROLES
-        if not exempt and not _legacy_consent_gate(request, settings, adapters):
-            return
-        contact = repo.get_or_create_contact(
-            request.telegram_user_id, request.chat_id, adapters.clock()
+    if start_token is None and db_query is None:
+        return False
+    repo = adapters.repository
+    exempt = _is_linked_staff(request, adapters)
+    if not exempt and start_token is not None:
+        role = repo.get_link_token_role(hash_token(start_token), adapters.clock())
+        exempt = role in STAFF_ROLES
+    if not exempt and not (
+        consent_configured(settings, adapters)
+        and _has_current_consent(
+            message.channel, message.external_user_id, settings, adapters
         )
-        if start_token is not None:
-            _handle_start_token(request, contact, start_token, settings, adapters)
-        else:
-            handle_db_query(request, db_query, settings, adapters)
-        return
-
-    if not _legacy_consent_gate(request, settings, adapters):
-        return
-
+    ):
+        return False
     contact = repo.get_or_create_contact(
         request.telegram_user_id, request.chat_id, adapters.clock()
     )
-    _route_consented_text(
-        contact,
-        request.text,
-        request.received_at,
-        request.update_id,
-        settings,
-        adapters,
-    )
+    if start_token is not None:
+        _handle_start_token(request, contact, start_token, settings, adapters)
+    else:
+        handle_db_query(request, db_query, settings, adapters)
+    return True
+
+
+def _routing_update_id(message: NormalizedMessage) -> int:
+    """El canal legacy conserva su `update_id` numérico; el resto, un entero estable."""
+    if is_legacy(message.channel) and message.external_message_id.isdigit():
+        value = int(message.external_message_id)
+        if value < 2**63:
+            return value
+    return stable_external_int(message.channel, message.external_message_id)
 
 
 def process_channel_message(
     message: NormalizedMessage, settings: Settings, adapters: Adapters
 ) -> None:
-    """Flujo de un mensaje canónico; la identidad es `(canal, id externo)` (R13-R21)."""
+    """Flujo único de un mensaje; la identidad es `(canal, id externo)` (R13-R21).
+
+    Fase 2: también atiende el contrato histórico de Telegram (antes
+    `process_message`), convertido a `NormalizedMessage` por quien llama.
+    """
+    if _handle_staff_command(message, settings, adapters):
+        return
     # R25, R33: sin textos legales configurados por el panel se falla cerrado.
     if not consent_configured(settings, adapters):
         logger.info("privacy_not_configured")
@@ -4119,7 +4559,7 @@ def process_channel_message(
         contact,
         text,
         message.received_at,
-        stable_external_int(message.channel, message.external_message_id),
+        _routing_update_id(message),
         settings,
         adapters,
     )

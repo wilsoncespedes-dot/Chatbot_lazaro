@@ -189,7 +189,7 @@ def test_fake_mailbox_keeps_at_most_max_entries_per_channel():
 
 
 def test_postgres_mailbox_creates_schema_reconnects_and_parameterizes_sql():
-    """R15, R17: esquema idempotente, parámetros %s y reconexión tras error."""
+    """R15, R17: sin DDL al conectar (lo crea el runner), parámetros %s y reconexión."""
     connections: list[_Connection] = []
     repo = _postgres(connections)
     _append_all(repo)
@@ -197,11 +197,13 @@ def test_postgres_mailbox_creates_schema_reconnects_and_parameterizes_sql():
         "uno",
         "dos",
     ]
+    from migrations import section
+
     statements = [sql for sql, _ in connections[0].log]
-    assert any(
-        sql.startswith("CREATE TABLE IF NOT EXISTS buzon_simulado") for sql in statements
-    )
-    assert any("CREATE INDEX IF NOT EXISTS buzon_simulado_canal_id" in sql for sql in statements)
+    assert not any(sql.startswith(("CREATE", "ALTER")) for sql in statements)
+    ddl = section("telegram_gateway: buzón simulado")
+    assert any(sql.startswith("CREATE TABLE IF NOT EXISTS buzon_simulado") for sql in ddl)
+    assert any("CREATE INDEX IF NOT EXISTS buzon_simulado_canal_id" in sql for sql in ddl)
     operations = [
         (sql, params)
         for sql, params in connections[0].log

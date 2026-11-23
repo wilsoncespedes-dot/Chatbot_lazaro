@@ -112,7 +112,11 @@ def test_dedup_and_insert_roll_back_together(env):
 
 
 def test_consent_acceptance_runs_in_request(env):
-    """R6: la aceptación de consentimiento no pasa por la cola."""
+    """R6: la aceptación de consentimiento se procesa en la petición.
+
+    Fase 2: deja una fila ya terminada (sin carga) que reserva el id del
+    mensaje; así una copia repetida responde `duplicate` y no registra dos veces.
+    """
     env.present()
     before = len(env.repo.inbox)
     response = _post(
@@ -120,17 +124,33 @@ def test_consent_acceptance_runs_in_request(env):
         _canonical(env.settings.consent_accept_phrase, message_id="accept-1"),
     )
     assert response.json() == {"status": "accepted"}
-    assert len(env.repo.inbox) == before
+    assert len(env.repo.inbox) == before + 1
+    row = env.repo.inbox[max(env.repo.inbox)]
+    assert (row["status"], row["payload"], row["external_message_id"]) == (
+        "done",
+        {},
+        "accept-1",
+    )
     assert any(c.result == "accepted" for c in env.repo.privacy_consents)
+    again = _post(
+        env,
+        _canonical(env.settings.consent_accept_phrase, message_id="accept-1"),
+    )
+    assert again.json() == {"status": "duplicate"}
+    assert len(env.repo.privacy_consents) == 1
 
 
 def test_unconsented_message_enqueued_without_dedup_mark(env):
-    """R7: sin consentimiento se encola, pero no se persiste la clave."""
+    """R7: sin consentimiento se encola, pero no se persiste la clave.
+
+    Fase 2: la copia repetida la frena el índice único del inbox (no la tabla
+    de dedup), así Redis caído no produce un segundo aviso.
+    """
     first = _post(env, _canonical("Hola", message_id="m1"))
     second = _post(env, _canonical("Hola", message_id="m1"))
     assert first.json() == {"status": "accepted"}
-    assert second.json() == {"status": "accepted"}
-    assert len(env.repo.inbox) == 2
+    assert second.json() == {"status": "duplicate"}
+    assert len(env.repo.inbox) == 1
     assert ("telegram", "m1") not in env.repo.processed_messages
 
 
@@ -142,5 +162,7 @@ def test_inbox_row_stores_key_channel_kind_payload(env):
     assert row["conversation_key"] == "telegram:10"
     assert row["channel"] == "telegram"
     assert row["external_user_id"] == "10"
-    assert row["payload_kind"] == "legacy"
-    assert row["payload"]["update_id"] == 9
+    # Fase 2: el contrato histórico se guarda ya como mensaje canónico.
+    assert row["payload_kind"] == "channel"
+    assert row["external_message_id"] == "9"
+    assert row["payload"]["external_message_id"] == "9"

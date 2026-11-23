@@ -13,7 +13,12 @@ from orchestrator.adapters.gateway import FakeGatewayClient
 from orchestrator.adapters.handover import FakeHandoverClient
 from orchestrator.adapters.llm import FakeLLM
 from orchestrator.adapters.rag import FakeRagClient
-from orchestrator.adapters.repository import FakeRepository, PostgresRepository, _SCHEMA
+from orchestrator.adapters.repository import FakeRepository, PostgresRepository
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 from orchestrator.classifier import Category
 from orchestrator.config import Settings
 from orchestrator.domain import Adapters

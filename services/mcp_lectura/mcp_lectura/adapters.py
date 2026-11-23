@@ -104,10 +104,14 @@ class PostgresDemoOffers:
     """R3: SELECT parametrizado dentro de una transacción READ ONLY."""
 
     def __init__(
-        self, database_url: str, connect: Callable[[], Any] | None = None
+        self,
+        database_url: str,
+        connect: Callable[[], Any] | None = None,
+        statement_timeout_ms: int = 5000,
     ) -> None:
         self._database_url = database_url
         self._connect = connect or (lambda: pg_connect(self._database_url))
+        self._statement_timeout_ms = int(statement_timeout_ms)
 
     def buscar(
         self, destino: str, desde: date, hasta: date, max_rows: int
@@ -116,6 +120,10 @@ class PostgresDemoOffers:
         cursor = connection.cursor()
         try:
             cursor.execute("SET TRANSACTION READ ONLY")
+            # Fase 4: una consulta lenta se corta aunque el rol no tenga timeout.
+            cursor.execute(
+                f"SET LOCAL statement_timeout = {self._statement_timeout_ms}"
+            )
             cursor.execute(
                 _SELECT_OFFERS_SQL,
                 (f"%{destino}%", desde, hasta, int(max_rows)),

@@ -1,36 +1,14 @@
-"""Esquema idempotente del servidor MCP y ofertas de DEMOSTRACIÓN."""
+"""Ofertas de DEMOSTRACIÓN del servidor MCP.
+
+Las tablas `demo_ofertas` y `mcp_auditoria` las crea `migrations/` (runner en el
+despliegue); aquí solo queda la siembra opcional de filas ficticias.
+"""
 from __future__ import annotations
 
 from datetime import date
 from typing import Any, Callable
 
 DEMO_LABEL = "DEMOSTRACIÓN"
-
-DDL: tuple[str, ...] = (
-    """
-    CREATE TABLE IF NOT EXISTS demo_ofertas (
-        id TEXT PRIMARY KEY,
-        destino TEXT NOT NULL,
-        titulo TEXT NOT NULL,
-        precio_cop INTEGER NOT NULL,
-        valido_desde DATE NOT NULL,
-        valido_hasta DATE NOT NULL,
-        es_demo BOOLEAN NOT NULL DEFAULT TRUE CHECK (es_demo),
-        etiqueta TEXT NOT NULL DEFAULT 'DEMOSTRACIÓN'
-    )
-    """.strip(),
-    """
-    CREATE TABLE IF NOT EXISTS mcp_auditoria (
-        id BIGSERIAL PRIMARY KEY,
-        herramienta TEXT NOT NULL,
-        args_sha256 TEXT NOT NULL,
-        filas INTEGER NOT NULL,
-        estado TEXT NOT NULL,
-        cliente_sha256 TEXT NOT NULL,
-        creado_en TIMESTAMPTZ NOT NULL
-    )
-    """.strip(),
-)
 
 # Ofertas ficticias: nunca datos reales de Lázaro Software.
 SEED_OFFERS: tuple[dict[str, Any], ...] = (
@@ -79,15 +57,14 @@ SEED_STATEMENTS: tuple[tuple[str, tuple[Any, ...]], ...] = tuple(
 
 
 def initialize(connect: Callable[[], Any], seed: bool) -> None:
-    """Crea las tablas y, solo con `seed`, inserta las ofertas ficticias."""
+    """Solo con `seed` inserta las ofertas ficticias; sin DDL (lo hace el runner)."""
+    if not seed:
+        return
     connection = connect()
     try:
         cursor = connection.cursor()
-        for statement in DDL:
-            cursor.execute(statement)
-        if seed:
-            for statement, params in SEED_STATEMENTS:
-                cursor.execute(statement, params)
+        for statement, params in SEED_STATEMENTS:
+            cursor.execute(statement, params)
         connection.commit()
     finally:
         connection.close()

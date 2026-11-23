@@ -1,6 +1,7 @@
 """Fixtures del orquestador: solo adaptadores falsos (sin red ni Postgres)."""
 from __future__ import annotations
 
+import itertools
 import json
 import sys
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ def _channel_directory(monkeypatch):
     """#65: los Adapters de prueba reciben el directorio con telegram/whatsapp/simulado."""
     monkeypatch.setattr(FakeChannelDirectory, "default_infos", default_channel_infos())
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+_PRESENT_IDS = itertools.count(1)
 RECEIVED_AT = "2026-01-02T03:04:00+00:00"
 
 PRIVACY_NOTICE_TEXT = (
@@ -133,7 +135,9 @@ class Env:
             "channel": channel,
             "external_user_id": str(user),
             "external_chat_id": str(chat),
-            "external_message_id": f"present-{user}",
+            # Fase 2: cada presentación es un mensaje distinto del canal; el
+            # índice único del inbox descarta ids repetidos.
+            "external_message_id": f"present-{user}-{next(_PRESENT_IDS)}",
             "kind": "text",
             "text": "Hola",
             "received_at": RECEIVED_AT,
@@ -223,6 +227,9 @@ def make_env(**settings_overrides) -> Env:
         # R44: las suites históricas prueban el flujo previo sin login; los
         # tests de #38 activan el login explícitamente.
         "identity_login_required": False,
+        # Fase 3: la memoria viene activa por defecto; las suites históricas
+        # prueban el flujo sin ella y los tests de memoria la activan.
+        "memory_enabled": False,
     }
     values.update(settings_overrides)
     settings = Settings(**values)

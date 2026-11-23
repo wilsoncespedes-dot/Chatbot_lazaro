@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from lazaro_contracts import SERVICE_TOKEN_HEADER
+from lazaro_contracts.production import require_service_token
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
@@ -106,6 +107,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: Any):
+        require_service_token(settings.service_token)
         if deps.initialize is not None:
             try:
                 await run_in_threadpool(deps.initialize)

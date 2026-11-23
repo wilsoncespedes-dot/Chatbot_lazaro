@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from lazaro_contracts import CaseReplyRequest, MessageRequest, NormalizedMessage
+from lazaro_contracts import (
+    CaseReplyRequest,
+    MessageRequest,
+    NormalizedMessage,
+    normalize_legacy_message,
+)
 
 from orchestrator.domain import (
     _send,
     advisor_send_template,
     process_channel_message,
-    process_message,
     reply_to_case,
 )
 from orchestrator.privacy import notice_sha256
@@ -51,7 +55,9 @@ def _link(env, case_id: str = "case-1", channel: str = "telegram"):
 def test_bot_reply_and_message_share_a_transaction(env):
     """R17: la respuesta del bot y su outbox se escriben juntas."""
     _consent(env)
-    process_message(_message(), env.settings, env.adapters)
+    process_channel_message(
+        normalize_legacy_message(_message()), env.settings, env.adapters
+    )
     bot = [message for message in env.repo.messages if message.role == "bot"]
     assert [message.text for message in bot] == ["Respuesta final"]
     [(row)] = env.repo.outbox.values()
@@ -134,7 +140,9 @@ def test_outbox_failure_reverts_message(env):
 def test_domain_does_not_call_gateway(env):
     """R21: el dominio no entrega al gateway; solo escribe el outbox."""
     _consent(env)
-    process_message(_message(), env.settings, env.adapters)
+    process_channel_message(
+        normalize_legacy_message(_message()), env.settings, env.adapters
+    )
     assert env.gateway.sent == []
     assert env.gateway.channel_sent == []
     assert env.gateway.blocks_sent == []

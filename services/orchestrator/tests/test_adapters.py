@@ -205,6 +205,20 @@ def test_http_gateway_raises_channel_rejected_on_422(captured):
     assert issubclass(ChannelRejected, ServiceUnavailable)
 
 
+def test_http_gateway_window_closed_raises_channel_out_of_window(captured):
+    """Fase 7: 422 channel_window_closed se distingue del resto de rechazos del canal."""
+    from orchestrator.domain import ChannelOutOfWindow
+
+    _, responses = captured
+    responses["/send"] = httpx.Response(
+        422, json={"error": "channel_window_closed", "message": "ventana"}
+    )
+    client = gateway.HttpGatewayClient("http://gw", "t")
+    with pytest.raises(ChannelOutOfWindow):
+        client.send_channel("facebook", "psid-1", "hola")
+    assert issubclass(ChannelOutOfWindow, ChannelRejected)
+
+
 @pytest.mark.parametrize(
     ("status", "code"),
     [(403, "forbidden"), (404, "not_found"), (409, "case_closed"),

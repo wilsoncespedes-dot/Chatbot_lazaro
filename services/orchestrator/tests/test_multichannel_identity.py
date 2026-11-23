@@ -224,12 +224,13 @@ def test_canonical_telegram_numeric_before_consent_does_not_persist_message_id(e
 
 
 def test_legacy_telegram_before_consent_only_persists_update_id(env):
-    """R22: el endpoint legacy conserva solo `processed_updates(update_id)`."""
+    """R22 + fase 2: el contrato legacy entra al flujo único; solo queda el id en inbox."""
     response = env.post(consent=False, update_id=1)
 
     assert response.json() == {"status": "accepted"}
-    assert env.repo.processed == {1}
+    assert env.repo.processed == set()
     assert env.repo.processed_messages == set()
+    assert [row["external_message_id"] for row in env.repo.inbox.values()] == ["1"]
     assert env.repo.contacts == {}
     assert env.repo.messages == []
 
@@ -254,7 +255,7 @@ def test_request_without_privacy_config_does_not_persist_message_id(env_factory)
     assert env.repo.processed_messages == set()
     assert env.repo.contacts == {}
     assert env.repo.messages == []
-    assert env.repo.processed == {2}
+    assert env.repo.processed == set()
 
 
 def test_button_acceptance_writes_evidence_and_opens_login_state(env):

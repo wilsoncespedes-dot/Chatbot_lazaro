@@ -44,6 +44,7 @@ CHANNEL_ICONS: dict[str, str] = {
     "sms": "📨",
     "instagram": "📷",
     "facebook": "👥",
+    "tiktok": "🎵",
     "tienda": "🛒",
     "bot": "🤖",
     "soporte": "🛟",

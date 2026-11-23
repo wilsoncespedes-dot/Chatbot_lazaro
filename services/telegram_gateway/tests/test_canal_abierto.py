@@ -84,7 +84,7 @@ def _send(client: TestClient, channel: str, blocks: list[dict], destination: str
 # ── R39: canal sin adaptador ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("channel", ["canal-externo", "instagram"])
+@pytest.mark.parametrize("channel", ["canal-externo", "canal-sin-adaptador"])
 def test_send_unknown_channel_returns_422_without_sending(channel: str):
     """R39: un canal sin adaptador responde 422 y no envía por ningún canal."""
     whatsapp = FakeWhatsAppAdapter()
@@ -99,7 +99,9 @@ def test_send_unknown_channel_returns_422_without_sending(channel: str):
 def test_send_unknown_channel_is_422_even_without_whatsapp():
     """R39: sin WhatsApp configurado un canal desconocido sigue siendo 422, no 502."""
     client, telegram = make_client(whatsapp=None)
-    response = _send(client, "instagram", [{"type": "text", "text": "Hola"}])
+    response = _send(
+        client, "canal-sin-adaptador", [{"type": "text", "text": "Hola"}]
+    )
     assert response.status_code == 422
     assert response.json()["error"] == "validation_error"
     assert telegram.sent == []

@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from orchestrator.accounts import hash_token, verify_password
-from orchestrator.adapters.repository import FakeRepository, _INDEXES, _MIGRATIONS
+from orchestrator.adapters.repository import FakeRepository
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 from orchestrator.client_import import (
     ImportFileError,
     ImportPlan,

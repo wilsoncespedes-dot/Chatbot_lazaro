@@ -177,6 +177,10 @@ def test_context_reuses_repository_and_adds_no_storage_schema():
         encoding="utf-8"
     )
     assert "def last_messages(self, contact_id: str, limit: int)" in source
-    assert "CREATE TABLE IF NOT EXISTS messages" in source
-    assert "CREATE TABLE IF NOT EXISTS conversational_" not in source
+    # Fase 1: el esquema vive en migrations/, no en el repositorio.
+    schema = "".join(
+        path.read_text(encoding="utf-8") for path in sorted((root / "migrations").glob("*.sql"))
+    )
+    assert "CREATE TABLE IF NOT EXISTS messages" in schema
+    assert "CREATE TABLE IF NOT EXISTS conversational_" not in schema + source
     assert domain._conversational_context.__module__ == "orchestrator.domain"

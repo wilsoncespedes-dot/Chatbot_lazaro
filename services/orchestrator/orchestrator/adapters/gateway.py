@@ -14,7 +14,12 @@ from lazaro_contracts import (
     TextBlock,
 )
 
-from ..domain import ChannelRejected, ServiceUnavailable
+from ..domain import (
+    GATEWAY_WINDOW_CLOSED_CODE,
+    ChannelOutOfWindow,
+    ChannelRejected,
+    ServiceUnavailable,
+)
 from ..legacy import LEGACY_CHANNEL
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,15 @@ class ChannelBoundGateway:
         self._inner.send_channel(self._channel, self._destination, text)
 
 
+def _error_code(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    code = body.get("error") if isinstance(body, dict) else None
+    return code if isinstance(code, str) else None
+
+
 class HttpGatewayClient:
     def __init__(self, base_url: str, service_token: str, timeout: float = 10) -> None:
         self._base_url = base_url.rstrip("/")
@@ -63,6 +77,9 @@ class HttpGatewayClient:
             logger.error("gateway_error code=%s", type(exc).__name__)
             raise ServiceUnavailable("Gateway no disponible.") from None
         if response.status_code == 422:
+            if _error_code(response) == GATEWAY_WINDOW_CLOSED_CODE:
+                logger.warning("gateway_channel_window_closed code=422")
+                raise ChannelOutOfWindow("La ventana de atención del canal está cerrada.")
             logger.warning("gateway_channel_rejected code=422")
             raise ChannelRejected("El canal rechazó el envío.")
         try:
@@ -101,6 +118,7 @@ class FakeGatewayClient:
         fail: bool = False,
         fail_for: set[int] | None = None,
         reject_channel: bool = False,
+        window_closed: bool = False,
     ) -> None:
         self.sent: list[tuple[int, str]] = []
         self.channel_sent: list[tuple[str, str, str]] = []
@@ -108,6 +126,8 @@ class FakeGatewayClient:
         self.fail = fail
         self.fail_for: set[int] = set(fail_for or ())
         self.reject_channel = reject_channel
+        # Fase 7: simula el 422 `channel_window_closed` del gateway.
+        self.window_closed = window_closed
 
     def send(self, chat_id: int, text: str) -> None:
         if self.fail or chat_id in self.fail_for:
@@ -128,6 +148,8 @@ class FakeGatewayClient:
     ) -> None:
         if self.fail:
             raise ServiceUnavailable("Gateway caído")
+        if self.window_closed:
+            raise ChannelOutOfWindow("La ventana de atención del canal está cerrada.")
         if self.reject_channel:
             raise ChannelRejected("El canal rechazó el envío.")
         stored = list(blocks)

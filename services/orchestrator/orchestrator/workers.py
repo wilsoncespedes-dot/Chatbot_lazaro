@@ -5,6 +5,8 @@ import argparse
 import logging
 import time
 
+from lazaro_contracts.production import require_service_token
+
 from .config import Settings
 from .main import build_default_adapters
 from .queue import run_inbox_once, run_outbox_once
@@ -24,6 +26,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     settings = Settings()
+    require_service_token(settings.service_token)
     adapters = build_default_adapters(settings)
     runner = run_inbox_once if args.modo == "procesar_entrantes" else run_outbox_once
     if args.una_vez:

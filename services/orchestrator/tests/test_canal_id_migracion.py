@@ -4,7 +4,12 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from orchestrator.adapters.repository import _MIGRATIONS, FakeRepository, PostgresRepository
+from orchestrator.adapters.repository import FakeRepository, PostgresRepository
+from migrations import section
+
+_SCHEMA = section("orchestrator: tablas")
+_INDEXES = section("orchestrator: índices")
+_MIGRATIONS = section("orchestrator: migraciones aditivas previas")
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 CANAL_ID_STATEMENTS = [statement for statement in _MIGRATIONS if "canal_id" in statement]
@@ -61,7 +66,7 @@ class _Conn:
 
 def _postgres(log: list) -> PostgresRepository:
     return PostgresRepository(
-        "postgresql://x", connect=lambda: _Conn(log), run_migrations=False, new_id=lambda: "c1"
+        "postgresql://x", connect=lambda: _Conn(log), new_id=lambda: "c1"
     )
 
 

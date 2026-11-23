@@ -156,12 +156,18 @@ def test_unconsented_sender_leaves_no_personal_data(env, route):
 
 @pytest.mark.parametrize("route", ROUTES)
 def test_unconsented_sender_only_stores_update_id(env, route):
-    """R20: por HTTP solo queda el update_id en processed_updates."""
+    """R20 + fase 2: por HTTP solo queda el id del mensaje en la fila del inbox.
+
+    La fila ya procesada no conserva la carga; el id es la barrera contra
+    copias repetidas (índice único del inbox) en vez de processed_updates.
+    """
     text = _text_for(env, route)
     env.post(text=text, update_id=1, user=USER_ID, chat=CHAT_ID, consent=False)
 
-    assert env.repo.processed == {1}
+    assert env.repo.processed == set()
     assert env.repo.processed_messages == set()
+    [row] = env.repo.inbox.values()
+    assert (row["external_message_id"], row["payload"]) == ("1", {})
     _assert_no_personal_data(env, USER_ID)
 
 

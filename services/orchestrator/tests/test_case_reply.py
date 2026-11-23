@@ -256,7 +256,10 @@ def test_postgres_case_links_use_parameters_only():
     repo.link_case(secret, "c1", FIXED_NOW)
     contact = repo.get_case_contact(secret)
     assert contact == Contact(id="c1", telegram_user_id=10, chat_id=100)
-    assert any("CREATE TABLE IF NOT EXISTS case_links" in sql for sql, _ in conn.log)
+    # Fase 1: el esquema lo crean las migraciones, no la conexión.
+    from migrations import schema_sql
+
+    assert "CREATE TABLE IF NOT EXISTS case_links" in schema_sql()
     statements = [
         (sql, p) for sql, p in conn.log
         if not sql.startswith("CREATE") and "pg_advisory_xact_lock" not in sql

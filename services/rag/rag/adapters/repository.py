@@ -276,20 +276,6 @@ class PgVectorChunkRepository:
             with suppress(Exception):
                 conn.close()
 
-    def _schema(self) -> tuple[str, ...]:
-        return (
-            "CREATE EXTENSION IF NOT EXISTS vector",
-            "CREATE TABLE IF NOT EXISTS manuals ("
-            "manual_id TEXT PRIMARY KEY, name TEXT NOT NULL, "
-            "created_at TIMESTAMPTZ DEFAULT now())",
-            "CREATE TABLE IF NOT EXISTS chunks ("
-            "chunk_id TEXT PRIMARY KEY, manual_id TEXT REFERENCES manuals(manual_id), "
-            f"ord INT, text TEXT, embedding vector({self._dim}), "
-            "active BOOLEAN DEFAULT TRUE)",
-            "CREATE INDEX IF NOT EXISTS chunks_text_spanish_gin ON chunks "
-            "USING GIN (to_tsvector('spanish', text)) WHERE active",
-        )
-
     def _connection(self) -> Any:
         # Si Postgres se reinicia, la conexión guardada queda rota; tras un rato
         # sin uso se comprueba con `SELECT 1` y, si falla, se abre otra.
@@ -302,12 +288,8 @@ class PgVectorChunkRepository:
             with suppress(Exception):
                 conn.close()
         if self._conn is None:
-            conn = self._connect()
-            cur = conn.cursor()
-            for statement in self._schema():
-                cur.execute(statement)
-            conn.commit()
-            self._conn = conn
+            # Sin DDL al conectar: el esquema lo crea `migrations/runner.py`.
+            self._conn = self._connect()
         self._last_used = time.monotonic()
         return self._conn
 

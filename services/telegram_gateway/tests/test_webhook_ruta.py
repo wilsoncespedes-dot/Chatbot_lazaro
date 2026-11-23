@@ -69,6 +69,7 @@ class _App:
     orchestrator: _CountingOrchestrator
     registry: ChannelRegistry
     key: str
+    adapters: Adapters | None = None
 
 
 def _registry() -> ChannelRegistry:
@@ -103,7 +104,7 @@ def _app(
         webhook_max_body_bytes=max_body,
     )
     client = TestClient(create_app(settings, adapters), raise_server_exceptions=False)
-    return _App(client, repository, dedup, orchestrator, registry, key)
+    return _App(client, repository, dedup, orchestrator, registry, key, adapters)
 
 
 def _create_channel(
@@ -445,20 +446,38 @@ def test_redis_failure_treats_message_as_new_and_logs_error(caplog):
     assert "ConnectionError" in caplog.text
 
 
-def test_orchestrator_failure_is_logged_once_and_still_accepted(caplog):
-    """R27: un fallo del orquestador no se reintenta y responde 200 accepted."""
+def test_orchestrator_failure_is_queued_once_and_still_accepted(caplog):
+    """R27 + fase 2: la caída del orquestador se guarda para reintento y responde 200."""
     app = _app(orchestrator=_CountingOrchestrator(fail=True))
     _create_channel(app)
-    with caplog.at_level(logging.ERROR), app.client:
+    with caplog.at_level(logging.WARNING), app.client:
         response = _signed(app, "canal-externo", MESSAGE)
     assert response.status_code == 200
     assert response.json() == {"status": "accepted"}
     assert app.orchestrator.calls == 1
-    assert "webhook_forward_failed channel_id=canal-externo" in caplog.text
+    assert "inbound_queued channel=canal-externo" in caplog.text
+
+
+def test_orchestrator_and_retry_queue_down_is_503_and_channel_can_resend(caplog):
+    """Fase 2: sin orquestador ni cola no se responde ok; el reenvío no es duplicado."""
+    from telegram_gateway.adapters.inbound_retry import FakeInboundRetryStore
+
+    app = _app(orchestrator=_CountingOrchestrator(fail=True))
+    app.adapters.inbound_retry = FakeInboundRetryStore(fail=True)
+    _create_channel(app)
+    with caplog.at_level(logging.ERROR), app.client:
+        first = _signed(app, "canal-externo", MESSAGE)
+        app.orchestrator.fail = False
+        second = _signed(app, "canal-externo", MESSAGE)
+    assert first.status_code == 503
+    assert first.json()["error"] == "service_unavailable"
+    assert second.status_code == 200
+    assert second.json() == {"status": "accepted"}
+    assert len(app.orchestrator.received) == 1
 
 
 @pytest.mark.parametrize(
-    "error", [OrchestratorError("El orquestador respondió 422.")]
+    "error", [OrchestratorError("El orquestador respondió 422.", retryable=False)]
 )
 def test_orchestrator_rejection_is_logged_with_reason(error, caplog):
     """R27: un rechazo del orquestador (incluido 422) queda registrado."""
@@ -476,7 +495,7 @@ def test_orchestrator_rejection_is_logged_with_reason(error, caplog):
         response = _signed(app, "canal-externo", MESSAGE)
     assert response.status_code == 200
     assert app.orchestrator.calls == 1
-    assert "webhook_forward_failed channel_id=canal-externo" in caplog.text
+    assert "inbound_rejected channel=canal-externo" in caplog.text
     assert "422" in caplog.text
 
 

@@ -8,6 +8,9 @@ from lazaro_contracts import SERVICE_TOKEN_HEADER, MessageRequest, NormalizedMes
 
 from ..domain import OrchestratorError
 
+# El orquestador rechazó el contenido: reenviarlo no cambiaría la respuesta.
+NON_RETRYABLE_STATUS = frozenset({400, 413, 422})
+
 
 class OrchestratorClient(Protocol):
     def post_message(
@@ -35,8 +38,10 @@ class HttpOrchestratorClient:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
             raise OrchestratorError(
-                f"El orquestador respondió {exc.response.status_code}."
+                f"El orquestador respondió {status}.",
+                retryable=status not in NON_RETRYABLE_STATUS,
             ) from None
         except httpx.HTTPError as exc:
             raise OrchestratorError(
@@ -45,11 +50,15 @@ class HttpOrchestratorClient:
 
 
 class FakeOrchestratorClient:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, reject: bool = False) -> None:
         self.received: list[MessageRequest | NormalizedMessage] = []
         self.fail = fail
+        # `reject` simula un 422 del orquestador (no reintentable).
+        self.reject = reject
 
     def post_message(self, request: MessageRequest | NormalizedMessage) -> None:
         if self.fail:
             raise OrchestratorError("orquestador caído")
+        if self.reject:
+            raise OrchestratorError("El orquestador respondió 422.", retryable=False)
         self.received.append(request)

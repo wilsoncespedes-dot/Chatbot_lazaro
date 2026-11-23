@@ -121,6 +121,8 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/respuestas-rapidas/{reply_id}",
         "/admin/respuestas-rapidas/{reply_id}/activa",
         "/media/respuestas/{image_id}",
+        # Fase 5: gráficos temporales con enlace firmado.
+        "/media/graficos/{name}",
         "/admin/texts",
         "/admin/texts/{field}/historial",
         "/admin/clientes",

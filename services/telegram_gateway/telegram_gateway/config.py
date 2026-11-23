@@ -38,7 +38,6 @@ class Settings(BaseSettings):
     healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
     telegram_answer_callback_timeout_seconds: float = 3.0
-    non_text_reply: str = "Por ahora solo puedo leer mensajes de texto."
     message_grouping_enabled: bool = True
     message_grouping_window_seconds: float = 2.0
     message_grouping_max_wait_seconds: float = 8.0
@@ -62,6 +61,41 @@ class Settings(BaseSettings):
     whatsapp_interactive_body_text: str = "Elige una opción:"
     whatsapp_window_hours: int = 24
 
+    # Messenger e Instagram Messaging (Graph API de Meta, página vinculada).
+    meta_messenger_enabled: bool = False
+    meta_instagram_enabled: bool = False
+    meta_page_id: str = ""
+    meta_instagram_account_id: str = ""
+    # Solo siembra/rota: el gateway lo guarda cifrado en `canales.config_secreta`
+    # y, tras el primer arranque, puede quitarse del entorno.
+    meta_page_access_token: SecretStr = SecretStr("")
+    meta_app_secret: SecretStr = SecretStr("")
+    meta_webhook_verify_token: SecretStr = SecretStr("")
+    meta_graph_base_url: str = "https://graph.facebook.com"
+    meta_graph_api_version: str = "v26.0"
+    meta_messaging_window_hours: int = Field(default=24, ge=1, le=24)
+
+    # TikTok Business Messaging (fase 6). Acceso sujeto a autorización de TikTok.
+    tiktok_enabled: bool = False
+    tiktok_client_key: str = ""
+    tiktok_client_secret: SecretStr = SecretStr("")
+    # Secreto con el que se verifica `TikTok-Signature`. Vacío = se rechaza todo
+    # webhook de TikTok con 401 (fallo cerrado), aunque el canal esté habilitado.
+    tiktok_webhook_secret: SecretStr = SecretStr("")
+    # `open_id` devuelto por el OAuth de la cuenta de TikTok.
+    tiktok_business_id: str = ""
+    # Solo para el primer arranque: después el refresh token rotado vive cifrado
+    # en `canales.config_secreta` y es el que se usa.
+    tiktok_refresh_token: SecretStr = SecretStr("")
+    tiktok_token_url: str = (
+        "https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2/refresh_token/"
+    )
+    tiktok_send_url: str = (
+        "https://business-api.tiktok.com/open_api/v1.3/business/message/send/"
+    )
+    tiktok_token_refresh_margin_seconds: int = Field(300, ge=30, le=3600)
+    tiktok_signature_tolerance_seconds: int = Field(300, ge=30, le=3600)
+
     # Webhook genérico firmado (#62)
     webhook_signature_window_seconds: int = Field(
         DEFAULT_SIGNATURE_WINDOW_SECONDS, ge=1, le=3600
@@ -72,6 +106,14 @@ class Settings(BaseSettings):
     # Buzón del canal simulado (#63): solo pruebas, retención y tope por canal.
     simulated_mailbox_retention_seconds: int = Field(3600, ge=60, le=86400)
     simulated_mailbox_max_entries: int = Field(500, ge=10, le=5000)
+
+    # Fase 2: cola de reintento hacia el orquestador (espera creciente).
+    inbound_retry_base_seconds: float = Field(2.0, gt=0, le=60)
+    inbound_retry_max_delay_seconds: float = Field(300.0, gt=0, le=3600)
+    inbound_retry_max_age_seconds: int = Field(172_800, ge=60, le=1_209_600)
+    inbound_retry_poll_seconds: float = Field(1.0, gt=0, le=60)
+    inbound_retry_lease_seconds: float = Field(60.0, gt=0, le=3600)
+    inbound_retry_batch_size: int = Field(50, ge=1, le=500)
 
     @field_validator("telegram_answer_callback_timeout_seconds")
     @classmethod
@@ -87,11 +129,23 @@ class Settings(BaseSettings):
     def _normalize_graph_base_url(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator("meta_graph_base_url")
+    @classmethod
+    def _normalize_meta_graph_base_url(cls, value: str) -> str:
+        return value.rstrip("/")
+
     @field_validator("whatsapp_graph_api_version")
     @classmethod
     def _validate_graph_api_version(cls, value: str) -> str:
         if not re.fullmatch(r"v\d+\.\d+", value):
             raise ValueError("WHATSAPP_GRAPH_API_VERSION no tiene el formato v<mayor>.<menor>")
+        return value
+
+    @field_validator("meta_graph_api_version")
+    @classmethod
+    def _validate_meta_graph_api_version(cls, value: str) -> str:
+        if not re.fullmatch(r"v\d+\.\d+", value):
+            raise ValueError("META_GRAPH_API_VERSION no tiene el formato v<mayor>.<menor>")
         return value
 
     @field_validator("whatsapp_template_language")
@@ -131,6 +185,57 @@ class Settings(BaseSettings):
         if missing:
             raise ValueError(
                 "configuración de WhatsApp incompleta: faltan " + ", ".join(missing)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_meta_messaging(self) -> "Settings":
+        """R1: exige credenciales Graph y el id de Instagram si está habilitado."""
+        if not self.meta_messenger_enabled and not self.meta_instagram_enabled:
+            return self
+        missing: list[str] = []
+        if not self.meta_page_id:
+            missing.append("META_PAGE_ID")
+        # El Page Access Token se guarda cifrado: hace falta la clave de canales.
+        if not self.channel_secrets_key.get_secret_value():
+            missing.append("CHANNEL_SECRETS_KEY")
+        if not self.meta_app_secret.get_secret_value():
+            missing.append("META_APP_SECRET")
+        if not self.meta_webhook_verify_token.get_secret_value():
+            missing.append("META_WEBHOOK_VERIFY_TOKEN")
+        if self.meta_instagram_enabled and not self.meta_instagram_account_id:
+            missing.append("META_INSTAGRAM_ACCOUNT_ID")
+        if not self.meta_graph_base_url.startswith("https://"):
+            missing.append("META_GRAPH_BASE_URL")
+        if missing:
+            raise ValueError(
+                "configuración de Meta incompleta: faltan " + ", ".join(missing)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_tiktok(self) -> "Settings":
+        """R1: el canal solo arranca habilitado con credenciales y cifrado disponibles."""
+        if not self.tiktok_enabled:
+            return self
+        missing: list[str] = []
+        if not self.tiktok_client_key:
+            missing.append("TIKTOK_CLIENT_KEY")
+        if not self.tiktok_client_secret.get_secret_value():
+            missing.append("TIKTOK_CLIENT_SECRET")
+        if not self.tiktok_business_id:
+            missing.append("TIKTOK_BUSINESS_ID")
+        if not self.channel_secrets_key.get_secret_value():
+            missing.append("CHANNEL_SECRETS_KEY")
+        for name, url in (
+            ("TIKTOK_TOKEN_URL", self.tiktok_token_url),
+            ("TIKTOK_SEND_URL", self.tiktok_send_url),
+        ):
+            if not url.startswith("https://"):
+                missing.append(name)
+        if missing:
+            raise ValueError(
+                "configuración de TikTok incompleta: faltan " + ", ".join(missing)
             )
         return self
 

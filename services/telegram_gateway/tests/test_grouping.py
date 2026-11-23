@@ -339,9 +339,10 @@ def test_group_is_ordered_by_update_id_and_uses_expected_fields():
     )
     message = env.orchestrator.received[0]
     assert message.text == "a\nb\nc"
-    assert message.update_id == 1
-    assert message.telegram_user_id == 55
-    assert message.chat_id == 77
+    # Fase 2: el grupo viaja como mensaje canónico con el menor update_id.
+    assert message.external_message_id == "1"
+    assert message.external_user_id == "55"
+    assert message.external_chat_id == "77"
     assert message.received_at == FIXED_NOW + timedelta(seconds=0.1)
 
 
@@ -362,8 +363,8 @@ def test_chats_are_isolated():
         env.settings,
         Adapters(env.telegram, env.dedup, env.orchestrator, clock=env.clock, buffer=env.buffer),
     )
-    by_chat = {m.chat_id: m.text for m in env.orchestrator.received}
-    assert by_chat == {100: "A1\nA2", 200: "B1\nB2"}
+    by_chat = {m.external_chat_id: m.text for m in env.orchestrator.received}
+    assert by_chat == {"100": "A1\nA2", "200": "B1\nB2"}
 
 
 def test_other_user_forces_previous_buffer_flush():
@@ -446,7 +447,7 @@ def test_commands_flush_buffer_then_are_sent_individually(text):
     env.clock.advance(0.1)
     post(env, update_id=2, text=text)
     assert [m.text for m in env.orchestrator.received] == ["pregunta", text]
-    assert [m.update_id for m in env.orchestrator.received] == [1, 2]
+    assert [m.external_message_id for m in env.orchestrator.received] == ["1", "2"]
 
 
 def test_accept_phrase_is_immediate_after_normalization():
@@ -504,13 +505,14 @@ def test_immediate_message_is_sent_alone_when_group_is_inflight(caplog):
 
 
 def test_non_text_update_keeps_buffer_untouched():
-    """R15: un update sin texto responde NON_TEXT_REPLY y no toca el buffer."""
+    """R15: un update sin texto va al orquestador (unsupported) y no toca el buffer."""
     env = make_env()
     post(env, update_id=1, text="hola")
     update = {"update_id": 2, "message": {"from": {"id": 55}, "chat": {"id": 77}, "voice": {}}}
     response = env.client.post(URL, json=update, headers=HOOK)
     assert response.status_code == 200
-    assert env.telegram.sent == [(77, env.settings.non_text_reply)]
+    assert env.telegram.sent == []
+    assert [m.kind for m in env.orchestrator.received] == ["unsupported"]
     assert [m.text for m in env.buffer.pending(77)] == ["hola"]
 
 

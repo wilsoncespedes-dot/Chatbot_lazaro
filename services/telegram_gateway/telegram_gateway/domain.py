@@ -32,6 +32,11 @@ if TYPE_CHECKING:
     from .adapters.mailbox import MailboxRepository
     from .adapters.gmail_api import GmailTransport
     from .adapters.gmail_history import GmailHistoryRepository
+    from .adapters.meta_messaging import MetaMessagingApi
+    from .adapters.inbound_retry import InboundRetryStore
+    from .adapters.meta_window import MetaMessageWindowStore
+    from .adapters.tiktok_api import TikTokApi
+    from .adapters.tiktok_quota import TikTokMessageQuotaStore
     from .registry import ChannelRegistry
     from .ports.canal import Canal
 
@@ -49,7 +54,9 @@ class TelegramError(DomainError):
 
 
 class ChannelWindowClosed(DomainError):
-    code = "validation_error"
+    # Fase 7: código propio para que el orquestador deje la fila de outbox en
+    # `fuera_de_ventana` en lugar de `failed` (antes era `validation_error`).
+    code = "channel_window_closed"
     status_code = 422
 
 
@@ -148,7 +155,25 @@ class InvalidChannelConfig(DomainError):
 
 
 class OrchestratorError(Exception):
-    """Fallo al llamar al orquestador; el webhook la captura y no llega al cliente."""
+    """Fallo al llamar al orquestador; el webhook la captura y no llega al cliente.
+
+    `retryable=False` indica que el orquestador rechazó el contenido (400/413/422):
+    reenviarlo no cambiaría el resultado, así que no va a la cola de reintento.
+    """
+
+    def __init__(self, message: str = "", *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+class InboundUnavailable(DomainError):
+    """Fase 2: ni el orquestador ni la cola de reintento aceptaron el mensaje.
+
+    El webhook responde 503 para que el canal lo reenvíe más tarde.
+    """
+
+    code = "service_unavailable"
+    status_code = 503
 
 
 class CallbackNetworkError(Exception):
@@ -216,6 +241,20 @@ BUILTIN_CHANNEL_SEEDS: tuple[ChannelSeed, ...] = (
         "whatsapp", "WhatsApp", "whatsapp_cloud", "whatsapp", "#0E7A5F",
         {"consent_mode": "boton"},
     ),
+    # Fase 6: activo solo si TIKTOK_ENABLED=true (sigue al entorno).
+    ChannelSeed(
+        "tiktok", "TikTok", "tiktok", "tiktok", "#111827",
+        {"consent_mode": "texto"},
+    ),
+    # Fase 7: Facebook Messenger e Instagram (activos si META_*_ENABLED=true).
+    ChannelSeed(
+        "facebook", "Facebook Messenger", "meta_messenger", "facebook", "#0866FF",
+        {"consent_mode": "texto"},
+    ),
+    ChannelSeed(
+        "instagram", "Instagram", "meta_instagram", "instagram", "#C13584",
+        {"consent_mode": "texto"},
+    ),
 )
 
 
@@ -238,6 +277,13 @@ class Adapters:
     mailbox: "MailboxRepository | None" = None
     gmail_transport: "GmailTransport | None" = None
     gmail_history: "GmailHistoryRepository | None" = None
+    inbound_retry: "InboundRetryStore | None" = None
+    # Fase 6: cliente HTTP de TikTok (refresco OAuth y envío).
+    tiktok: "TikTokApi | None" = None
+    tiktok_quota: "TikTokMessageQuotaStore | None" = None
+    # Fase 7: Messenger e Instagram Messaging usan la API Graph de Meta.
+    meta: "MetaMessagingApi | None" = None
+    meta_window: "MetaMessageWindowStore | None" = None
 
 
 @dataclass(frozen=True)
@@ -395,16 +441,6 @@ def normalize_callback(
         button_id=callback.button_id,
         button_proof=callback.button_proof,
         received_at=received_at,
-    )
-
-
-def build_message_request(incoming: IncomingUpdate, now: datetime) -> MessageRequest:
-    return MessageRequest(
-        update_id=incoming.update_id,
-        telegram_user_id=incoming.user_id,
-        chat_id=incoming.chat_id,
-        text=incoming.text or "",
-        received_at=now,
     )
 
 

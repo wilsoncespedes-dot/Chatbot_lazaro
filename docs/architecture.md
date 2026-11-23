@@ -12,8 +12,8 @@ contracts/                 # Contratos entre servicios (feature 1)
 ├── lazaro_contracts/      # Modelos Pydantic compartidos (request/response)
 └── tests/
 services/
-├── telegram_gateway/      # Gateway de canales: Telegram, WhatsApp (Meta Cloud API) y, desde
-│                          # #61-#63, cualquier canal registrado (puerto, registry, webhook genérico)
+├── telegram_gateway/      # Gateway de canales: Telegram, WhatsApp, TikTok Business,
+│                          # Messenger, Instagram y canales registrados/webhook genérico (#61-#63, fase 6-7)
 ├── orchestrator/          # Cerebro: contacto, conversación, decide qué hacer;
 │                          # incluye el módulo de identidad de clientes (#38)
 ├── rag/                   # Manuales: ingesta, fragmentos, búsqueda pgvector

@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 import threading
 
-from lazaro_contracts import MAX_TEXT_LENGTH
+from collections.abc import Callable
+
+from lazaro_contracts import MAX_TEXT_LENGTH, NormalizedMessage, normalize_legacy_message
 from pydantic import ValidationError
 
 from .config import Settings
@@ -15,10 +17,13 @@ from .domain import (
     IncomingUpdate,
     OrchestratorError,
     build_group_request,
-    build_message_request,
     is_immediate,
     must_flush_before,
+    normalize_incoming,
 )
+from .inbound import queue_for_retry
+
+Forward = Callable[[NormalizedMessage], object]
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +34,32 @@ def _update_ids(group: ClaimedGroup) -> str:
     return ",".join(str(message.update_id) for message in group.messages)
 
 
-def _post_single(incoming: IncomingUpdate, adapters: Adapters) -> bool:
+def _post_single(incoming: IncomingUpdate, adapters: Adapters, forward: Forward) -> None:
+    """Reenvía un mensaje suelto; `forward` lo guarda para reintento si hace falta.
+
+    Un `InboundUnavailable` de `forward` se propaga: el webhook responde 503.
+    """
     try:
-        request = build_message_request(incoming, adapters.clock())
-        adapters.orchestrator.post_message(request)
-        return True
-    except (OrchestratorError, ValidationError) as exc:
+        message = normalize_incoming(incoming, adapters.clock())
+    except ValidationError:
         logger.error(
-            "Fallo al reenviar al orquestador update_id=%s (%s): %s",
-            incoming.update_id,
-            type(exc).__name__,
-            exc if isinstance(exc, OrchestratorError) else "mensaje no válido",
+            "Mensaje fuera de contrato descartado update_id=%s", incoming.update_id
         )
+        return
+    forward(message)
+
+
+def _queue_group(
+    message: NormalizedMessage, reason: str, settings: Settings, adapters: Adapters
+) -> bool:
+    """Fase 2: el grupo pasa a la cola persistente en vez de esperar en Redis."""
+    if adapters.inbound_retry is None:
         return False
+    try:
+        queue_for_retry(message, reason, settings, adapters)
+    except Exception:  # noqa: BLE001 - se conserva el reintento del buffer
+        return False
+    return True
 
 
 def _send_group(group: ClaimedGroup, settings: Settings, adapters: Adapters) -> None:
@@ -49,7 +67,9 @@ def _send_group(group: ClaimedGroup, settings: Settings, adapters: Adapters) -> 
     if buffer is None:  # pragma: no cover - el llamador exige buffer
         return
     try:
-        request = build_group_request(group.chat_id, group.messages)
+        message = normalize_legacy_message(
+            build_group_request(group.chat_id, group.messages)
+        )
     except ValidationError:
         buffer.ack(group)
         logger.error(
@@ -60,8 +80,17 @@ def _send_group(group: ClaimedGroup, settings: Settings, adapters: Adapters) -> 
         )
         return
     try:
-        adapters.orchestrator.post_message(request)
+        adapters.orchestrator.post_message(message)
     except OrchestratorError as exc:
+        if exc.retryable and _queue_group(message, str(exc), settings, adapters):
+            buffer.ack(group)
+            logger.warning(
+                "grouping_queued chat_id=%s update_ids=%s messages=%d",
+                group.chat_id,
+                _update_ids(group),
+                len(group.messages),
+            )
+            return
         if group.attempts < settings.message_grouping_max_attempts:
             buffer.release(group, adapters.clock())
             logger.warning(
@@ -124,12 +153,18 @@ def flush_chat(chat_id: int, settings: Settings, adapters: Adapters) -> None:
         _send_group(group, settings, adapters)
 
 
-def enqueue_text(incoming: IncomingUpdate, settings: Settings, adapters: Adapters) -> None:
-    """Aplica la rama de texto del webhook cuando la agrupación está activa."""
+def enqueue_text(
+    incoming: IncomingUpdate, settings: Settings, adapters: Adapters, forward: Forward
+) -> None:
+    """Rama de texto del webhook cuando la agrupación está activa.
+
+    El reenvío individual queda fuera del `try`: si no se puede entregar ni
+    guardar, el error llega al webhook (503) en vez de reenviarse dos veces.
+    """
     buffer = adapters.buffer
     text = incoming.text or ""
-    if buffer is None:
-        _post_single(incoming, adapters)
+    if buffer is None or len(text) > MAX_TEXT_LENGTH:
+        _post_single(incoming, adapters, forward)
         return
     new = BufferedMessage(
         update_id=incoming.update_id,
@@ -138,38 +173,32 @@ def enqueue_text(incoming: IncomingUpdate, settings: Settings, adapters: Adapter
         received_at=adapters.clock(),
     )
     try:
-        if len(text) > MAX_TEXT_LENGTH:
-            _post_single(incoming, adapters)
-            return
         if is_immediate(
             text,
             settings.message_grouping_accept_phrase,
             settings.message_grouping_reject_phrase,
         ):
             _flush_webhook(incoming.chat_id, incoming.update_id, settings, adapters)
-            _post_single(incoming, adapters)
-            return
-        pending = buffer.pending(incoming.chat_id)
-        if must_flush_before(pending, new, settings.message_grouping_max_messages):
-            if not _flush_webhook(
-                incoming.chat_id, incoming.update_id, settings, adapters
-            ):
-                _post_single(incoming, adapters)
+        else:
+            pending = buffer.pending(incoming.chat_id)
+            if not must_flush_before(
+                pending, new, settings.message_grouping_max_messages
+            ) or _flush_webhook(incoming.chat_id, incoming.update_id, settings, adapters):
+                buffer.append(
+                    incoming.chat_id,
+                    new,
+                    settings.message_grouping_window_seconds,
+                    settings.message_grouping_max_wait_seconds,
+                    settings.message_grouping_buffer_ttl_seconds,
+                )
                 return
-        buffer.append(
-            incoming.chat_id,
-            new,
-            settings.message_grouping_window_seconds,
-            settings.message_grouping_max_wait_seconds,
-            settings.message_grouping_buffer_ttl_seconds,
-        )
     except Exception as exc:
         logger.error(
             "grouping_redis_error update_id=%s (%s)",
             incoming.update_id,
             type(exc).__name__,
         )
-        _post_single(incoming, adapters)
+    _post_single(incoming, adapters, forward)
 
 
 def flush_due(settings: Settings, adapters: Adapters) -> int:

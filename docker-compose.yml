@@ -5,7 +5,8 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lazaro}
       POSTGRES_DB: ${POSTGRES_DB:-lazaro}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lazaro}
+      # Sin valor por defecto: compose se niega a arrancar si falta en .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es obligatorio en .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./scripts/db/init:/docker-entrypoint-initdb.d:ro
@@ -13,6 +14,15 @@ services:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       retries: 10
+  # Aplica migrations/*.sql una vez por despliegue (lock + una transacción por
+  # archivo) antes de que arranque cualquier servicio que use la base.
+  migrate:
+    build: {context: ., dockerfile: migrations/Dockerfile}
+    env_file: [.env]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
   redis:
     image: redis:7.2-alpine
     healthcheck:
@@ -39,6 +49,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -55,6 +67,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -69,6 +83,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 10s
@@ -82,6 +98,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 10s
@@ -100,6 +118,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       rag:
         condition: service_healthy
     healthcheck:

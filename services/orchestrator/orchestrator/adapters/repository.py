@@ -1,15 +1,16 @@
 """Persistencia (contactos, historial, eventos, update_id, casos) detrás de un Repository."""
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import threading
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import unquote, urlparse
 
 from lazaro_contracts import LastMessage
@@ -46,7 +47,7 @@ from ..domain import (
     destination_key,
 )
 from ..legacy import LEGACY_CHANNEL
-from ..memory import in_window, session_window
+from ..memory import FACT_KEYS, ContactMemory, in_window, session_window
 from ..privacy import (
     ConversationTexts,
     conversation_text_settings,
@@ -82,6 +83,23 @@ class Repository(Protocol):
         self, entry: InboundEntry, dedup: DedupKey | None
     ) -> bool: ...
 
+    def begin_direct_inbound(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        now: datetime,
+        lease_seconds: float,
+    ) -> int | None:
+        """Fase 2: reserva la fila de un mensaje que se procesa en la petición.
+
+        Devuelve el id (ya en `processing`) o None si el mensaje es duplicado.
+        """
+        ...
+
+    def abandon_inbound(self, row_id: int, dedup: DedupKey | None) -> None:
+        """Fase 2: borra la reserva (y la marca) si el proceso directo falló."""
+        ...
+
     def claim_inbound(
         self, now: datetime, lease_seconds: float
     ) -> InboundQueueRow | None: ...
@@ -115,7 +133,9 @@ class Repository(Protocol):
         self, row_id: int, next_attempt_at: datetime, error: str
     ) -> None: ...
 
-    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None: ...
+    def fail_outbound(
+        self, row_id: int, now: datetime, error: str, status: str = "failed"
+    ) -> None: ...
 
     def list_failed_outbound(self, limit: int) -> list[FailedSend]: ...
 
@@ -576,6 +596,28 @@ class Repository(Protocol):
         now: datetime,
     ) -> None: ...
 
+    # Fase 3: memoria por contacto (canal + id externo), sin login.
+    def get_contact_memory(self, contact_id: str) -> ContactMemory: ...
+
+    def save_contact_memory(
+        self,
+        contact_id: str,
+        facts: Mapping[str, str],
+        summary: str | None,
+        source_message_id: int | None,
+        now: datetime,
+    ) -> None: ...
+
+    def clear_contact_memory(self, contact_id: str) -> None: ...
+
+    def bump_contact_memory_pending(self, contact_id: str, now: datetime) -> int: ...
+
+    def recent_contact_messages(
+        self, contact_id: str, since: datetime | None, limit: int
+    ) -> list[tuple[int, str, str, datetime]]: ...
+
+    def last_session_end(self, contact_id: str) -> datetime | None: ...
+
     def upsert_conversation_summary(
         self,
         session_id: str,
@@ -688,6 +730,18 @@ class Repository(Protocol):
 
     def delete_quick_reply_image(self, image_id: str) -> None: ...
 
+    # gráficos temporales del bot (fase 5)
+    def add_chart_image(
+        self,
+        chart_id: str,
+        contact_id: str,
+        png: bytes,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None: ...
+
+    def get_chart_image(self, chart_id: str, now: datetime) -> bytes | None: ...
+
     # administración y avisos (#42)
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]: ...
 
@@ -791,6 +845,9 @@ class RagStreak:
     state: str
 
 
+_FAKE_MESSAGE_IDS = itertools.count(1)
+
+
 @dataclass
 class StoredMessage:
     contact_id: str
@@ -798,6 +855,8 @@ class StoredMessage:
     text: str
     at: datetime
     canal_id: str | None = None
+    # Fase 3: id creciente como `messages.id` (fuente de los hechos del contacto).
+    id: int = field(default_factory=lambda: next(_FAKE_MESSAGE_IDS), compare=False)
 
 
 @dataclass
@@ -1093,6 +1152,10 @@ class FakeRepository:
         self.identity_audits: list[IdentityAudit] = []
         self.identity_overrides: dict[str, str] = {}
         self.client_memory: dict[str, StoredClientMemory] = {}
+        # Fase 3: contact_id → {clave: (valor, fuente_mensaje_id, actualizado)}
+        self.contact_facts: dict[str, dict[str, tuple[str, int | None, datetime]]] = {}
+        # Fase 3: contact_id → (resumen, mensajes_pendientes, actualizado)
+        self.contact_memory_rows: dict[str, tuple[str, int, datetime]] = {}
         self.conversation_summaries: dict[str, StoredConversationSummary] = {}
         self.case_profiles: dict[str, str | None] = {}
         self.advisor_presence: dict[str, tuple[str, datetime]] = {}
@@ -1103,6 +1166,8 @@ class FakeRepository:
         self.saved_replies: dict[str, SavedReply] = {}
         self.quick_replies: dict[str, QuickReply] = {}
         self.quick_reply_images: dict[str, QuickReplyImage] = {}
+        # Fase 5: id → (contact_id, png, created_at, expires_at)
+        self.chart_images: dict[str, tuple[str, bytes, datetime, datetime]] = {}
         self.text_versions: list[TextVersion] = []
         self.whatsapp_templates: dict[str, WhatsAppTemplate] = {}
         self.expiry_notices: dict[tuple[str, datetime], dict[str, Any]] = {}
@@ -1209,6 +1274,7 @@ class FakeRepository:
             "conversation_key": entry.conversation_key,
             "channel": entry.channel,
             "external_user_id": entry.external_user_id,
+            "external_message_id": entry.external_message_id,
             "payload_kind": entry.payload_kind,
             "payload": dict(entry.payload),
             "status": "pending",
@@ -1221,25 +1287,66 @@ class FakeRepository:
         }
         return row_id
 
+    def _inbox_has_message_locked(self, entry: InboundEntry) -> bool:
+        """Mismo efecto que el índice único (channel, external_message_id)."""
+        if entry.external_message_id is None:
+            return False
+        return any(
+            row["channel"] == entry.channel
+            and row.get("external_message_id") == entry.external_message_id
+            for row in self.inbox.values()
+        )
+
+    def _reserve_inbox_locked(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> int | None:
+        """Dedup + INSERT atómicos; None si el mensaje ya entró antes."""
+        added: DedupKey | None = None
+        if dedup is not None:
+            with self._processed_lock:
+                if self._dedup_exists_locked(dedup):
+                    return None
+                self._add_dedup_locked(dedup)
+                added = dedup
+        if self.fail_inbox_insert or self._inbox_has_message_locked(entry):
+            if added is not None:
+                with self._processed_lock:
+                    self._remove_dedup_locked(added)
+            if self.fail_inbox_insert:
+                raise ServiceUnavailable("inbox no disponible")
+            return None
+        return self._insert_inbox_locked(entry)
+
     def enqueue_inbound(
         self, entry: InboundEntry, dedup: DedupKey | None
     ) -> bool:
         """R1, R4, R5, R7: dedup + INSERT atómicos (o solo INSERT sin dedup)."""
         with self._queue_lock:
-            added: DedupKey | None = None
+            return self._reserve_inbox_locked(entry, dedup) is not None
+
+    def begin_direct_inbound(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        now: datetime,
+        lease_seconds: float,
+    ) -> int | None:
+        with self._queue_lock:
+            row_id = self._reserve_inbox_locked(entry, dedup)
+            if row_id is None:
+                return None
+            row = self.inbox[row_id]
+            row["status"] = "processing"
+            row["attempts"] = 1
+            row["locked_until"] = now + timedelta(seconds=lease_seconds)
+            return row_id
+
+    def abandon_inbound(self, row_id: int, dedup: DedupKey | None) -> None:
+        with self._queue_lock:
+            self.inbox.pop(row_id, None)
             if dedup is not None:
                 with self._processed_lock:
-                    if self._dedup_exists_locked(dedup):
-                        return False
-                    self._add_dedup_locked(dedup)
-                    added = dedup
-            if self.fail_inbox_insert:
-                if added is not None:
-                    with self._processed_lock:
-                        self._remove_dedup_locked(added)
-                raise ServiceUnavailable("inbox no disponible")
-            self._insert_inbox_locked(entry)
-            return True
+                    self._remove_dedup_locked(dedup)
 
     def _claim_locked(
         self,
@@ -1444,12 +1551,14 @@ class FakeRepository:
             row["last_error"] = error
             row["locked_until"] = None
 
-    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None:
+    def fail_outbound(
+        self, row_id: int, now: datetime, error: str, status: str = "failed"
+    ) -> None:
         with self._queue_lock:
             row = self.outbox.get(row_id)
             if row is None:
                 return
-            row["status"] = "failed"
+            row["status"] = status
             row["last_error"] = error
             row["finished_at"] = now
             row["locked_until"] = None
@@ -2578,6 +2687,11 @@ class FakeRepository:
         self.events = [
             event for event in self.events if event.contact_id != contact_id
         ]
+        self.chart_images = {
+            key: value
+            for key, value in self.chart_images.items()
+            if value[0] != contact_id
+        }
         self.case_notes = [
             (note, note_contact_id)
             for note, note_contact_id in self.case_notes
@@ -2613,6 +2727,8 @@ class FakeRepository:
             if key[0] != contact_id
         }
         self.conversation_states.pop(contact_id, None)
+        # Fase 3: en Postgres, ON DELETE CASCADE desde contacts.
+        self.clear_contact_memory(contact_id)
         self.contacts = {
             key: stored for key, stored in self.contacts.items() if stored.id != contact_id
         }
@@ -2696,6 +2812,8 @@ class FakeRepository:
             self.contacts.pop(telegram_user_id, None)
         for contact_id in inactive_ids:
             self.contact_created_at.pop(contact_id, None)
+            # Fase 3: en Postgres, ON DELETE CASCADE desde contacts.
+            self.clear_contact_memory(contact_id)
 
         kept_messages = [message for message in self.messages if message.at >= cutoff]
         deleted_messages = len(self.messages) - len(kept_messages)
@@ -3195,6 +3313,66 @@ class FakeRepository:
             updated_at=now,
         )
 
+    def get_contact_memory(self, contact_id: str) -> ContactMemory:
+        stored = self.contact_facts.get(contact_id, {})
+        facts = tuple(
+            (key, stored[key][0]) for key in FACT_KEYS if key in stored
+        )
+        row = self.contact_memory_rows.get(contact_id)
+        return ContactMemory(facts=facts, summary=row[0] if row else "")
+
+    def save_contact_memory(
+        self,
+        contact_id: str,
+        facts: Mapping[str, str],
+        summary: str | None,
+        source_message_id: int | None,
+        now: datetime,
+    ) -> None:
+        unknown = set(facts) - set(FACT_KEYS)
+        if unknown:  # el CHECK de la tabla real rechaza la fila
+            raise ValueError(f"clave no permitida: {sorted(unknown)}")
+        stored = self.contact_facts.setdefault(contact_id, {})
+        for key, value in facts.items():
+            stored[key] = (value, source_message_id, now)
+        previous = self.contact_memory_rows.get(contact_id)
+        resumen = summary if summary is not None else (previous[0] if previous else "")
+        self.contact_memory_rows[contact_id] = (resumen, 0, now)
+
+    def clear_contact_memory(self, contact_id: str) -> None:
+        self.contact_facts.pop(contact_id, None)
+        self.contact_memory_rows.pop(contact_id, None)
+
+    def bump_contact_memory_pending(self, contact_id: str, now: datetime) -> int:
+        resumen, pending, updated = self.contact_memory_rows.get(
+            contact_id, ("", 0, now)
+        )
+        self.contact_memory_rows[contact_id] = (resumen, pending + 1, updated)
+        return pending + 1
+
+    def recent_contact_messages(
+        self, contact_id: str, since: datetime | None, limit: int
+    ) -> list[tuple[int, str, str, datetime]]:
+        selected = [
+            message
+            for message in self.messages
+            if message.contact_id == contact_id
+            and (since is None or message.at > since)
+        ]
+        selected.sort(key=lambda message: message.id)
+        return [
+            (message.id, message.role, message.text, message.at)
+            for message in selected[-limit:]
+        ] if limit > 0 else []
+
+    def last_session_end(self, contact_id: str) -> datetime | None:
+        ends = [
+            session.ended_at
+            for session in self.client_sessions.values()
+            if session.contact_id == contact_id and session.ended_at is not None
+        ]
+        return max(ends) if ends else None
+
     def upsert_conversation_summary(
         self,
         session_id: str,
@@ -3350,6 +3528,10 @@ class FakeRepository:
             }
 
             deleted_memory = 1 if self.client_memory.pop(request.profile_id, None) else 0
+            deleted_contact_facts = 0
+            for contact_id in session_contact_ids:
+                deleted_contact_facts += len(self.contact_facts.get(contact_id, {}))
+                self.clear_contact_memory(contact_id)
 
             self.privacy_consents = kept_consents
 
@@ -3377,6 +3559,7 @@ class FakeRepository:
                 "messages": deleted_messages,
                 "conversation_summaries": deleted_summaries,
                 "client_memory": deleted_memory,
+                "contact_facts": deleted_contact_facts,
                 "case_notes": deleted_notes,
                 "privacy_consents": deleted_consents,
                 "consentimientos_cliente": deleted_client_consents,
@@ -3645,6 +3828,27 @@ class FakeRepository:
 
     def delete_quick_reply_image(self, image_id: str) -> None:
         self.quick_reply_images.pop(image_id, None)
+
+    def add_chart_image(
+        self,
+        chart_id: str,
+        contact_id: str,
+        png: bytes,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        self.chart_images = {
+            key: value
+            for key, value in self.chart_images.items()
+            if value[3] >= created_at
+        }
+        self.chart_images[chart_id] = (contact_id, bytes(png), created_at, expires_at)
+
+    def get_chart_image(self, chart_id: str, now: datetime) -> bytes | None:
+        stored = self.chart_images.get(chart_id)
+        if stored is None or stored[3] < now:
+            return None
+        return stored[1]
 
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         merged = dict(self.identity_overrides)
@@ -3968,303 +4172,7 @@ class FakeRepository:
 
 # Turno global para crear el esquema: la misma clave en todos los servicios que
 # comparten la base, para que nunca ejecuten DDL a la vez. Se libera al commit.
-SCHEMA_LOCK_SQL = "SELECT pg_advisory_xact_lock(7301984)"
-
-_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS contacts ("
-    "id TEXT PRIMARY KEY, channel TEXT NOT NULL, "
-    "external_user_id TEXT, external_chat_id TEXT, "
-    "telegram_user_id BIGINT UNIQUE, "
-    "chat_id BIGINT, created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS messages ("
-    "id BIGSERIAL PRIMARY KEY, contact_id TEXT NOT NULL, role TEXT NOT NULL, "
-    "text TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS events ("
-    "id BIGSERIAL PRIMARY KEY, contact_id TEXT NOT NULL, type TEXT NOT NULL, "
-    "reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS tool_calls ("
-    "id BIGSERIAL PRIMARY KEY, contact_id TEXT NOT NULL, profile_id TEXT, "
-    "state TEXT NOT NULL, tool TEXT NOT NULL, origin TEXT NOT NULL, "
-    "decision TEXT NOT NULL, result TEXT NOT NULL, args_sha256 TEXT NOT NULL, "
-    "detail TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS suppression_requests ("
-    "id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, contact_id TEXT NOT NULL, "
-    "channel TEXT NOT NULL, status TEXT NOT NULL, "
-    "case_id TEXT, created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS processed_messages ("
-    "channel TEXT NOT NULL, external_message_id TEXT NOT NULL, "
-    "PRIMARY KEY (channel, external_message_id))",
-    "CREATE TABLE IF NOT EXISTS processed_updates ("
-    "update_id BIGINT PRIMARY KEY)",
-    "CREATE TABLE IF NOT EXISTS case_links ("
-    "case_id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS auto_handover_outcomes ("
-    "contact_id TEXT NOT NULL, update_id BIGINT NOT NULL, outcome TEXT NOT NULL, "
-    "at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
-    "PRIMARY KEY (contact_id, update_id))",
-    "CREATE TABLE IF NOT EXISTS auto_handover_streaks ("
-    "contact_id TEXT PRIMARY KEY, failure_count INTEGER NOT NULL, "
-    "state TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS profiles ("
-    "id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, role TEXT NOT NULL, "
-    "password_hash TEXT NOT NULL, "
-    "telegram_user_id BIGINT UNIQUE, created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS link_tokens ("
-    "token_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), "
-    "expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ)",
-    "CREATE TABLE IF NOT EXISTS admin_sessions ("
-    "token_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), "
-    "csrf_token TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, "
-    "enroll_only BOOLEAN NOT NULL DEFAULT FALSE)",
-    "CREATE TABLE IF NOT EXISTS staff_two_factor ("
-    "profile_id TEXT PRIMARY KEY REFERENCES profiles(id), "
-    "secret_ciphertext TEXT NOT NULL, enabled_at TIMESTAMPTZ, "
-    "last_used_step BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS staff_recovery_codes ("
-    "code_hash TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), "
-    "created_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ)",
-    "CREATE TABLE IF NOT EXISTS admin_login_attempts ("
-    "id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, ip TEXT NOT NULL, "
-    "at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS query_categories ("
-    "id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, name TEXT NOT NULL, "
-    "keywords TEXT NOT NULL, active BOOLEAN NOT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS app_settings ("
-    "key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS db_query_audit ("
-    "id BIGSERIAL PRIMARY KEY, profile_id TEXT, telegram_user_id BIGINT NOT NULL, "
-    "status TEXT NOT NULL, views TEXT NOT NULL, row_count INTEGER NOT NULL, "
-    "sql_sha256 TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS privacy_consents ("
-    "id BIGSERIAL PRIMARY KEY, channel TEXT NOT NULL, "
-    "external_user_id TEXT, telegram_user_id BIGINT, "
-    "notice_version TEXT NOT NULL, notice_sha256 TEXT NOT NULL, "
-    "accepted_at TIMESTAMPTZ, result TEXT, evidence_type TEXT, "
-    "external_message_id TEXT, button_id TEXT, occurred_at TIMESTAMPTZ)",
-    "CREATE TABLE IF NOT EXISTS conversation_states ("
-    "contact_id TEXT PRIMARY KEY, state TEXT NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS privacy_purge_runs ("
-    "id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ NOT NULL, "
-    "cutoff TIMESTAMPTZ NOT NULL, counts JSONB NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS client_credentials ("
-    "profile_id TEXT PRIMARY KEY REFERENCES profiles(id), "
-    "valid_from TIMESTAMPTZ NOT NULL, valid_until TIMESTAMPTZ NOT NULL, "
-    "revoked_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS login_links ("
-    "token_hash TEXT PRIMARY KEY, contact_id TEXT NOT NULL, "
-    "channel TEXT NOT NULL, external_chat_id TEXT NOT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, "
-    "used_at TIMESTAMPTZ)",
-    "CREATE TABLE IF NOT EXISTS client_sessions ("
-    "id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), "
-    "contact_id TEXT NOT NULL, started_at TIMESTAMPTZ NOT NULL, "
-    "last_activity_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ, "
-    "end_reason TEXT)",
-    "CREATE TABLE IF NOT EXISTS identity_login_attempts ("
-    "id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, ip TEXT NOT NULL, "
-    "at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS identity_audit ("
-    "id BIGSERIAL PRIMARY KEY, profile_id TEXT, contact_id TEXT, "
-    "action TEXT NOT NULL, reason TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS client_memory ("
-    "profile_id TEXT PRIMARY KEY, items JSONB NOT NULL, source_session_id TEXT, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS conversation_summaries ("
-    "session_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, contact_id TEXT NOT NULL, "
-    "channel TEXT NOT NULL, summary TEXT NOT NULL, trigger TEXT NOT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS advisor_presence ("
-    "profile_id TEXT PRIMARY KEY, status TEXT NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS panel_audit ("
-    "id BIGSERIAL PRIMARY KEY, actor_profile_id TEXT NOT NULL, "
-    "actor_role TEXT NOT NULL, action TEXT NOT NULL, case_id TEXT, request_id TEXT, "
-    "target TEXT, result TEXT NOT NULL, at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS text_versions ("
-    "id BIGSERIAL PRIMARY KEY, field TEXT NOT NULL, version INTEGER NOT NULL, "
-    "value TEXT NOT NULL, created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
-    "UNIQUE (field, version))",
-    "CREATE TABLE IF NOT EXISTS whatsapp_templates ("
-    "name TEXT PRIMARY KEY, purpose TEXT NOT NULL, language TEXT NOT NULL, "
-    "variables INTEGER NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, "
-    "approved_by TEXT, approved_at TIMESTAMPTZ, "
-    "updated_by TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS credential_expiry_notices ("
-    "profile_id TEXT NOT NULL, valid_until TIMESTAMPTZ NOT NULL, "
-    "status TEXT NOT NULL, method TEXT, attempts INTEGER NOT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, "
-    "PRIMARY KEY (profile_id, valid_until))",
-    "CREATE TABLE IF NOT EXISTS advisor_roster_sync ("
-    "singleton_id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, "
-    "status TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS case_notes ("
-    "id TEXT PRIMARY KEY, case_id TEXT NOT NULL, contact_id TEXT NOT NULL, "
-    "author_profile_id TEXT NOT NULL, body TEXT NOT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS case_tags ("
-    "id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, "
-    "active BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS case_tag_assignments ("
-    "case_id TEXT NOT NULL, tag_id TEXT NOT NULL, contact_id TEXT NOT NULL, "
-    "assigned_by TEXT NOT NULL, assigned_at TIMESTAMPTZ NOT NULL, "
-    "PRIMARY KEY (case_id, tag_id))",
-    "CREATE TABLE IF NOT EXISTS saved_replies ("
-    "id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, "
-    "active BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS quick_replies ("
-    "id TEXT PRIMARY KEY, name TEXT NOT NULL, triggers JSONB NOT NULL, "
-    "blocks JSONB NOT NULL, image_id TEXT, active BOOLEAN NOT NULL, "
-    "priority INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
-    "updated_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS quick_reply_images ("
-    "id TEXT PRIMARY KEY, content_type TEXT NOT NULL, data BYTEA NOT NULL, "
-    "size INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS panel_events ("
-    "id BIGSERIAL PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS inbox ("
-    "id BIGSERIAL PRIMARY KEY, conversation_key TEXT NOT NULL, "
-    "channel TEXT NOT NULL, external_user_id TEXT NOT NULL, "
-    "payload_kind TEXT NOT NULL, payload JSONB NOT NULL, "
-    "status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
-    "next_attempt_at TIMESTAMPTZ NOT NULL, locked_until TIMESTAMPTZ NULL, "
-    "last_error TEXT NULL, created_at TIMESTAMPTZ NOT NULL, "
-    "finished_at TIMESTAMPTZ NULL)",
-    "CREATE TABLE IF NOT EXISTS outbox ("
-    "id BIGSERIAL PRIMARY KEY, contact_id TEXT NULL, destination_key TEXT NOT NULL, "
-    "channel TEXT NOT NULL, destination TEXT NOT NULL, kind TEXT NOT NULL, "
-    "blocks JSONB NOT NULL, status TEXT NOT NULL, "
-    "attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL, "
-    "locked_until TIMESTAMPTZ NULL, last_error TEXT NULL, "
-    "created_at TIMESTAMPTZ NOT NULL, finished_at TIMESTAMPTZ NULL)",
-    "CREATE TABLE IF NOT EXISTS identidades_cliente ("
-    "cliente_id TEXT NOT NULL, canal_id TEXT NOT NULL, id_externo TEXT NOT NULL, "
-    "vinculado_en TIMESTAMPTZ NOT NULL, PRIMARY KEY (canal_id, id_externo))",
-    "CREATE TABLE IF NOT EXISTS consentimientos_cliente ("
-    "cliente_id TEXT NOT NULL, notice_version TEXT NOT NULL, "
-    "notice_sha256 TEXT NOT NULL, aceptado_en TIMESTAMPTZ NOT NULL, "
-    "canal_id TEXT NOT NULL, PRIMARY KEY (cliente_id, notice_version))",
-)
-
-_INDEXES = (
-    "CREATE INDEX IF NOT EXISTS admin_login_attempts_user_at "
-    "ON admin_login_attempts (username, at)",
-    "CREATE INDEX IF NOT EXISTS admin_login_attempts_ip_at "
-    "ON admin_login_attempts (ip, at)",
-    "CREATE INDEX IF NOT EXISTS privacy_consents_user_version "
-    "ON privacy_consents (telegram_user_id, notice_version)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS client_sessions_one_active_profile "
-    "ON client_sessions (profile_id) WHERE ended_at IS NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS client_sessions_one_active_contact "
-    "ON client_sessions (contact_id) WHERE ended_at IS NULL",
-    "CREATE INDEX IF NOT EXISTS login_links_contact "
-    "ON login_links (contact_id)",
-    "CREATE INDEX IF NOT EXISTS identity_login_attempts_user_at "
-    "ON identity_login_attempts (username, at)",
-    "CREATE INDEX IF NOT EXISTS identity_login_attempts_ip_at "
-    "ON identity_login_attempts (ip, at)",
-    "CREATE INDEX IF NOT EXISTS tool_calls_at_idx ON tool_calls (at)",
-    "CREATE INDEX IF NOT EXISTS tool_calls_contact_idx ON tool_calls (contact_id)",
-    "CREATE INDEX IF NOT EXISTS conversation_summaries_profile "
-    "ON conversation_summaries (profile_id, updated_at)",
-    "CREATE INDEX IF NOT EXISTS conversation_summaries_updated "
-    "ON conversation_summaries (updated_at)",
-    "CREATE INDEX IF NOT EXISTS client_sessions_profile "
-    "ON client_sessions (profile_id)",
-    "CREATE INDEX IF NOT EXISTS panel_audit_at ON panel_audit (at)",
-    "CREATE INDEX IF NOT EXISTS suppression_requests_status_created "
-    "ON suppression_requests (status, created_at)",
-    "CREATE INDEX IF NOT EXISTS whatsapp_templates_purpose "
-    "ON whatsapp_templates (purpose, status)",
-    "CREATE INDEX IF NOT EXISTS events_type_at ON events (type, at)",
-    "CREATE INDEX IF NOT EXISTS case_links_created ON case_links (created_at)",
-    "CREATE INDEX IF NOT EXISTS case_notes_case ON case_notes (case_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS case_notes_contact ON case_notes (contact_id)",
-    "CREATE INDEX IF NOT EXISTS case_tag_assignments_tag "
-    "ON case_tag_assignments (tag_id)",
-    "CREATE INDEX IF NOT EXISTS case_tag_assignments_contact "
-    "ON case_tag_assignments (contact_id)",
-    "CREATE INDEX IF NOT EXISTS panel_events_created "
-    "ON panel_events (created_at)",
-    "CREATE INDEX IF NOT EXISTS staff_recovery_codes_profile "
-    "ON staff_recovery_codes (profile_id)",
-    "CREATE INDEX IF NOT EXISTS inbox_conversation ON inbox (conversation_key, id)",
-    "CREATE INDEX IF NOT EXISTS inbox_created ON inbox (created_at)",
-    "CREATE INDEX IF NOT EXISTS outbox_destination ON outbox (destination_key, id)",
-    "CREATE INDEX IF NOT EXISTS outbox_status ON outbox (status, created_at)",
-    "CREATE INDEX IF NOT EXISTS identidades_cliente_cliente "
-    "ON identidades_cliente (cliente_id)",
-)
-
-# Migración aditiva e idempotente para instalaciones anteriores a #36. Se ejecuta
-# después de `_SCHEMA`/`_INDEXES` y nunca cambia ids, mensajes, casos ni fechas.
-_MIGRATIONS = (
-    "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS channel TEXT",
-    "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS external_user_id TEXT",
-    "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS external_chat_id TEXT",
-    "ALTER TABLE contacts ALTER COLUMN telegram_user_id DROP NOT NULL",
-    "ALTER TABLE contacts ALTER COLUMN chat_id DROP NOT NULL",
-    f"UPDATE contacts SET channel = '{LEGACY_CHANNEL}' WHERE channel IS NULL",
-    "UPDATE contacts SET external_user_id = CAST(telegram_user_id AS TEXT) "
-    "WHERE external_user_id IS NULL AND telegram_user_id IS NOT NULL",
-    "UPDATE contacts SET external_chat_id = CAST(chat_id AS TEXT) "
-    "WHERE external_chat_id IS NULL AND chat_id IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS contacts_channel_external_user "
-    "ON contacts (channel, external_user_id)",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS channel TEXT",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS external_user_id TEXT",
-    "ALTER TABLE privacy_consents ALTER COLUMN telegram_user_id DROP NOT NULL",
-    f"UPDATE privacy_consents SET channel = '{LEGACY_CHANNEL}' WHERE channel IS NULL",
-    "UPDATE privacy_consents SET external_user_id = CAST(telegram_user_id AS TEXT) "
-    "WHERE external_user_id IS NULL AND telegram_user_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS privacy_consents_channel_user_version "
-    "ON privacy_consents (channel, external_user_id, notice_version)",
-    "ALTER TABLE privacy_consents ALTER COLUMN accepted_at DROP NOT NULL",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS result TEXT",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS evidence_type TEXT",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS external_message_id TEXT",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS button_id TEXT",
-    "ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ",
-    "UPDATE privacy_consents SET result = 'accepted' WHERE result IS NULL",
-    "UPDATE privacy_consents SET evidence_type = 'legacy' WHERE evidence_type IS NULL",
-    "UPDATE privacy_consents SET occurred_at = accepted_at "
-    "WHERE occurred_at IS NULL AND accepted_at IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS suppression_requests_one_pending "
-    "ON suppression_requests (profile_id) WHERE status = 'pending'",
-    "ALTER TABLE case_links ADD COLUMN IF NOT EXISTS profile_id TEXT",
-    "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ",
-    "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS executed_by TEXT",
-    "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS removed_counts JSONB",
-    "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS result_note TEXT",
-    "ALTER TABLE suppression_requests ADD COLUMN IF NOT EXISTS notification_result TEXT",
-    # segundo factor del panel (#54)
-    "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS enroll_only "
-    "BOOLEAN NOT NULL DEFAULT FALSE",
-    # #73: ID público de cliente. El índice único permite NULL en perfiles de staff.
-    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS public_id TEXT",
-    "CREATE UNIQUE INDEX IF NOT EXISTS profiles_public_id_key "
-    "ON profiles (public_id)",
-    # #77: correo y teléfono del perfil, opcionales y limpiados por retención/supresión.
-    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT",
-    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS phone TEXT",
-    "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS contact_updated_at TIMESTAMPTZ",
-    # #77: índices no únicos; la unicidad de correo/teléfono se decide en la aplicación.
-    "CREATE INDEX IF NOT EXISTS profiles_email ON profiles (email)",
-    "CREATE INDEX IF NOT EXISTS profiles_phone ON profiles (phone)",
-    # #65: id de canal explícito en contactos y mensajes; se escribe en paralelo a
-    # `contacts.channel` (que sigue siendo la fuente de lectura). Idempotente.
-    "ALTER TABLE contacts ADD COLUMN IF NOT EXISTS canal_id TEXT",
-    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS canal_id TEXT",
-    "UPDATE contacts SET canal_id = channel WHERE canal_id IS NULL",
-    "UPDATE messages SET canal_id = c.channel FROM contacts c "
-    "WHERE messages.contact_id = c.id AND messages.canal_id IS NULL",
-    "CREATE INDEX IF NOT EXISTS messages_canal_id ON messages (canal_id)",
-)
+# El esquema vive en `migrations/` y lo aplica el runner en el despliegue.
 
 
 _UNIQUE_VIOLATION_SQLSTATE = "23505"
@@ -4366,7 +4274,6 @@ class PostgresRepository:
         database_url: str,
         connect: Callable[[], Any] | None = None,
         new_id: Callable[[], str] | None = None,
-        run_migrations: bool | None = None,
         connect_health: Callable[[float], Any] | None = None,
         panel_events_retention_hours: int = 24,
     ) -> None:
@@ -4377,11 +4284,6 @@ class PostgresRepository:
         )
         self._panel_events_retention_hours = panel_events_retention_hours
         self._new_id = new_id or (lambda: uuid.uuid4().hex)
-        # En producción (conexión real) se aplica el esquema y la migración; las
-        # conexiones falsas de los tests pueden activarla para probar el DDL.
-        self._run_migrations = (
-            connect is None if run_migrations is None else run_migrations
-        )
         self._conn: Any = None
         self._last_used = 0.0
         self._lock = threading.Lock()
@@ -4402,26 +4304,10 @@ class PostgresRepository:
         ):
             self._discard_connection()
         if self._conn is None:
-            conn = self._connect()
-            cur = conn.cursor()
-            # El orquestador y sus workers arrancan a la vez y crean el mismo
-            # esquema: sin turno, Postgres detecta un deadlock y el proceso cae.
-            cur.execute(SCHEMA_LOCK_SQL)
-            for statement in _SCHEMA:
-                cur.execute(statement)
-            for statement in _INDEXES:
-                cur.execute(statement)
-            if self._run_migrations:
-                for statement in _MIGRATIONS:
-                    cur.execute(statement)
-            conn.commit()
-            self._conn = conn
+            # Sin DDL al conectar: el esquema lo crea `migrations/runner.py`.
+            self._conn = self._connect()
         self._last_used = time.monotonic()
         return self._conn
-
-    def ensure_schema(self) -> None:
-        """Crea el esquema y aplica la migración idempotente de #36."""
-        self._connection()
 
     def health_check(self, timeout_seconds: float) -> None:
         """Conexión independiente y acotada; solo `SELECT 1`, sin esquema ni migraciones."""
@@ -4530,10 +4416,19 @@ class PostgresRepository:
         )
         return bool(cur.fetchall())
 
-    def enqueue_inbound(
-        self, entry: InboundEntry, dedup: DedupKey | None
-    ) -> bool:
-        """R1, R4, R5, R7: marca de dedup e INSERT de inbox en una transacción."""
+    def _reserve_inbox(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        status: str,
+        attempts: int,
+        locked_until: datetime | None,
+    ) -> int | None:
+        """Marca de dedup + INSERT en una transacción; None si ya existía.
+
+        El índice único (channel, external_message_id) de la migración 0002 es la
+        barrera aunque Redis falle o el mensaje no tenga clave de dedup (R7).
+        """
         now = datetime.now(timezone.utc)
         with self._lock:
             conn = self._connection()
@@ -4541,25 +4436,75 @@ class PostgresRepository:
             try:
                 if dedup is not None and not self._mark_dedup_cursor(cur, dedup):
                     conn.rollback()
-                    return False
+                    return None
                 cur.execute(
                     "INSERT INTO inbox (conversation_key, channel, "
-                    "external_user_id, payload_kind, payload, status, attempts, "
-                    "next_attempt_at, created_at) "
-                    "VALUES (%s, %s, %s, %s, CAST(%s AS JSONB), 'pending', 0, "
-                    "%s, %s)",
+                    "external_user_id, external_message_id, payload_kind, payload, "
+                    "status, attempts, next_attempt_at, locked_until, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, CAST(%s AS JSONB), %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (channel, external_message_id) DO NOTHING "
+                    "RETURNING id",
                     (
                         entry.conversation_key,
                         entry.channel,
                         entry.external_user_id,
+                        entry.external_message_id,
                         entry.payload_kind,
                         json.dumps(entry.payload),
+                        status,
+                        attempts,
                         now,
+                        locked_until,
                         now,
                     ),
                 )
+                rows = cur.fetchall()
+                if not rows:
+                    conn.rollback()  # revierte también la marca de dedup
+                    return None
                 conn.commit()
-                return True
+                return int(rows[0][0])
+            except Exception as exc:
+                conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def enqueue_inbound(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> bool:
+        """R1, R4, R5, R7: marca de dedup e INSERT de inbox en una transacción."""
+        return self._reserve_inbox(entry, dedup, "pending", 0, None) is not None
+
+    def begin_direct_inbound(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        now: datetime,
+        lease_seconds: float,
+    ) -> int | None:
+        return self._reserve_inbox(
+            entry, dedup, "processing", 1, now + timedelta(seconds=lease_seconds)
+        )
+
+    def abandon_inbound(self, row_id: int, dedup: DedupKey | None) -> None:
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM inbox WHERE id = %s", (row_id,))
+                if dedup is not None and dedup.kind == "message":
+                    cur.execute(
+                        "DELETE FROM processed_messages "
+                        "WHERE channel = %s AND external_message_id = %s",
+                        (dedup.channel, dedup.external_message_id),
+                    )
+                elif dedup is not None:
+                    cur.execute(
+                        "DELETE FROM processed_updates WHERE update_id = %s",
+                        (dedup.update_id,),
+                    )
+                conn.commit()
             except Exception as exc:
                 conn.rollback()
                 if is_connection_error(exc):
@@ -4748,11 +4693,14 @@ class PostgresRepository:
             (next_attempt_at, error, row_id),
         )
 
-    def fail_outbound(self, row_id: int, now: datetime, error: str) -> None:
+    def fail_outbound(
+        self, row_id: int, now: datetime, error: str, status: str = "failed"
+    ) -> None:
+        # Fase 7: `status` es 'failed' o 'fuera_de_ventana' (estados terminales).
         self._run(
-            "UPDATE outbox SET status = 'failed', last_error = %s, "
+            "UPDATE outbox SET status = %s, last_error = %s, "
             "finished_at = %s, locked_until = NULL WHERE id = %s",
-            (error, now, row_id),
+            (status, error, now, row_id),
         )
 
     def list_failed_outbound(self, limit: int) -> list[FailedSend]:
@@ -6219,6 +6167,9 @@ class PostgresRepository:
                 cur.execute("DELETE FROM messages WHERE contact_id = %s", (contact_id,))
                 cur.execute("DELETE FROM events WHERE contact_id = %s", (contact_id,))
                 cur.execute(
+                    "DELETE FROM chart_images WHERE contact_id = %s", (contact_id,)
+                )
+                cur.execute(
                     "DELETE FROM case_notes WHERE contact_id = %s", (contact_id,)
                 )
                 cur.execute(
@@ -6824,6 +6775,128 @@ class PostgresRepository:
             (profile_id, json.dumps(list(items), ensure_ascii=False), source_session_id, now),
         )
 
+    def get_contact_memory(self, contact_id: str) -> ContactMemory:
+        rows = self._run(
+            "SELECT clave, valor FROM contact_facts WHERE contact_id = %s",
+            (contact_id,),
+            fetch=True,
+        )
+        stored = {str(row[0]): str(row[1]) for row in rows}
+        summary_rows = self._run(
+            "SELECT resumen FROM contact_memory WHERE contact_id = %s",
+            (contact_id,),
+            fetch=True,
+        )
+        return ContactMemory(
+            facts=tuple((key, stored[key]) for key in FACT_KEYS if key in stored),
+            summary=str(summary_rows[0][0]) if summary_rows else "",
+        )
+
+    def save_contact_memory(
+        self,
+        contact_id: str,
+        facts: Mapping[str, str],
+        summary: str | None,
+        source_message_id: int | None,
+        now: datetime,
+    ) -> None:
+        """Hechos y resumen en una transacción; reinicia los mensajes pendientes."""
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                for key, value in facts.items():
+                    cur.execute(
+                        "INSERT INTO contact_facts "
+                        "(contact_id, clave, valor, fuente_mensaje_id, actualizado) "
+                        "VALUES (%s, %s, %s, %s, %s) "
+                        "ON CONFLICT (contact_id, clave) DO UPDATE SET "
+                        "valor = EXCLUDED.valor, "
+                        "fuente_mensaje_id = EXCLUDED.fuente_mensaje_id, "
+                        "actualizado = EXCLUDED.actualizado",
+                        (contact_id, key, value, source_message_id, now),
+                    )
+                cur.execute(
+                    "INSERT INTO contact_memory "
+                    "(contact_id, resumen, mensajes_pendientes, actualizado) "
+                    "VALUES (%s, COALESCE(CAST(%s AS TEXT), ''), 0, %s) "
+                    "ON CONFLICT (contact_id) DO UPDATE SET "
+                    "resumen = COALESCE(CAST(%s AS TEXT), contact_memory.resumen), "
+                    "mensajes_pendientes = 0, actualizado = EXCLUDED.actualizado",
+                    (contact_id, summary, now, summary),
+                )
+                conn.commit()
+            except Exception as exc:
+                with suppress(Exception):
+                    conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def clear_contact_memory(self, contact_id: str) -> None:
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "DELETE FROM contact_facts WHERE contact_id = %s", (contact_id,)
+                )
+                cur.execute(
+                    "DELETE FROM contact_memory WHERE contact_id = %s", (contact_id,)
+                )
+                conn.commit()
+            except Exception as exc:
+                with suppress(Exception):
+                    conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def bump_contact_memory_pending(self, contact_id: str, now: datetime) -> int:
+        rows = self._run(
+            "INSERT INTO contact_memory "
+            "(contact_id, resumen, mensajes_pendientes, actualizado) "
+            "VALUES (%s, '', 1, %s) "
+            "ON CONFLICT (contact_id) DO UPDATE SET "
+            "mensajes_pendientes = contact_memory.mensajes_pendientes + 1 "
+            "RETURNING mensajes_pendientes",
+            (contact_id, now),
+            fetch=True,
+        )
+        return int(rows[0][0])
+
+    def recent_contact_messages(
+        self, contact_id: str, since: datetime | None, limit: int
+    ) -> list[tuple[int, str, str, datetime]]:
+        if limit <= 0:
+            return []
+        if since is None:
+            rows = self._run(
+                "SELECT id, role, text, at FROM ("
+                "SELECT id, role, text, at FROM messages WHERE contact_id = %s "
+                "ORDER BY id DESC LIMIT %s) recent ORDER BY id",
+                (contact_id, limit),
+                fetch=True,
+            )
+        else:
+            rows = self._run(
+                "SELECT id, role, text, at FROM ("
+                "SELECT id, role, text, at FROM messages "
+                "WHERE contact_id = %s AND at > %s "
+                "ORDER BY id DESC LIMIT %s) recent ORDER BY id",
+                (contact_id, since, limit),
+                fetch=True,
+            )
+        return [(int(row[0]), row[1], row[2], row[3]) for row in rows]
+
+    def last_session_end(self, contact_id: str) -> datetime | None:
+        rows = self._run(
+            "SELECT max(ended_at) FROM client_sessions WHERE contact_id = %s",
+            (contact_id,),
+            fetch=True,
+        )
+        return rows[0][0] if rows else None
+
     def upsert_conversation_summary(
         self,
         session_id: str,
@@ -6953,6 +7026,20 @@ class PostgresRepository:
                 )
                 deleted_memory = len(list(cur.fetchall()))
 
+                deleted_contact_facts = 0
+                if session_contact_ids:
+                    # Fase 3: memoria de los contactos con los que el cliente habló.
+                    cur.execute(
+                        "DELETE FROM contact_facts WHERE contact_id = ANY(%s) "
+                        "RETURNING contact_id",
+                        (session_contact_ids,),
+                    )
+                    deleted_contact_facts = len(list(cur.fetchall()))
+                    cur.execute(
+                        "DELETE FROM contact_memory WHERE contact_id = ANY(%s)",
+                        (session_contact_ids,),
+                    )
+
                 cur.execute(
                     "DELETE FROM privacy_consents p "
                     "WHERE EXISTS (SELECT 1 FROM contacts c "
@@ -6989,6 +7076,7 @@ class PostgresRepository:
                     "messages": deleted_messages,
                     "conversation_summaries": deleted_summaries,
                     "client_memory": deleted_memory,
+                    "contact_facts": deleted_contact_facts,
                     "case_notes": deleted_notes,
                     "privacy_consents": deleted_consents,
                     "consentimientos_cliente": deleted_client_consents,
@@ -7546,6 +7634,34 @@ class PostgresRepository:
             "DELETE FROM quick_reply_images WHERE id = %s",
             (image_id,),
         )
+
+    def add_chart_image(
+        self,
+        chart_id: str,
+        contact_id: str,
+        png: bytes,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        # Fase 5: cada gráfico nuevo limpia los vencidos; no hace falta un cron.
+        self._run(
+            "DELETE FROM chart_images WHERE expires_at < %s", (created_at,)
+        )
+        self._run(
+            "INSERT INTO chart_images (id, contact_id, png, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (chart_id, contact_id, bytes(png), created_at, expires_at),
+        )
+
+    def get_chart_image(self, chart_id: str, now: datetime) -> bytes | None:
+        rows = self._run(
+            "SELECT png FROM chart_images WHERE id = %s AND expires_at >= %s",
+            (chart_id, now),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        return bytes(rows[0][0])
 
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         patterns = [f"{prefix}%" for prefix in prefixes]

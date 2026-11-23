@@ -6,8 +6,8 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
-from lazaro_contracts import MessageRequest
-from orchestrator.domain import process_message
+from lazaro_contracts import MessageRequest, normalize_legacy_message
+from orchestrator.domain import process_channel_message
 from orchestrator.privacy import PRIVACY_ACCEPT_BUTTON
 
 FIXED_NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -220,7 +220,7 @@ def test_personal_routes_work_without_privacy_configuration(env_factory):
 
 
 def test_gate_direct_call_blocks_before_contact(env_factory):
-    """R4, R8: process_message no crea contacto cuando la puerta descarta el mensaje."""
+    """R4, R8: el flujo único no crea contacto cuando la puerta descarta el mensaje."""
     env = env_factory(**_empty_privacy())
     request = MessageRequest(
         update_id=1,
@@ -229,5 +229,5 @@ def test_gate_direct_call_blocks_before_contact(env_factory):
         text="hola",
         received_at=FIXED_NOW,
     )
-    process_message(request, env.settings, env.adapters)
+    process_channel_message(normalize_legacy_message(request), env.settings, env.adapters)
     assert env.repo.contacts == {}

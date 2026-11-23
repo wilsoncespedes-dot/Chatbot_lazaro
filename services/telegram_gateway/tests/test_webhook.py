@@ -93,7 +93,10 @@ def test_new_text_update_is_forwarded_with_contract_fields(env):
     assert r.status_code == 200
     assert len(env.orchestrator.received) == 1
     m = env.orchestrator.received[0]
-    assert (m.update_id, m.telegram_user_id, m.chat_id, m.text) == (10, 55, 77, "hola")
+    # Fase 2: el adaptador entrega el mensaje canónico (NormalizedMessage).
+    assert (
+        m.channel, m.external_message_id, m.external_user_id, m.external_chat_id, m.kind, m.text
+    ) == ("telegram", "10", "55", "77", "text", "hola")
     assert m.received_at == FIXED_NOW and m.received_at.tzinfo is not None
 
 
@@ -102,7 +105,7 @@ def test_http_orchestrator_sends_service_token_header(monkeypatch):
     import httpx
 
     from telegram_gateway.adapters.orchestrator import HttpOrchestratorClient
-    from telegram_gateway.domain import build_message_request, extract_incoming
+    from telegram_gateway.domain import extract_incoming, normalize_incoming
 
     calls = {}
 
@@ -114,7 +117,7 @@ def test_http_orchestrator_sends_service_token_header(monkeypatch):
     monkeypatch.setattr(httpx, "post", fake_post)
     incoming = extract_incoming(text_update())
     HttpOrchestratorClient("http://orch:8000/", SERVICE_TOKEN).post_message(
-        build_message_request(incoming, FIXED_NOW)
+        normalize_incoming(incoming, FIXED_NOW)
     )
     assert calls["url"] == "http://orch:8000/messages"
     assert calls["headers"]["X-Service-Token"] == SERVICE_TOKEN
@@ -134,7 +137,8 @@ def test_duplicate_non_text_update_sends_nothing_twice(env):
     upd = {"update_id": 5, "message": {"from": {"id": 1}, "chat": {"id": 2}, "sticker": {}}}
     env.client.post(URL, json=upd, headers=HOOK)
     env.client.post(URL, json=upd, headers=HOOK)
-    assert len(env.telegram.sent) == 1
+    assert len(env.orchestrator.received) == 1
+    assert env.telegram.sent == []
 
 
 def test_dedup_key_stored_with_ttl(env):
@@ -177,35 +181,26 @@ def test_dedup_store_failure_still_forwards(env, caplog):
     assert any("Redis" in rec.getMessage() for rec in caplog.records)
 
 
-def test_orchestrator_down_returns_200_and_logs_error(env, caplog):
-    """R11, R12"""
+def test_orchestrator_down_returns_200_and_queues_without_text(env, caplog):
+    """R11, R12 + fase 2: el mensaje queda en la cola de reintento, sin texto en logs."""
     env.orchestrator.fail = True
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         r = env.client.post(URL, json=text_update(update_id=99, text="texto-privado"), headers=HOOK)
     assert r.status_code == 200
     log = "\n".join(rec.getMessage() for rec in caplog.records)
-    assert "99" in log
+    assert "inbound_queued channel=telegram message_id=99" in log
     assert "texto-privado" not in log
     assert SERVICE_TOKEN not in log
 
 
-def test_non_text_update_sends_fixed_reply_and_not_forwarded(env):
-    """R13, R14"""
+def test_non_text_update_is_forwarded_as_unsupported(env):
+    """R13, R14 + fase 2: el orquestador responde el texto fijo configurado en el panel."""
     upd = {"update_id": 5, "message": {"from": {"id": 1}, "chat": {"id": 2}, "voice": {}}}
     r = env.client.post(URL, json=upd, headers=HOOK)
     assert r.status_code == 200
-    assert env.telegram.sent == [(2, env.settings.non_text_reply)]
-    assert env.orchestrator.received == []
-
-
-def test_non_text_reply_failure_returns_200(env, caplog):
-    """R15"""
-    env.telegram.fail = True
-    upd = {"update_id": 5, "message": {"from": {"id": 1}, "chat": {"id": 2}, "photo": []}}
-    with caplog.at_level(logging.ERROR):
-        r = env.client.post(URL, json=upd, headers=HOOK)
-    assert r.status_code == 200
-    assert caplog.records
+    assert env.telegram.sent == []
+    [message] = env.orchestrator.received
+    assert (message.kind, message.text, message.external_chat_id) == ("unsupported", None, "2")
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n\t "])
@@ -213,8 +208,8 @@ def test_empty_or_blank_text_treated_as_non_text(env, text):
     """R4, R13, R14"""
     r = env.client.post(URL, json=text_update(text=text, chat_id=3), headers=HOOK)
     assert r.status_code == 200
-    assert env.telegram.sent == [(3, env.settings.non_text_reply)]
-    assert env.orchestrator.received == []
+    assert env.telegram.sent == []
+    assert [m.kind for m in env.orchestrator.received] == ["unsupported"]
 
 
 def test_update_without_message_is_ignored(env):
@@ -292,9 +287,9 @@ def _build_consent_flow():
     from orchestrator.adapters.rag import FakeRagClient
     from orchestrator.adapters.repository import FakeRepository
     from orchestrator.config import Settings as OrchestratorSettings
-    from lazaro_contracts import MessageRequest, NormalizedMessage
+    from lazaro_contracts import MessageRequest, NormalizedMessage, normalize_legacy_message
     from orchestrator.domain import Adapters as OrchestratorAdapters
-    from orchestrator.domain import process_channel_message, process_message
+    from orchestrator.domain import process_channel_message
     from orchestrator.privacy import ConversationTexts
 
     texts = ConversationTexts(
@@ -328,8 +323,7 @@ def _build_consent_flow():
     class OrchestratorClient:
         def post_message(self, request):
             if isinstance(request, MessageRequest):
-                process_message(request, orchestrator_settings, orchestrator_adapters)
-                return
+                request = normalize_legacy_message(request)
             process_channel_message(request, orchestrator_settings, orchestrator_adapters)
 
     gateway_settings = Settings(
@@ -439,12 +433,11 @@ def test_webhook_callback_from_another_chat_does_not_consume_the_challenge():
 
 def test_settings_defaults(monkeypatch):
     """R22"""
-    for name in ("DEDUP_TTL_SECONDS", "HTTP_TIMEOUT_SECONDS", "NON_TEXT_REPLY"):
+    for name in ("DEDUP_TTL_SECONDS", "HTTP_TIMEOUT_SECONDS"):
         monkeypatch.delenv(name, raising=False)
     s = Settings()
     assert s.dedup_ttl_seconds == 86400
     assert s.http_timeout_seconds == 10
-    assert s.non_text_reply == "Por ahora solo puedo leer mensajes de texto."
 
 
 def test_settings_reads_env(monkeypatch):
@@ -475,7 +468,6 @@ def test_env_example_lists_all_variables():
         "DEDUP_TTL_SECONDS",
         "HTTP_TIMEOUT_SECONDS",
         "TELEGRAM_ANSWER_CALLBACK_TIMEOUT_SECONDS",
-        "NON_TEXT_REPLY",
     ):
         assert name in declared, name
 

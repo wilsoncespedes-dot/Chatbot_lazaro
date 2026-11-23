@@ -25,6 +25,21 @@ _VIEW_COLUMNS_SQL = (
 )
 
 
+_ROLES_SQL = (
+    "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
+)
+
+
+def verify_read_role(cursor: Any) -> None:
+    """Fase 4: el rol conectado no puede ser superusuario ni saltarse la RLS."""
+    cursor.execute(_ROLES_SQL)
+    rows = list(cursor.fetchall())
+    # `current_user` siempre está en pg_roles; sin fila solo ocurre con dobles de test.
+    if rows and (bool(rows[0][0]) or bool(rows[0][1])):
+        logger.warning("db_query_role_invalid")
+        raise DbQueryUnavailable("El rol de consulta no es válido.")
+
+
 def verify_view_catalog(
     cursor: Any, allowlist: dict[str, tuple[str, ...]]
 ) -> None:
@@ -121,6 +136,7 @@ class PostgresReadOnlyQuery:
                         logger.warning("db_query_close_failed")
 
     def _verify_catalog(self, cursor: Any) -> None:
+        verify_read_role(cursor)
         verify_view_catalog(cursor, self._allowlist)
 
 

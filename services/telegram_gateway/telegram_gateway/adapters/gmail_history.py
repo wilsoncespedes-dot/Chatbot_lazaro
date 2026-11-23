@@ -1,4 +1,8 @@
-"""Cursor persistente de Gmail History: PostgreSQL y fake en memoria."""
+"""Cursor persistente de Gmail History: PostgreSQL y fake en memoria.
+
+La tabla `gmail_history_state` la crea `migrations/0006_gmail_historial.sql`; el
+gateway no ejecuta DDL (fase 1).
+"""
 from __future__ import annotations
 
 import threading
@@ -9,16 +13,9 @@ from typing import Any, Callable, Protocol
 
 from .channel_repository import (
     IDLE_PROBE_SECONDS,
-    SCHEMA_LOCK_SQL,
     _connection_alive,
     _pg_connect,
     is_connection_error,
-)
-
-_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS gmail_history_state ("
-    "canal_id TEXT PRIMARY KEY, history_id TEXT NOT NULL, "
-    "actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now())",
 )
 
 
@@ -82,18 +79,7 @@ class PostgresGmailHistoryRepository:
         ):
             self._discard()
         if self._conn is None:
-            conn = self._connect()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(SCHEMA_LOCK_SQL)
-                for statement in _SCHEMA:
-                    cursor.execute(statement)
-                conn.commit()
-                self._conn = conn
-            except Exception:
-                with suppress(Exception):
-                    conn.close()
-                raise
+            self._conn = self._connect()
         self._last_used = self._clock()
         return self._conn
 

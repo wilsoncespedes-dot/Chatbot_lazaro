@@ -277,9 +277,13 @@ def test_conversation_reuses_existing_schema_and_outbox(env):
     source = (ROOT / "services/orchestrator/orchestrator/adapters/repository.py").read_text(
         encoding="utf-8"
     )
-    assert "CREATE TABLE IF NOT EXISTS messages" in source
-    assert "CREATE TABLE IF NOT EXISTS outbox" in source
-    assert "CREATE TABLE IF NOT EXISTS conversational_" not in source
+    # Fase 1: el esquema vive en migrations/, no en el repositorio.
+    schema = "".join(
+        path.read_text(encoding="utf-8") for path in sorted((ROOT / "migrations").glob("*.sql"))
+    )
+    assert "CREATE TABLE IF NOT EXISTS messages" in schema
+    assert "CREATE TABLE IF NOT EXISTS outbox" in schema
+    assert "CREATE TABLE IF NOT EXISTS conversational_" not in schema + source
 
 
 def test_conversation_mode_does_not_add_a_service():

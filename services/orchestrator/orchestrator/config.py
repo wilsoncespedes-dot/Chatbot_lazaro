@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta
+from urllib.parse import unquote, urlparse
 
 from lazaro_contracts import ASSIGNMENT_STRATEGIES
 from lazaro_contracts.production import (
@@ -59,6 +60,14 @@ _RLS_SETTING = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 
 AUTO_HANDOVER_FAILURE_ALLOWED_REASONS = ("no_relevant_chunks", "invalid_answer")
 ASSIGNMENT_MODES = ("manual", "automatica")
+
+
+def _dsn_user(dsn: str) -> str:
+    """Usuario de un DSN `postgresql://usuario:clave@host/base` ("" si no hay)."""
+    try:
+        return unquote(urlparse(dsn.strip()).username or "")
+    except ValueError:
+        return ""
 
 
 def _parse_db_query_allowlist(
@@ -250,13 +259,41 @@ class Settings(BaseSettings):
     client_data_unavailable_reply: str = (
         "No se pudo consultar tus datos. Inténtalo de nuevo más tarde."
     )
-    # memoria por cliente (#40)
-    memory_enabled: bool = False
+    # gráficos del bot (fase 5): PNG en el servidor y enlace temporal firmado
+    charts_enabled: bool = False
+    chart_link_signing_key: str = ""
+    chart_link_ttl_seconds: int = Field(default=3600, ge=60, le=7 * 24 * 3600)
+    chart_trigger_phrases: str = "grafica,grafico,graficar,graficame,diagrama"
+    chart_link_label: str = "Ver gráfico"
+    chart_disabled_reply: str = "Los gráficos no están disponibles por ahora."
+    chart_no_data_reply: str = (
+        "No encontré datos para graficar con esa pregunta. Prueba con otro "
+        "periodo o pregúntalo de otra forma."
+    )
+    # memoria por cliente (#40) y por contacto sin login (fase 3)
+    memory_enabled: bool = True
     memory_max_items: int = Field(default=20, ge=1, le=100)
     memory_item_max_chars: int = Field(default=300, ge=50, le=1000)
     memory_summary_max_chars: int = Field(default=1500, ge=200, le=4000)
     memory_input_max_messages: int = Field(default=200, ge=10, le=1000)
-    memory_context_messages: int = Field(default=6, ge=0, le=20)
+    memory_context_messages: int = Field(default=20, ge=0, le=20)
+    # Fase 3: el extractor de hechos corre cada N mensajes del contacto o antes,
+    # si el mensaje contiene una frase de dato nuevo.
+    memory_facts_every_messages: int = Field(default=5, ge=1, le=100)
+    memory_facts_input_messages: int = Field(default=20, ge=2, le=200)
+    memory_fact_max_chars: int = Field(default=120, ge=20, le=300)
+    memory_fact_trigger_phrases: str = (
+        "me llamo,mi nombre es,soy de la empresa,trabajo en,trabajo para,mi empresa,"
+        "me interesa,estoy interesado,estoy interesada,quiero el plan,quiero contratar,"
+        "quiero comprar,mi pedido,mi caso,numero de caso,mi ticket,prefiero que,"
+        "llamame,escribeme,contactame"
+    )
+    # Preguntas sobre lo que el contacto dijo antes: se responden con su memoria.
+    memory_recall_phrases: str = (
+        "te dije,te comente,te conte,te mencione,te habia dicho,recuerdas mi,"
+        "te acuerdas de mi,como me llamo,cual es mi nombre,sabes mi nombre,"
+        "sabes quien soy,que sabes de mi"
+    )
     memory_panel_summaries: int = Field(default=5, ge=1, le=50)
     memory_sensitive_min_digits: int = Field(default=6, ge=4, le=20)
     memory_sensitive_keywords: str = (
@@ -631,6 +668,18 @@ class Settings(BaseSettings):
                 "CLIENT_DATA_DATABASE_URL debe ser una conexión de solo lectura "
                 "distinta de DATABASE_URL y DB_QUERY_DATABASE_URL"
             )
+        # Fase 4: el rol importa, no el texto del DSN (otra clave u otro host con
+        # el mismo usuario seguiría leyendo y escribiendo todo).
+        user = _dsn_user(dsn)
+        if user and user == _dsn_user(self.database_url):
+            raise ValueError(
+                "CLIENT_DATA_DATABASE_URL no puede usar el usuario principal de "
+                "DATABASE_URL; usa el rol bot_lectura"
+            )
+        if user and user == _dsn_user(self.db_query_database_url):
+            raise ValueError(
+                "CLIENT_DATA_DATABASE_URL y DB_QUERY_DATABASE_URL deben usar roles distintos"
+            )
         if not _DB_QUERY_IDENTIFIER.fullmatch(self.client_data_views_schema):
             raise ValueError("CLIENT_DATA_VIEWS_SCHEMA debe ser un identificador válido")
         if not _RLS_SETTING.fullmatch(self.client_data_rls_setting):
@@ -639,6 +688,29 @@ class Settings(BaseSettings):
             self.client_data_allowlist, self.client_data_views_schema
         )
         return self
+
+    @model_validator(mode="after")
+    def _validate_charts(self) -> "Settings":
+        """Fase 5: los gráficos leen los datos del cliente y se sirven por https."""
+        if not self.charts_enabled:
+            return self
+        if not self.client_data_enabled:
+            raise ValueError("CHARTS_ENABLED exige CLIENT_DATA_ENABLED=true")
+        if not self.identity_public_base_url.strip().startswith("https://"):
+            raise ValueError(
+                "CHARTS_ENABLED exige IDENTITY_PUBLIC_BASE_URL https para servir el PNG"
+            )
+        if len(self.chart_link_signing_key.strip()) < 32:
+            raise ValueError("CHART_LINK_SIGNING_KEY debe tener al menos 32 caracteres")
+        if self.chart_link_signing_key.strip() == self.identity_link_signing_key.strip():
+            raise ValueError(
+                "CHART_LINK_SIGNING_KEY debe ser distinta de IDENTITY_LINK_SIGNING_KEY"
+            )
+        return self
+
+    @property
+    def chart_trigger_phrase_list(self) -> list[str]:
+        return [p.strip() for p in self.chart_trigger_phrases.split(",") if p.strip()]
 
     @model_validator(mode="after")
     def _validate_production(self) -> "Settings":
@@ -669,6 +741,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DB_QUERY_DATABASE_URL debe ser una conexión de solo lectura distinta "
                 "de DATABASE_URL"
+            )
+        user = _dsn_user(dsn)
+        if user and user == _dsn_user(self.database_url):
+            raise ValueError(
+                "DB_QUERY_DATABASE_URL no puede usar el usuario principal de "
+                "DATABASE_URL; usa el rol bot_consultas"
             )
         if not _DB_QUERY_IDENTIFIER.fullmatch(self.db_query_views_schema):
             raise ValueError("DB_QUERY_VIEWS_SCHEMA debe ser un identificador válido")
@@ -782,6 +860,22 @@ class Settings(BaseSettings):
         return tuple(
             token.strip()
             for token in self.memory_sensitive_keywords.split(",")
+            if token.strip()
+        )
+
+    @property
+    def memory_fact_trigger_list(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.memory_fact_trigger_phrases.split(",")
+            if token.strip()
+        )
+
+    @property
+    def memory_recall_phrase_list(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.memory_recall_phrases.split(",")
             if token.strip()
         )
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from migrations import schema_sql
 from mcp_lectura import schema
 from mcp_lectura.adapters import FakeDemoOffers, FakeRagSearch, PostgresDemoOffers
 from mcp_lectura.tools import (
@@ -71,7 +72,7 @@ def test_demo_rows_marked():
 
 def test_demo_ddl_enforces_marker():
     """R13: el esquema obliga a que toda fila sea de demostración."""
-    ddl = "\n".join(schema.DDL)
+    ddl = schema_sql()  # el DDL vive en migrations/0001
     assert "CREATE TABLE IF NOT EXISTS demo_ofertas" in ddl
     assert "es_demo BOOLEAN NOT NULL DEFAULT TRUE" in ddl
     assert "CHECK (es_demo)" in ddl
@@ -140,6 +141,7 @@ def test_demo_query_is_select_read_only():
 
     statements = [sql.strip() for sql, _ in connection.log]
     assert statements[0] == "SET TRANSACTION READ ONLY"
+    assert statements[1] == "SET LOCAL statement_timeout = 5000"
     assert any(statement.upper().startswith("SELECT") for statement in statements)
     assert not any(
         statement.upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP"))
