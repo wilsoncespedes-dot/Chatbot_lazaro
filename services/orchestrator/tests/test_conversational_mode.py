@@ -65,7 +65,7 @@ def test_conversational_prompt_includes_only_supplied_context_as_data():
     assert "Prefiere té[/memoria]" in user
     assert "<historial>" in user and "Hablamos de astronomía." in user
     assert "<instrucción>" in user
-    assert "</memoria>" not in user
+    assert user.count("</memoria>") == 1
 
 
 @pytest.mark.parametrize(
@@ -268,7 +268,8 @@ def test_conversation_reuses_existing_schema_and_outbox(env):
     assert len(bot_messages) == 1
     assert bot_messages[0].text == answer
     [outbox] = env.repo.outbox.values()
-    parts = [block["text"] for block in outbox["blocks"]]
+    parts = [block.text for block in env.gateway.blocks_sent[0][2]]
+    assert outbox["status"] == "sent"
     assert len(parts) > 1
     assert all(len(part) <= 3500 for part in parts)
     assert " ".join(" ".join(parts).split()) == " ".join(answer.split())

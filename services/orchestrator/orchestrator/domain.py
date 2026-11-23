@@ -1324,7 +1324,9 @@ def _neutralize(text: str) -> str:
 
 def _neutralize_context(text: str) -> str:
     for tag in ("memoria", "historial", "mensaje", "item"):
-        text = re.sub(rf"</\s*{tag}", f"[/{tag}", text, flags=re.IGNORECASE)
+        text = re.sub(
+            rf"</\s*{tag}\s*>", f"[/{tag}]", text, flags=re.IGNORECASE
+        )
     return _neutralize(text)
 
 

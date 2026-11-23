@@ -177,16 +177,42 @@ def _pack(prefix: str, body: str, size: int, overlap: int) -> list[str]:
         prefix, budget = "", size
     chunks: list[str] = []
     current: list[str] = []
-    for unit in _units(body, budget, overlap):
-        if current and len(" ".join([*current, unit])) > budget:
-            chunks.append(prefix + " ".join(current))
-            tail: list[str] = []
-            for previous in reversed(current):
-                if len(" ".join([previous, *tail])) > overlap:
-                    break
-                tail.insert(0, previous)
-            current = tail if len(" ".join([*tail, unit])) <= budget else []
-        current.append(unit)
+    current_is_overlap = False
+
+    def flush() -> None:
+        nonlocal current, current_is_overlap
+        if not current:
+            return
+        chunks.append(prefix + " ".join(current))
+        tail: list[str] = []
+        for previous in reversed(current):
+            if len(" ".join([previous, *tail])) > overlap:
+                break
+            tail.insert(0, previous)
+        current = tail
+        current_is_overlap = bool(tail)
+
+    for sentence in _SENTENCE_RE.split(body):
+        if not sentence:
+            continue
+        long_sentence = len(sentence) > budget
+        if long_sentence and current:
+            if current_is_overlap:
+                current = []
+                current_is_overlap = False
+            else:
+                flush()
+        for unit in _units(sentence, budget, overlap):
+            if current and len(" ".join([*current, unit])) > budget:
+                if current_is_overlap:
+                    current = []
+                    current_is_overlap = False
+                else:
+                    flush()
+                if len(" ".join([*current, unit])) > budget:
+                    current = []
+            current.append(unit)
+            current_is_overlap = False
     if current:
         chunks.append(prefix + " ".join(current))
     return chunks

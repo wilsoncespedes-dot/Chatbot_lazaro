@@ -43,11 +43,19 @@ def test_send_invalid_body_returns_422(env):
 
 
 def test_telegram_channel_sends_all_parts_of_long_text(env):
-    """R5: respuestas mayores al límite se entregan completas en mensajes consecutivos."""
+    """R5: bloques válidos que juntos exceden el límite llegan completos al chat."""
     text = ("Información importante para el cliente.\n\n" * 160).strip()
+    source_parts = []
+    remaining = text
+    while len(remaining) > 4096:
+        cut = remaining.rfind(" ", 0, 4097)
+        source_parts.append(remaining[:cut])
+        remaining = remaining[cut + 1:]
+    source_parts.append(remaining)
+    blocks = [TextBlock(type="text", text=part) for part in source_parts]
     adapter = TelegramChannelAdapter(env.telegram)
 
-    adapter.send("9", [TextBlock(type="text", text=text)])
+    adapter.send("9", blocks)
 
     assert len(env.telegram.sent) > 1
     assert all(len(part) <= 4096 for _, part in env.telegram.sent)
