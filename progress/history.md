@@ -330,3 +330,38 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - Producción confirmada: EC2 con Docker Compose. Canal `soporte-gmail` activo; sincronización inicial manual con `status=initialized` (credenciales OAuth válidas, cursor fijado).
 - Nuevo servicio `gmail_sync_worker` (imagen del gateway) que ejecuta `sincronizar_gmail.py --intervalo` cada `GMAIL_SYNC_INTERVAL_SECONDS` (60 s); el script mantiene la pasada única sin `--intervalo`.
 - Tests: `scripts/tests/test_sincronizar_gmail.py` (bucle, intervalo, errores) y `services/telegram_gateway/tests/test_gmail_sync_worker_compose.py`. scripts 123, contracts 963, gateway 610 (+2 skipped), handover 450, mcp_lectura 23 en verde; imagen del gateway construida.
+
+## 2026-11-23 — Fases 6–7 de `feat/produccion-multicanal`
+
+- **Fases previas:** fases 1–5 ya estaban implementadas en los commits de la rama
+  (`4b2c21b`, `28f8418`, `81646d6`, `dc8e2db`, `6c024b1`).
+- **TikTok Business Messaging:** se corrigieron OAuth, firma y el esquema real del
+  webhook según la documentación oficial; tokens rotados cifrados, verificación de
+  app/cuenta, cuota Redis atómica de 10 mensajes/48 h, y pruebas de mensajes,
+  refresh, errores, firma y ruta pública.
+- **Messenger e Instagram:** adaptadores Meta sobre webhook firmado compartido,
+  separación de lotes mixtos, deduplicación, envío al PSID/IGSID, ventana de 24 h
+  controlada en Redis, configuración y pruebas HTTP/webhook.
+- **Documentación:** `.env.example`, README, arquitectura y `NOTAS_IMPLEMENTACION.md`
+  describen credenciales, URLs públicas, permisos/revisión de proveedores y los
+  límites de disponibilidad. Se retiró de `later` el esqueleto de Instagram ya
+  cubierto por la integración real.
+- **Verificación:** `./init.sh` ejecutó 5025 passed, 14 skipped; los cuatro Docker
+  builds de CI y `docker compose build` (con contraseña temporal solo para
+  interpolación de build) terminaron correctamente. No se llamaron APIs reales.
+
+## 2026-11-23 — Panel admin: sin Simulador y Canales rediseñado
+
+- **Simulador retirado del panel:** se quitaron el enlace del menú, las rutas
+  `/admin/simulador` y `/asesor/simulador`, `simulator_page.py`,
+  `simulator_routes.py`, el cliente `adapters/simulator.py` y sus tests. El
+  adaptador `simulado` del gateway, su buzón y `scripts/simular_canal.py` se
+  conservan (el profesor pidió un adaptador SIMULADO marcado); `simulated_label`
+  pasó a `channels.py` porque el dashboard lo sigue usando.
+- **Canales:** la tabla con todo el formulario en una columna se cambió por una
+  ficha por canal (etiqueta, estado, datos, webhook con Copiar, acciones) con la
+  edición plegable en «Editar canal» y el alta después del listado. Las casillas
+  de verificación del panel ya no se dibujan como cajas grandes (`label.check`).
+- **Verificación:** tests de canales, rutas, navegación y dashboard en verde; un
+  test nuevo fija el diseño en fichas. Revisado en el navegador en escritorio y
+  móvil, tema claro y oscuro.

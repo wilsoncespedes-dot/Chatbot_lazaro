@@ -377,7 +377,81 @@ main.auth-main { position: relative; z-index: 1; max-width: none; display: grid;
 .chat-title { margin: 0; color: var(--muted); }
 .chat-field { flex: 1 1 16rem; }
 .chat-field textarea, .chat-field select { width: 100%; }
-a:focus-visible, button:focus-visible, input:focus-visible,
+input[type="checkbox"], input[type="radio"] { width: 1.125rem; height: 1.125rem;
+  min-height: 0; padding: 0; margin: 0; flex: none; accent-color: var(--primary); }
+label.check { flex-direction: row; align-items: center; gap: 0.5rem;
+  font-weight: 500; color: var(--text); cursor: pointer; }
+a.btn { display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--space-2); min-height: 2.5rem; text-decoration: none; }
+a.btn-secondary:hover { color: var(--primary); }
+.hint { color: var(--muted); font-size: 0.8125rem; margin: 0; }
+.field-hint { color: var(--muted); font-size: 0.75rem; font-weight: 400; }
+.empty { color: var(--muted); background: var(--surface); border: 1px dashed var(--line);
+  border-radius: var(--radius-lg); padding: var(--space-4); text-align: center; margin: 0; }
+.section-head { display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: var(--space-3); margin: var(--space-4) 0 var(--space-3); }
+.section-head h2 { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.count { background: var(--soft); color: var(--muted); border-radius: 999px;
+  padding: 0 0.5625rem; font-size: 0.8125rem; font-weight: 600; }
+.secret-card { display: flex; flex-direction: column; gap: 0.75rem;
+  border-color: var(--warn); }
+.secret-card h2 { margin: 0; }
+.copy-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2);
+  align-items: end; }
+.copy-field input { width: 100%; font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.8125rem; }
+.copy-field .hint { grid-column: 1 / -1; }
+.channel-list { display: grid; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.channel-card { display: flex; flex-direction: column; gap: 1rem; margin: 0; }
+.channel-card.is-off { background: var(--surface-2); border-style: dashed;
+  box-shadow: none; }
+.channel-head { display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: 0.75rem; }
+.channel-title { margin: 0; display: flex; }
+.channel-tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.channel-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem 1.25rem; margin: 0; }
+.channel-meta > div { min-width: 0; }
+.channel-meta dt { color: var(--muted); font-size: 0.75rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; }
+.channel-meta dd { margin: 0.125rem 0 0; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.chip-code { background: var(--soft); border-radius: 0.375rem; padding: 0.0625rem 0.4375rem;
+  font-family: ui-monospace, Consolas, monospace; font-size: 0.8125rem; white-space: nowrap; }
+.channel-actions { display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-2) 0.75rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+form.channel-actions, .channel-actions form { display: flex; flex-direction: row;
+  flex-wrap: wrap; align-items: center; gap: var(--space-2) 0.75rem; margin: 0; }
+.channel-actions button { min-height: 2.25rem; }
+.channel-actions .toggle-form { margin-left: auto; }
+.channel-edit { border-top: 1px solid var(--line); padding-top: 0.875rem; }
+.channel-edit summary { display: inline-flex; align-items: center; gap: var(--space-2);
+  cursor: pointer; color: var(--primary); font-weight: 600; list-style: none;
+  border-radius: 0.375rem; }
+.channel-edit summary::-webkit-details-marker { display: none; }
+.channel-edit summary::before { content: "▸"; font-size: 0.875rem; }
+.channel-edit[open] summary::before { content: "▾"; }
+.channel-edit form { margin: 1rem 0 0; }
+form.channel-form { display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr));
+  gap: 0.875rem 1rem; align-items: start; margin: var(--space-3) 0 0; }
+.channel-form input:not([type="checkbox"]), .channel-form select,
+.channel-form textarea { width: 100%; }
+.channel-form { container-type: inline-size; }
+.channel-form .span-2 { grid-column: 1 / -1; }
+@container (min-width: 28rem) { .channel-form .span-2 { grid-column: span 2; } }
+.channel-form label.check, .channel-form label:has(textarea),
+.channel-form .form-section { grid-column: 1 / -1; }
+.channel-form textarea { min-height: 5rem; resize: vertical;
+  font-family: ui-monospace, Consolas, monospace; font-size: 0.875rem; }
+.channel-form > button { grid-column: 1 / -1; justify-self: start; }
+.form-section { margin: var(--space-2) 0 0; padding-top: 1rem;
+  border-top: 1px solid var(--line); font-weight: 700; color: var(--text); }
+.form-section small { display: block; color: var(--muted); font-size: 0.8125rem;
+  font-weight: 400; }
+#nuevo-canal { scroll-margin-top: var(--space-3); }
+#nuevo-canal h2 { margin: 0 0 var(--space-1); }
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible,
 select:focus-visible, textarea:focus-visible, .chat-log:focus-visible {
   outline: 3px solid var(--focus); outline-offset: 2px;
 }
@@ -402,6 +476,8 @@ select:focus-visible, textarea:focus-visible, .chat-log:focus-visible {
   .texts-foot { flex-direction: column; align-items: stretch; }
   input, select, textarea, button, .btn { width: 100%; }
   .sidebar-foot button { width: auto; }
+  .copy-field { grid-template-columns: minmax(0, 1fr); }
+  .channel-actions .toggle-form { margin-left: 0; }
 }
 @media (min-width: 48.01rem) {
   form { flex-direction: row; flex-wrap: wrap; align-items: end; }
@@ -567,6 +643,7 @@ ICON_PATHS = {
     "user": "M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10",
     "lock": "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
     "arrow": "M5 12h14M13 6l6 6-6 6",
+    "plus": "M12 5v14M5 12h14",
     "logout": "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10",
     "memory": "M12 3a9 9 0 1 0 9 9M12 7v5l3 3",
     "dot": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
@@ -690,7 +767,6 @@ ADMIN_NAV_GROUPS: list[NavGroup] = [
             ("/admin/metricas", "Métricas", "chart"),
             ("/admin/dashboard", "Dashboard", "chart"),
             ("/admin/envios", "Envíos fallidos", "bolt"),
-            ("/admin/simulador", "Simulador", "chat"),
         ],
     ),
     (
@@ -1285,7 +1361,7 @@ def _quick_reply_form(
     remove = ""
     if allow_remove_image:
         remove = (
-            '<label><input type="checkbox" name="remove_image" value="1"> '
+            '<label class="check"><input type="checkbox" name="remove_image" value="1"> '
             "Quitar la imagen actual</label>"
         )
     current_image = ""
@@ -1969,10 +2045,14 @@ def _channel_label(info, glyph: str) -> str:
     return render_channel_label(label_from_values(info.name, glyph, info.color))
 
 
-def _copy_field(field_id: str, value: str, label: str) -> str:
+def _copy_field(field_id: str, value: str, label: str, hint: str = "") -> str:
+    """Campo de solo lectura con su botón Copiar, alineados en una fila."""
+    hint_html = f'<p class="hint">{_esc(hint)}</p>' if hint else ""
     return (
+        '<div class="copy-field">'
         f'<label>{_esc(label)} <input id="{_esc(field_id)}" value="{_esc(value)}" readonly></label>'
         f'<button type="button" class="btn-secondary" data-copy="{_esc(field_id)}">Copiar</button>'
+        f"{hint_html}</div>"
     )
 
 
@@ -1984,11 +2064,194 @@ def _icon_options(selected: str, icons: dict[str, str]) -> str:
     )
 
 
+CONSENT_LABELS = {
+    "texto": "Texto (frase de aceptación)",
+    "boton": "Botones Acepto / No acepto",
+}
+
+
 def _consent_options(selected: str) -> str:
-    labels = (("texto", "Texto (frase de aceptación)"), ("boton", "Botones Acepto / No acepto"))
     return "".join(
         f'<option value="{value}"{" selected" if value == selected else ""}>{label}</option>'
-        for value, label in labels
+        for value, label in CONSENT_LABELS.items()
+    )
+
+
+def _hint(text: str) -> str:
+    return f'<small class="field-hint">{_esc(text)}</small>'
+
+
+def _check(name: str, text: str, checked: bool = False, required: bool = False) -> str:
+    """Casilla con su texto en la misma línea."""
+    flags = (" checked" if checked else "") + (" required" if required else "")
+    return (
+        f'<label class="check"><input type="checkbox" name="{_esc(name)}" '
+        f'value="si"{flags}> {_esc(text)}</label>'
+    )
+
+
+def _channel_fields(
+    *,
+    name: str,
+    icon: str,
+    color: str,
+    consent: str,
+    public: bool,
+    contact_url: str,
+    icons: dict[str, str],
+) -> str:
+    """Campos comunes al alta y a la edición de un canal."""
+    return (
+        '<label>Nombre <input name="name" '
+        f'value="{_esc(name)}" maxlength="60" required></label>'
+        f'<label>Ícono <select name="icon">{_icon_options(icon, icons)}</select></label>'
+        f'<label>Color <input name="color" value="{_esc(color)}" '
+        'pattern="#[0-9A-Fa-f]{6}" required>'
+        f'{_hint("#RRGGBB oscuro: la etiqueta usa texto blanco.")}</label>'
+        '<label>Consentimiento <select name="consent_mode">'
+        f"{_consent_options(consent)}</select></label>"
+        '<label class="span-2">Enlace de contacto (opcional) '
+        f'<input name="contact_url" value="{_esc(contact_url)}" maxlength="200" '
+        'placeholder="https://"></label>'
+        f'{_check("public", "Mostrar en la bienvenida como canal público", public)}'
+    )
+
+
+def _connection_fields(
+    *,
+    callback: str = "",
+    email_address: str = "",
+    editing: bool,
+) -> str:
+    """Datos de conexión con el proveedor; no aplican a canales del entorno."""
+    clear = _check("clear_callback_url", "Quitar la URL de callback") if editing else ""
+    credentials_hint = (
+        "Una por línea: nombre=valor. Déjalo vacío para conservar las actuales."
+        if editing
+        else "Una por línea: nombre=valor. Se guardan cifradas en el gateway."
+    )
+    return (
+        '<p class="form-section">Conexión con el proveedor'
+        "<small>Completa solo lo que use el tipo de adaptador.</small></p>"
+        '<label class="span-2">URL de callback '
+        f'<input name="callback_url" value="{_esc(callback)}" placeholder="https://">'
+        f'{_hint("Para adaptadores que responden por callback (webhook genérico).")}</label>'
+        '<label class="span-2">Correo de la bandeja Gmail '
+        f'<input type="email" name="email_address" value="{_esc(email_address)}" '
+        'maxlength="128" autocomplete="email">'
+        f'{_hint("Solo para gmail_api.")}</label>'
+        f"{clear}"
+        "<label>Credenciales "
+        '<textarea name="credentials" autocomplete="off" spellcheck="false" '
+        'placeholder="token=…"></textarea>'
+        f"{_hint(credentials_hint)}</label>"
+    )
+
+
+def _is_public(config) -> bool:
+    return str(config.get("public", "")).lower() in ("true", "si", "sí", "1", "on")
+
+
+def _channel_card(info, csrf: str, *, icons, glyph_for, webhook_for) -> str:
+    """R10, R13, R14, R20–R22: ficha de un canal con sus acciones y su edición."""
+    path = quote(info.id, safe="")
+    consent = str(info.config.get("consent_mode", "texto"))
+    public = _is_public(info.config)
+    hints = "".join(
+        f'<span class="chip-code">{_esc(name)} {_esc(hint)}</span>'
+        for name, hint in info.credential_hints.items()
+    )
+    managed = info.managed_by_environment
+    if managed:
+        credentials_dd = "Las gestiona el entorno"
+    else:
+        credentials_dd = f'<span class="chips">{hints}</span>' if hints else "—"
+    email_address = str(info.config.get("email_address", "") or "")
+    meta = [
+        ("Id", f"<code>{_esc(info.id)}</code>"),
+        ("Adaptador", _esc(info.adapter_type)),
+        ("Consentimiento", _esc(CONSENT_LABELS.get(consent, consent))),
+        ("Bienvenida", "Canal público" if public else "No se muestra"),
+        ("Credenciales", credentials_dd),
+    ]
+    if email_address:
+        meta.append(("Bandeja Gmail", _esc(email_address)))
+    meta_html = "".join(f"<div><dt>{dt}</dt><dd>{dd}</dd></div>" for dt, dd in meta)
+    state_pill = (
+        '<span class="pill pill-yes">Activo</span>'
+        if info.active
+        else '<span class="pill pill-no">Inactivo</span>'
+    )
+    managed_badge = (
+        '<span class="badge badge-info">Gestionado por el entorno</span>' if managed else ""
+    )
+    if managed:
+        connection_html = (
+            '<p class="hint">Credenciales, secreto y webhook de este canal se '
+            "configuran en las variables de entorno, no desde el panel.</p>"
+        )
+        secret_html = ""
+        edit_connection = ""
+    else:
+        url, configured = webhook_for(info.id)
+        connection_html = _copy_field(
+            f"webhook-{info.id}",
+            url,
+            "URL del webhook",
+            "" if configured
+            else "Configura GATEWAY_PUBLIC_BASE_URL para ver la URL completa.",
+        )
+        secret_html = (
+            f'<form method="post" action="/admin/canales/{path}/secreto">'
+            f"{csrf_field(csrf)}"
+            '<button type="submit" class="btn-secondary">Ver secreto</button></form>'
+            f'<form method="post" action="/admin/canales/{path}/secreto/regenerar">'
+            f"{csrf_field(csrf)}"
+            f'{_check("confirmar", "Invalidar el secreto actual", required=True)}'
+            '<button type="submit" class="btn-secondary">Regenerar secreto</button></form>'
+        )
+        edit_connection = _connection_fields(
+            callback=str(info.config.get("callback_url", "") or ""),
+            email_address=email_address,
+            editing=True,
+        )
+    toggle_to = "false" if info.active else "true"
+    toggle_label = "Desactivar" if info.active else "Activar"
+    off_class = "" if info.active else " is-off"
+    return (
+        f'<article class="card channel-card{off_class}">'
+        '<header class="channel-head">'
+        f'<h3 class="channel-title">{_channel_label(info, glyph_for(info.icon))}</h3>'
+        f'<div class="channel-tags">{managed_badge}{state_pill}</div>'
+        "</header>"
+        f'<dl class="channel-meta">{meta_html}</dl>'
+        f"{connection_html}"
+        '<div class="channel-actions">'
+        f"{secret_html}"
+        f'<form method="post" action="/admin/canales/{path}/activo" class="toggle-form">'
+        f"{csrf_field(csrf)}"
+        f'<input type="hidden" name="active" value="{toggle_to}">'
+        f'<button type="submit" class="{_toggle_class(info.active)}">{toggle_label}</button>'
+        "</form>"
+        "</div>"
+        '<details class="channel-edit">'
+        "<summary>Editar canal</summary>"
+        f'<form method="post" action="/admin/canales/{path}" class="channel-form">'
+        f"{csrf_field(csrf)}"
+        + _channel_fields(
+            name=info.name,
+            icon=info.icon,
+            color=info.color,
+            consent=consent,
+            public=public,
+            contact_url=str(info.config.get("contact_url", "") or ""),
+            icons=icons,
+        )
+        + f"{edit_connection}"
+        '<button type="submit">Guardar cambios</button>'
+        "</form>"
+        "</details>"
+        "</article>"
     )
 
 
@@ -2004,143 +2267,77 @@ def render_channels(
     revealed_title: str = "Secreto del canal",
 ) -> str:
     """R10–R14, R20–R22, R30, R31: listado, alta y edición de canales."""
-    parts: list[str] = []
+    parts: list[str] = [
+        '<p class="lead">Canales por los que los clientes escriben al bot. '
+        "Los cambios se guardan en el gateway y se aplican al siguiente mensaje.</p>"
+    ]
     if error:
         parts.append(f'<p class="error" role="alert">{_esc(error)}</p>')
     if revealed is not None:
         channel_id, secret = revealed
         parts.append(
-            '<section class="card" aria-live="polite">'
-            f"<h3>{_esc(revealed_title)}: {_esc(channel_id)}</h3>"
-            "<p>Guárdalo ahora: no se vuelve a mostrar en el listado.</p>"
+            '<section class="card secret-card" aria-live="polite">'
+            f"<h2>{_esc(revealed_title)}: <code>{_esc(channel_id)}</code></h2>"
+            '<p class="note">Guárdalo ahora: no se vuelve a mostrar en el listado.</p>'
             f"{_copy_field('secreto-revelado', secret, 'Secreto')}"
             "</section>"
-        )
-    rows = []
-    for info in listing.channels:
-        path = quote(info.id, safe="")
-        consent = str(info.config.get("consent_mode", "texto"))
-        hints = ", ".join(
-            f"{_esc(name)} {_esc(hint)}" for name, hint in info.credential_hints.items()
-        ) or "—"
-        state = "Activo" if info.active else "Inactivo"
-        toggle_to = "false" if info.active else "true"
-        toggle_label = "Desactivar" if info.active else "Activar"
-        public_value = str(info.config.get("public", "")).lower()
-        public_checked = (
-            " checked" if public_value in ("true", "si", "sí", "1", "on") else ""
-        )
-        contact_url = str(info.config.get("contact_url", "") or "")
-        webhook_html = ""
-        secret_html = ""
-        credentials_html = ""
-        callback_html = ""
-        email_html = ""
-        if not info.managed_by_environment:
-            url, configured = webhook_for(info.id)
-            webhook_html = _copy_field(f"webhook-{info.id}", url, "URL del webhook")
-            if not configured:
-                webhook_html += (
-                    '<p class="hint">Configura GATEWAY_PUBLIC_BASE_URL para ver la URL completa.</p>'
-                )
-            secret_html = (
-                f'<form method="post" action="/admin/canales/{path}/secreto">'
-                f"{csrf_field(csrf)}"
-                '<button type="submit" class="btn-secondary">Ver secreto</button></form>'
-                f'<form method="post" action="/admin/canales/{path}/secreto/regenerar">'
-                f"{csrf_field(csrf)}"
-                '<label><input type="checkbox" name="confirmar" value="si" required> '
-                "Invalidar el secreto actual</label>"
-                '<button type="submit" class="btn-secondary">Regenerar secreto</button></form>'
-            )
-            callback = str(info.config.get("callback_url", ""))
-            email_address = str(info.config.get("email_address", ""))
-            callback_html = (
-                '<label>URL de callback (si el adaptador la usa) '
-                f'<input name="callback_url" value="{_esc(callback)}" placeholder="https://"></label>'
-                '<label><input type="checkbox" name="clear_callback_url" value="si"> '
-                "Quitar la URL de callback</label>"
-            )
-            email_html = (
-                '<label>Correo de la bandeja Gmail (solo para gmail_api) '
-                f'<input type="email" name="email_address" value="{_esc(email_address)}" '
-                'maxlength="128" autocomplete="email"></label>'
-            )
-            credentials_html = (
-                "<label>Credenciales (nombre=valor por línea; vacío = no cambiar) "
-                '<textarea name="credentials" autocomplete="off"></textarea></label>'
-            )
-        rows.append(
-            "<tr>"
-            f"<td>{_channel_label(info, glyph_for(info.icon))}</td>"
-            f"<td>{_esc(info.id)}</td>"
-            f"<td>{_esc(info.adapter_type)}</td>"
-            f"<td>{_esc(state)}</td>"
-            f"<td>{_esc(consent)}</td>"
-            f"<td>{hints}</td>"
-            "<td>"
-            f"{webhook_html}"
-            f'<form method="post" action="/admin/canales/{path}">'
-            f"{csrf_field(csrf)}"
-            f'<label>Nombre <input name="name" value="{_esc(info.name)}" maxlength="60" required></label>'
-            f'<label>Ícono <select name="icon">{_icon_options(info.icon, icons)}</select></label>'
-            f'<label>Color <input name="color" value="{_esc(info.color)}" pattern="#[0-9A-Fa-f]{{6}}" required></label>'
-            f'<label>Consentimiento <select name="consent_mode">{_consent_options(consent)}</select></label>'
-            f'<label><input type="checkbox" name="public" value="si"{public_checked}> '
-            "Mostrar en la bienvenida como canal público</label>"
-            '<label>Enlace de contacto (opcional, https://) '
-            f'<input name="contact_url" value="{_esc(contact_url)}" maxlength="200"></label>'
-            f"{callback_html}{email_html}{credentials_html}"
-            '<button type="submit" class="btn-secondary">Guardar</button>'
-            "</form>"
-            f'<form method="post" action="/admin/canales/{path}/activo">'
-            f"{csrf_field(csrf)}"
-            f'<input type="hidden" name="active" value="{toggle_to}">'
-            f'<button type="submit" class="btn-secondary">{toggle_label}</button>'
-            "</form>"
-            f"{secret_html}"
-            "</td>"
-            "</tr>"
         )
     adapter_options = "".join(
         f'<option value="{_esc(adapter)}">{_esc(adapter)}</option>'
         for adapter in listing.adapter_types
     )
+    add_link = (
+        f'<a class="btn btn-secondary" href="#nuevo-canal">{_icon("plus")}Agregar canal</a>'
+        if adapter_options
+        else ""
+    )
+    cards = "".join(
+        _channel_card(
+            info, csrf, icons=icons, glyph_for=glyph_for, webhook_for=webhook_for
+        )
+        for info in listing.channels
+    ) or '<p class="empty">Todavía no hay canales registrados.</p>'
+    parts.append(
+        '<section aria-labelledby="canales-registrados">'
+        '<div class="section-head">'
+        '<h2 id="canales-registrados">Canales registrados '
+        f'<span class="count">{len(listing.channels)}</span></h2>'
+        f"{add_link}</div>"
+        f'<div class="channel-list">{cards}</div>'
+        "</section>"
+    )
     if adapter_options:
         create = (
-            '<form method="post" action="/admin/canales" class="card">'
-            "<h3>Nuevo canal</h3>"
+            '<section class="card" id="nuevo-canal" aria-labelledby="nuevo-canal-titulo">'
+            '<h2 id="nuevo-canal-titulo">Nuevo canal</h2>'
+            '<p class="hint">Al crearlo se genera su secreto de webhook; se muestra '
+            "una sola vez.</p>"
+            '<form method="post" action="/admin/canales" class="channel-form">'
             f"{csrf_field(csrf)}"
             '<label>Id <input name="id" required minlength="2" maxlength="32" '
-            'pattern="[a-z][a-z0-9]*([_\\-][a-z0-9]+)*"></label>'
-            '<label>Nombre <input name="name" maxlength="60" required></label>'
-            f'<label>Tipo de adaptador <select name="adapter_type">{adapter_options}</select></label>'
-            f'<label>Ícono <select name="icon">{_icon_options("chat", icons)}</select></label>'
-            '<label>Color <input name="color" value="#1B6FA8" pattern="#[0-9A-Fa-f]{6}" required></label>'
-            f'<label>Consentimiento <select name="consent_mode">{_consent_options("texto")}</select></label>'
-            '<label><input type="checkbox" name="public" value="si"> '
-            "Mostrar en la bienvenida como canal público</label>"
-            '<label>Enlace de contacto (opcional, https://) '
-            '<input name="contact_url" maxlength="200"></label>'
-            '<label>URL de callback (si el adaptador la usa) '
-            '<input name="callback_url" placeholder="https://"></label>'
-            '<label>Correo de la bandeja Gmail (solo para gmail_api) '
-            '<input type="email" name="email_address" maxlength="128" autocomplete="email"></label>'
-            "<label>Credenciales (nombre=valor por línea) "
-            '<textarea name="credentials" autocomplete="off"></textarea></label>'
-            '<button type="submit">Crear canal</button>'
+            'pattern="[a-z][a-z0-9]*([_\\-][a-z0-9]+)*">'
+            f'{_hint("Minúsculas, dígitos, - o _. No se puede cambiar.")}</label>'
+            '<label>Tipo de adaptador <select name="adapter_type">'
+            f"{adapter_options}</select></label>"
+            + _channel_fields(
+                name="",
+                icon="chat",
+                color="#1B6FA8",
+                consent="texto",
+                public=False,
+                contact_url="",
+                icons=icons,
+            )
+            + _connection_fields(editing=False)
+            + '<button type="submit">Crear canal</button>'
             "</form>"
+            "</section>"
         )
     else:
-        create = "<p>No hay tipos de adaptador disponibles para crear canales.</p>"
-    parts.append(create)
-    parts.append(
-        _table_wrap(
-            "<table><thead><tr><th>Canal</th><th>Id</th><th>Adaptador</th><th>Estado</th>"
-            "<th>Consentimiento</th><th>Credenciales</th><th>Acciones</th></tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table>"
+        create = (
+            '<p class="note">No hay tipos de adaptador disponibles para crear canales.</p>'
         )
-    )
+    parts.append(create)
     parts.append('<script src="/admin/static/canales.js" defer></script>')
     return render_page("Canales", "\n".join(parts), csrf, "/admin/canales")
 

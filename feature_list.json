@@ -15,13 +15,7 @@
     "sdd_required_when": "feature has \"sdd\": true",
     "done_features": "Las features done se guardan resumidas (id, name, title). Su descripción, acceptance y spec completos están en el tag git archivo-antes-limpieza-2026-11-15."
   },
-  "later": [
-    {
-      "name": "esqueleto_instagram",
-      "title": "Esqueleto del adaptador Instagram Messaging, sin credenciales",
-      "note": "Opcional del encargo del profesor (2026-11-21), solo si queda tiempo tras #78. WhatsApp Cloud API ya es un adaptador real (#43), no necesita esqueleto."
-    }
-  ],
+  "later": [],
   "features": [
     {
       "id": 1,

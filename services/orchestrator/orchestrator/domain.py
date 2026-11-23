@@ -114,7 +114,6 @@ from .dashboard import (
     group_top,
     response_summary,
 )
-from .simulator_page import simulated_label
 from .conversations import (
     CONVERSATION_STATUSES,
     derive_conversation_status,
@@ -163,7 +162,7 @@ from .panel import (
     suppression_priority,
 )
 from .channel_label import ChannelLabel, label_from_policy, unknown_label
-from .channels import ChannelPolicy, default_policy
+from .channels import ChannelPolicy, default_policy, simulated_label
 from .charts import (
     CHART_SQL_HINT,
     chart_from_result,
@@ -229,7 +228,6 @@ if TYPE_CHECKING:
     from .adapters.mcp import McpClient
     from .adapters.rag import RagClient
     from .adapters.repository import Repository, StoredEvent
-    from .adapters.simulator import SimulatorClient
 
 logger = logging.getLogger(__name__)
 
@@ -1239,7 +1237,6 @@ class Adapters:
     clock: Callable[[], datetime]
     new_id: Callable[[], str]
     client_data: "ClientDataClient" = field(default_factory=_unavailable_client_data)
-    simulator: "SimulatorClient | None" = None
     # R35: memoria de proceso para distinguir el primer mensaje sin persistir estado.
     consent_shown: set[tuple[str, str]] = field(default_factory=set)
     # R39: desafío efímero de un solo uso por presentación del aviso.

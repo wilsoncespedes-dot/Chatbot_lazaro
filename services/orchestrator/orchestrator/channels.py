@@ -13,17 +13,28 @@ from lazaro_contracts import CONSENT_MODES, DEFAULT_CONSENT_MODE, ChannelInfo
 
 ConsentMode = Literal["texto", "boton"]
 SIMULATED_ADAPTER_TYPE = "simulado"
+SIMULATED_SUFFIX = "[SIMULADO]"
 
 __all__ = [
     "DEFAULT_CONSENT_MODE",
     "ChannelPolicy",
     "ConsentMode",
     "SIMULATED_ADAPTER_TYPE",
+    "SIMULATED_SUFFIX",
     "consent_mode",
     "default_policy",
     "is_windowed",
     "policy_from_info",
+    "simulated_label",
 ]
+
+
+def simulated_label(name: str) -> str:
+    """Etiqueta del canal con la palabra SIMULADO, sin duplicarla."""
+    label = (name or "").strip()
+    if label.upper().endswith(SIMULATED_SUFFIX):
+        return f"{label[: -len(SIMULATED_SUFFIX)].rstrip()} {SIMULATED_SUFFIX}"
+    return f"{label} {SIMULATED_SUFFIX}"
 
 
 @dataclass(frozen=True)

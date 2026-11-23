@@ -43,7 +43,6 @@ from .adapters.llm import HttpLLMClient
 from .adapters.mcp import FakeMcpClient, HttpMcpClient
 from .adapters.rag import HttpRagClient
 from .adapters.repository import PostgresRepository
-from .adapters.simulator import HttpSimulatorClient
 from .adapters.channel_admin import HttpChannelAdminClient
 from .adapters.channels import HttpChannelDirectory
 from .admin_routes import CsrfInvalid, LoginRequired, create_admin_router
@@ -81,7 +80,6 @@ from .identity_routes import create_identity_router
 from .panel_live_routes import create_panel_live_router
 from .quick_replies_routes import create_quick_replies_router
 from .charts_routes import create_charts_router
-from .simulator_routes import create_simulator_router
 
 logger = logging.getLogger(__name__)
 
@@ -229,9 +227,6 @@ def build_default_adapters(settings: Settings) -> Adapters:
         ),
         db_query=db_query,
         client_data=client_data,
-        simulator=HttpSimulatorClient(
-            settings.telegram_gateway_url, settings.service_token, timeout
-        ),
         channel_admin=HttpChannelAdminClient(
             settings.telegram_gateway_url, settings.service_token, timeout
         ),
@@ -387,7 +382,6 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     app.router.routes.extend(create_admin_router(settings, adapters).routes)
     app.router.routes.extend(create_advisor_router(settings, adapters).routes)
     app.router.routes.extend(create_panel_live_router(settings, adapters).routes)
-    app.router.routes.extend(create_simulator_router(settings, adapters).routes)
     app.router.routes.extend(create_identity_router(settings, adapters).routes)
     app.router.routes.extend(create_envios_router(settings, adapters).routes)
     app.router.routes.extend(create_admin_channels_router(settings, adapters).routes)

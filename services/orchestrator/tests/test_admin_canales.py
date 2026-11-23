@@ -160,6 +160,21 @@ def test_listing_shows_fields_and_hints_without_secret(admin_env):
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_channels_render_as_cards_with_collapsible_edit(admin_env):
+    """Diseño: una ficha por canal, edición plegable y el alta después del listado."""
+    inactive = channel_info("tienda", active=False)
+    env, _ = admin_env([channel_info("simulado"), inactive])
+    text = env.client.get("/admin/canales").text
+    assert "<table" not in text
+    assert text.count('<article class="card channel-card') == 2
+    assert text.count('<article class="card channel-card is-off">') == 1
+    assert text.count('<details class="channel-edit"><summary>Editar canal</summary>') == 2
+    assert text.index('class="channel-list"') < text.index('id="nuevo-canal"')
+    assert 'href="#nuevo-canal"' in text
+    assert 'name="confirmar" value="si" required' in text
+    assert "style=" not in text
+
+
 def test_create_offers_only_gateway_adapter_types(admin_env):
     """R11"""
     env, _ = admin_env(adapter_types=["simulado"])

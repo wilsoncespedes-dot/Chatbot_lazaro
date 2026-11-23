@@ -72,7 +72,7 @@ def test_admin_navigation_groups_in_prototype_order(env_factory, panel):
     labels = re.findall(r"<span>([^<]+)</span></a>", nav)
     assert labels == [
         "Inicio", "Eventos recientes", "Clientes", "Métricas",
-        "Dashboard", "Envíos fallidos", "Simulador",
+        "Dashboard", "Envíos fallidos",
         "Manuales", "Plantillas", "Respuestas guardadas", "Respuestas rápidas",
         "Textos del flujo",
         "Categorías", "Etiquetas",
@@ -85,7 +85,7 @@ def test_every_nav_link_has_decorative_icon(env_factory, panel):
     html = _admin_page(env_factory, panel, "/admin")
     nav = re.search(r'<nav class="site-nav"[^>]*>(.*?)</nav>', html, re.S).group(1)
     links = re.findall(r"<a [^>]*>(.*?)</a>", nav)
-    assert len(links) == 19
+    assert len(links) == 18
     for inner in links:
         assert inner.startswith('<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"')
 

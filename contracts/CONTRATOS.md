@@ -389,8 +389,8 @@ Un canal de **DEMOSTRACIÓN** que se hace pasar por cualquier plataforma (por
 ejemplo «TikTok (simulado)») sin credenciales ni llamadas de red. El tipo de
 adaptador es `simulado`; la palabra `SIMULADO` aparece en su clase, su docstring
 y en la etiqueta que muestra el panel. Sus respuestas salientes no viajan a
-ninguna red: quedan en un buzón propio que el panel y
-`scripts/simular_canal.py` pueden consultar.
+ninguna red: quedan en un buzón propio que `scripts/simular_canal.py` puede
+consultar (el panel ya no tiene página de simulador).
 
 El `id` del canal es un slug normal de `canales`; nombre, ícono y color salen de
 las columnas de esa fila (no se duplican en `config`). `config` solo admite la
@@ -428,7 +428,7 @@ webhook firmado sigue respondiendo `200 accepted`.
 ### GET /channels/{channel_id}/mailbox
 
 - **Expone:** telegram_gateway (desde #63)
-- **Llama:** el panel del orquestador y `scripts/simular_canal.py`
+- **Llama:** `scripts/simular_canal.py`
 - **Modelos:** parámetros de consulta → `MailboxResponse`
 - **Autenticación:** `X-Service-Token`
 
@@ -487,7 +487,7 @@ puede leer.
 ### POST /channels/{channel_id}/simulate
 
 - **Expone:** telegram_gateway (desde #63)
-- **Llama:** el panel del orquestador (página del simulador)
+- **Llama:** pruebas internas con `X-Service-Token` (la página del simulador del panel se retiró el 2026-11-23)
 - **Modelos:** `SimulatedInboundRequest` → `SimulatedInboundResponse`
 - **Autenticación:** `X-Service-Token`
 

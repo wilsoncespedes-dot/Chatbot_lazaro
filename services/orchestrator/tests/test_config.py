@@ -142,7 +142,6 @@ def test_only_health_and_messages_routes_exposed():
         "/admin/dashboard",
         # Feature 74: panel de solo lectura del servidor MCP.
         "/admin/mcp",
-        "/admin/simulador",
         "/credentials/expiry-notices",
         "/asesor",
         "/asesor/login",
@@ -171,7 +170,6 @@ def test_only_health_and_messages_routes_exposed():
         "/asesor/metricas",
         # Feature 75: dashboard del supervisor.
         "/asesor/dashboard",
-        "/asesor/simulador",
         "/asesor/supresiones",
         "/asesor/supresiones/{request_id}/execute",
         "/asesor/live/inbox",
