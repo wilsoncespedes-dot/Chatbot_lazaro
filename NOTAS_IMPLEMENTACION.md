@@ -163,3 +163,88 @@ pendientes, variables nuevas y pasos de despliegue.
   (fuera del alcance de la fase).
 - **Supresión por cliente**: borra también la memoria de los contactos de sus
   sesiones; `removed_counts` gana la clave `contact_facts`.
+
+## Fase 4 — Consultas de solo lectura listas para producción
+
+- **Migración `0004_consultas_lectura.sql`** con tres roles, todos
+  `NOSUPERUSER NOBYPASSRLS NOINHERIT`:
+  - `bot_vistas` (NOLOGIN): dueño de las vistas, con SELECT sobre las tablas
+    base que estas leen.
+  - `bot_lectura` (LOGIN si `BOT_LECTURA_PASSWORD` está definida): usa
+    `CLIENT_DATA` y solo puede leer `mis_datos.*`.
+  - `bot_consultas` (LOGIN si `BOT_CONSULTAS_PASSWORD` está definida): usa
+    `DB_QUERY` (asesores/admin) y solo puede leer `consultas.*`.
+
+  Son tres y no uno porque la configuración ya exigía DSN distintos, y las vistas
+  del personal no se filtran por cliente mientras las del cliente sí. Los dos
+  roles de login quedan con `default_transaction_read_only = on` y
+  `statement_timeout = '5s'` a nivel de rol. Por eso la base corta una consulta
+  lenta y rechaza escribir aunque el código fallara.
+- **RLS por `lazaro.cliente_id`**, con `ENABLE` + `FORCE ROW LEVEL SECURITY`,
+  en las tablas con datos de un cliente:
+  - `profiles` (id)
+  - `client_credentials` (profile_id)
+  - `client_sessions` (profile_id)
+  - `case_links` (profile_id)
+  - `identidades_cliente` (cliente_id)
+
+  Cada tabla tiene dos políticas:
+  - `bot_solo_su_cliente` (SELECT `TO bot_vistas`): solo la fila cuyo id coincide
+    con `current_setting('lazaro.cliente_id', true)`. Sin ese valor no ve ninguna
+    fila.
+  - `app_acceso_total` (`TO CURRENT_USER`, el usuario de la aplicación que corre
+    las migraciones): sin cambios para la app. Hace falta porque `FORCE` también
+    aplicaría la RLS al dueño de la tabla.
+
+  Probado: las vistas las posee `bot_vistas`, así que la RLS se evalúa con ese
+  rol aunque consulte `bot_lectura`. Un `SELECT` sin `WHERE` solo devuelve el
+  cliente fijado por `PostgresClientDataQuery`.
+- **Vistas creadas** (sin columnas de id interno de cliente):
+  - `mis_datos.v_mi_cuenta` (id_cliente, usuario, correo, telefono, acceso_desde,
+    acceso_hasta)
+  - `mis_datos.v_mis_casos` (caso, estado, motivo, creado, cerrado)
+  - `mis_datos.v_mis_sesiones` (canal, inicio, fin)
+  - `consultas.v_casos` (caso, estado, motivo, canal, creado, asignado, cerrado)
+  - `consultas.v_mensajes_diarios` (dia, canal, rol, mensajes): conteos, sin
+    texto de mensajes.
+  - `consultas.v_ofertas` (id, destino, titulo, precio_cop, valido_desde,
+    valido_hasta, etiqueta), desde `demo_ofertas`.
+
+  `demo_ofertas` solo se expone a `consultas`: una vista pública en `mis_datos`
+  haría fallar la sonda de aislamiento del cliente al arrancar.
+- **Las vistas del personal** leen tablas sin RLS (`handover_cases`, `contacts`,
+  `messages`, `demo_ofertas`). Lo que limita al rol es el allowlist y los
+  permisos, no un filtro por cliente.
+- **Arranque**: si `DB_QUERY_DATABASE_URL` o `CLIENT_DATA_DATABASE_URL` usan el
+  mismo usuario que `DATABASE_URL`, la configuración falla y el servicio no
+  arranca. También falla si las dos usan el mismo rol entre sí. Además, al
+  primer uso el adaptador verifica `rolsuper`/`rolbypassrls` del rol conectado;
+  si alguno es cierto, queda "no disponible".
+- **LIMIT obligatorio**: `validate_sql(..., max_rows=N)` añade `LIMIT N+1` si el
+  SQL no trae uno al nivel superior; el +1 sirve para detectar `truncated`.
+  - Un `LIMIT` del modelo solo se acepta si es el último y es un entero literal
+    (`LIMIT 5`); `LIMIT ALL`, `LIMIT (…)` u `OFFSET` tras `LIMIT` se rechazan
+    (`invalid_limit`).
+  - Se mantiene el envoltorio `SELECT * FROM (…) LIMIT` del adaptador.
+  - La auditoría guarda el hash del SQL realmente ejecutado, con el LIMIT.
+- **statement_timeout** confirmado en tres capas:
+  - `SET LOCAL` en cada consulta (`DB_QUERY_TIMEOUT_MS`/`CLIENT_DATA_TIMEOUT_MS`);
+  - el valor por rol (5 s);
+  - y ahora también en `PostgresDemoOffers.buscar` del MCP (5000 ms), que antes
+    no tenía.
+- **Resultado estructurado**: `query_client_data` y `query_staff_data` devuelven
+  `QueryOutcome(status, result, validated)`. `QueryResult.as_dict()` da
+  `{"columns", "rows", "truncated"}` serializable a JSON (Decimal→float,
+  fechas→ISO). Las respuestas del bot no cambiaron.
+- **Activación**:
+  - `DB_QUERY_ENABLED`, `CLIENT_DATA_ENABLED` y `MCP_ENABLED` siguen en `false`
+    por defecto.
+  - El `.env.example` ya trae los allowlists de las vistas nuevas y explica qué
+    DSN usar (`bot_consultas`/`bot_lectura`).
+  - Las contraseñas `BOT_*_PASSWORD` las aplica el runner de migraciones (rol con
+    LOGIN).
+- **Copias de seguridad**: con `FORCE RLS`, un `pg_dump` hecho por un rol que no
+  sea superusuario ni dueño con la política `app_acceso_total` vería filas
+  filtradas. Hay que hacer el backup con el usuario principal o el superusuario.
+- No se revoca `CONNECT` a `PUBLIC`: puede romper otros clientes del servidor y
+  está fuera del alcance.

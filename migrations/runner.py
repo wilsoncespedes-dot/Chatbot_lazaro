@@ -71,6 +71,7 @@ VARIABLES: dict[str, tuple[str, Callable[[str], str]]] = {
 # el entorno (la clave nunca se guarda en un archivo de migración).
 ROLE_PASSWORD_ENV: dict[str, str] = {
     "bot_lectura": "BOT_LECTURA_PASSWORD",
+    "bot_consultas": "BOT_CONSULTAS_PASSWORD",
 }
 
 

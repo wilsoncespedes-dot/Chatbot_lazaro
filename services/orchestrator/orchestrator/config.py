@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta
+from urllib.parse import unquote, urlparse
 
 from lazaro_contracts import ASSIGNMENT_STRATEGIES
 from lazaro_contracts.production import (
@@ -50,6 +51,14 @@ _RLS_SETTING = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 
 AUTO_HANDOVER_FAILURE_ALLOWED_REASONS = ("no_relevant_chunks", "invalid_answer")
 ASSIGNMENT_MODES = ("manual", "automatica")
+
+
+def _dsn_user(dsn: str) -> str:
+    """Usuario de un DSN `postgresql://usuario:clave@host/base` ("" si no hay)."""
+    try:
+        return unquote(urlparse(dsn.strip()).username or "")
+    except ValueError:
+        return ""
 
 
 def _parse_db_query_allowlist(
@@ -637,6 +646,18 @@ class Settings(BaseSettings):
                 "CLIENT_DATA_DATABASE_URL debe ser una conexión de solo lectura "
                 "distinta de DATABASE_URL y DB_QUERY_DATABASE_URL"
             )
+        # Fase 4: el rol importa, no el texto del DSN (otra clave u otro host con
+        # el mismo usuario seguiría leyendo y escribiendo todo).
+        user = _dsn_user(dsn)
+        if user and user == _dsn_user(self.database_url):
+            raise ValueError(
+                "CLIENT_DATA_DATABASE_URL no puede usar el usuario principal de "
+                "DATABASE_URL; usa el rol bot_lectura"
+            )
+        if user and user == _dsn_user(self.db_query_database_url):
+            raise ValueError(
+                "CLIENT_DATA_DATABASE_URL y DB_QUERY_DATABASE_URL deben usar roles distintos"
+            )
         if not _DB_QUERY_IDENTIFIER.fullmatch(self.client_data_views_schema):
             raise ValueError("CLIENT_DATA_VIEWS_SCHEMA debe ser un identificador válido")
         if not _RLS_SETTING.fullmatch(self.client_data_rls_setting):
@@ -675,6 +696,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DB_QUERY_DATABASE_URL debe ser una conexión de solo lectura distinta "
                 "de DATABASE_URL"
+            )
+        user = _dsn_user(dsn)
+        if user and user == _dsn_user(self.database_url):
+            raise ValueError(
+                "DB_QUERY_DATABASE_URL no puede usar el usuario principal de "
+                "DATABASE_URL; usa el rol bot_consultas"
             )
         if not _DB_QUERY_IDENTIFIER.fullmatch(self.db_query_views_schema):
             raise ValueError("DB_QUERY_VIEWS_SCHEMA debe ser un identificador válido")

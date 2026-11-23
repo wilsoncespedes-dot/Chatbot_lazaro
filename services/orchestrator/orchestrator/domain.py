@@ -163,6 +163,8 @@ from .db_query import (
     DbQueryRejected,
     DbQueryUnavailable,
     MalformedDbQuery,
+    QueryResult,
+    ValidatedQuery,
     build_sql_prompt,
     format_rows,
     parse_db_query_command,
@@ -2689,47 +2691,108 @@ def _tool_client_data(
         _send(contact, settings.client_data_disabled_reply, adapters)
         return "disabled", ""
 
-    allowlist = settings.client_data_allowlist_map
-    system, user = build_sql_prompt(ctx.text, allowlist)
-    try:
-        raw = adapters.llm.complete(system, user)
-    except ServiceUnavailable:
-        logger.error("client_data_llm_failed contact_id=%s", contact.id)
-        _send(contact, settings.client_data_unavailable_reply, adapters)
-        return "unavailable", ""
-
-    try:
-        sql = parse_sql_answer(raw)
-        validated = validate_sql(
-            sql,
-            allowlist,
-            settings.client_data_views_schema,
-            settings.client_data_max_joins,
-        )
-    except DbQueryRejected:
+    outcome = query_client_data(ctx.text, cliente_id, settings, adapters)
+    if outcome.status == "rejected":
         _send(contact, settings.client_data_rejected_reply, adapters)
         return "rejected", ""
-
-    views = ",".join(validated.views)
-    try:
-        result = adapters.client_data.run(
-            validated,
-            cliente_id,
-            settings.client_data_max_rows,
-            settings.client_data_timeout_ms,
-        )
-    except DbQueryUnavailable:
+    if outcome.status == "unavailable" or outcome.result is None:
         logger.error("client_data_unavailable contact_id=%s", contact.id)
         _send(contact, settings.client_data_unavailable_reply, adapters)
-        return "unavailable", f"views={views}"
+        return "unavailable", outcome.views_detail()
 
+    validated = outcome.validated
+    assert validated is not None
+    result = outcome.result
     text = format_rows(
         result, settings.client_data_max_reply_chars, settings.client_data_truncated_note
     )
     _send(contact, text, adapters)
     sha = hashlib.sha256(validated.sql.encode("utf-8")).hexdigest()
-    detail = f"views={views};rows={len(result.rows)};sql_sha256={sha}"
+    detail = f"{outcome.views_detail()};rows={len(result.rows)};sql_sha256={sha}"
     return "ok", detail
+
+
+@dataclass(frozen=True)
+class QueryOutcome:
+    """Fase 4: resultado estructurado (columnas + filas) de una consulta en lenguaje natural."""
+
+    status: Literal["ok", "rejected", "unavailable"]
+    result: QueryResult | None = None
+    validated: ValidatedQuery | None = None
+
+    def views_detail(self) -> str:
+        if self.validated is None:
+            return ""
+        return f"views={','.join(self.validated.views)}"
+
+
+def _natural_language_query(
+    question: str,
+    allowlist: dict[str, tuple[str, ...]],
+    schema: str,
+    max_joins: int,
+    max_rows: int,
+    run: Callable[[ValidatedQuery], QueryResult],
+    adapters: Adapters,
+    log_prefix: str,
+) -> QueryOutcome:
+    """Pregunta → SQL del LLM → validación con LIMIT obligatorio → ejecución."""
+    system, user = build_sql_prompt(question, allowlist)
+    try:
+        raw = adapters.llm.complete(system, user)
+    except ServiceUnavailable:
+        logger.error("%s_llm_failed", log_prefix)
+        return QueryOutcome("unavailable")
+    try:
+        validated = validate_sql(
+            parse_sql_answer(raw), allowlist, schema, max_joins, max_rows=max_rows
+        )
+    except DbQueryRejected:
+        return QueryOutcome("rejected")
+    try:
+        result = run(validated)
+    except DbQueryUnavailable:
+        return QueryOutcome("unavailable", validated=validated)
+    return QueryOutcome("ok", result=result, validated=validated)
+
+
+def query_client_data(
+    question: str, cliente_id: str, settings: Settings, adapters: Adapters
+) -> QueryOutcome:
+    """Datos propios del cliente: vistas de `mis_datos` con RLS por `cliente_id`."""
+    return _natural_language_query(
+        question,
+        settings.client_data_allowlist_map,
+        settings.client_data_views_schema,
+        settings.client_data_max_joins,
+        settings.client_data_max_rows,
+        lambda validated: adapters.client_data.run(
+            validated,
+            cliente_id,
+            settings.client_data_max_rows,
+            settings.client_data_timeout_ms,
+        ),
+        adapters,
+        "client_data",
+    )
+
+
+def query_staff_data(
+    question: str, settings: Settings, adapters: Adapters
+) -> QueryOutcome:
+    """Consultas del personal: vistas agregadas de `consultas`."""
+    return _natural_language_query(
+        question,
+        settings.db_query_allowlist_map,
+        settings.db_query_views_schema,
+        settings.db_query_max_joins,
+        settings.db_query_max_rows,
+        lambda validated: adapters.db_query.run(
+            validated, settings.db_query_max_rows, settings.db_query_timeout_ms
+        ),
+        adapters,
+        "db_query",
+    )
 
 
 def _tool_escalate(
@@ -3354,31 +3417,8 @@ def handle_db_query(
         )
         return
 
-    allowlist = settings.db_query_allowlist_map
-    system, user = build_sql_prompt(command.question, allowlist)
-    try:
-        raw = adapters.llm.complete(system, user)
-    except ServiceUnavailable:
-        logger.error("db_query_llm_failed")
-        _finish_db_query(
-            request,
-            profile,
-            "unavailable",
-            settings.db_query_unavailable_reply,
-            settings,
-            adapters,
-        )
-        return
-
-    try:
-        sql = parse_sql_answer(raw)
-        validated = validate_sql(
-            sql,
-            allowlist,
-            settings.db_query_views_schema,
-            settings.db_query_max_joins,
-        )
-    except DbQueryRejected:
+    outcome = query_staff_data(command.question, settings, adapters)
+    if outcome.status == "rejected":
         _finish_db_query(
             request,
             profile,
@@ -3388,16 +3428,10 @@ def handle_db_query(
             adapters,
         )
         return
-
-    views = ",".join(validated.views)
-    try:
-        result = adapters.db_query.run(
-            validated,
-            settings.db_query_max_rows,
-            settings.db_query_timeout_ms,
-        )
-    except DbQueryUnavailable:
-        logger.error("db_query_unavailable")
+    validated = outcome.validated
+    if outcome.status == "unavailable" or outcome.result is None:
+        if validated is not None:
+            logger.error("db_query_unavailable")
         _finish_db_query(
             request,
             profile,
@@ -3405,11 +3439,17 @@ def handle_db_query(
             settings.db_query_unavailable_reply,
             settings,
             adapters,
-            views=views,
-            sql=validated.sql,
+            **(
+                {"views": ",".join(validated.views), "sql": validated.sql}
+                if validated is not None
+                else {}
+            ),
         )
         return
 
+    assert validated is not None
+    result = outcome.result
+    views = ",".join(validated.views)
     text = format_rows(
         result, settings.db_query_max_reply_chars, settings.db_query_truncated_note
     )

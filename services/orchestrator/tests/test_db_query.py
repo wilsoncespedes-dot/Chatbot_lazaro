@@ -629,7 +629,10 @@ def test_ok_query_writes_audit_with_expected_fields(env):
     assert audit.status == "ok"
     assert audit.views == "consultas.v_x"
     assert audit.row_count == 1
-    assert audit.sql_sha256 == hashlib.sha256(SAFE_SQL.encode()).hexdigest()
+    # Fase 4: se audita el SQL realmente ejecutado (con el LIMIT obligatorio).
+    executed = env.db_query.calls[-1][0].sql
+    assert executed.startswith(SAFE_SQL) and " LIMIT " in executed
+    assert audit.sql_sha256 == hashlib.sha256(executed.encode()).hexdigest()
     assert audit.at == FIXED_NOW
 
 

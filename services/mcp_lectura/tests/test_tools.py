@@ -141,6 +141,7 @@ def test_demo_query_is_select_read_only():
 
     statements = [sql.strip() for sql, _ in connection.log]
     assert statements[0] == "SET TRANSACTION READ ONLY"
+    assert statements[1] == "SET LOCAL statement_timeout = 5000"
     assert any(statement.upper().startswith("SELECT") for statement in statements)
     assert not any(
         statement.upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP"))
