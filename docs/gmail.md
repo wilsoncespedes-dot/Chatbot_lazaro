@@ -58,7 +58,8 @@ cuando confirmes que el proyecto OAuth tiene permiso para abrir esa bandeja.
 ## Activar el procesamiento
 
 La primera sincronización guarda el `historyId` actual y no importa correos
-anteriores. Después configura un scheduler para ejecutar cada 60 segundos:
+anteriores. El script es de una sola ejecución; debe ejecutarse cada 60 segundos
+desde un scheduler:
 
 ```text
 python scripts/sincronizar_gmail.py
@@ -69,6 +70,35 @@ Variables necesarias: `TELEGRAM_GATEWAY_URL` (URL interna del servicio) y
 algún canal falla y el scheduler puede reintentarlo. Mensajes de `INBOX` se
 deduplican por el ID que asigna Gmail; los correos enviados por la propia
 bandeja se ignoran.
+
+### Cierre pendiente del despliegue en AWS
+
+El despliegue de producción se encuentra en AWS, pero se debe confirmar qué
+servicio ejecuta Lázaro antes de configurar el scheduler:
+
+- **EC2:** instalar un timer de `systemd` o `cron` en la instancia y ejecutar el
+  script desde un entorno que tenga el código y `httpx` disponibles.
+- **ECS/Fargate:** usar EventBridge Scheduler para lanzar una tarea recurrente
+  cada minuto. La imagen de esa tarea debe incluir el script y sus dependencias;
+  la imagen actual del gateway no copia `scripts/sincronizar_gmail.py`.
+- **Otro servicio AWS:** elegir un scheduler que pueda ejecutar el script y
+  alcanzar el endpoint interno del gateway.
+
+En todos los casos, proporcionar `TELEGRAM_GATEWAY_URL` y `SERVICE_TOKEN` desde
+la configuración segura del entorno. No incluir tokens ni credenciales OAuth en
+el payload del scheduler, comandos guardados, ni logs.
+
+Checklist para completar la conexión:
+
+- [ ] Confirmar si el servicio de producción es EC2, ECS/Fargate u otro.
+- [ ] Configurar una ejecución recurrente del script cada 60 segundos.
+- [ ] Ejecutar una sincronización inicial; esta fija el cursor y no importa
+  mensajes anteriores.
+- [ ] Enviar un correo nuevo de texto plano desde otra cuenta y comprobar que
+  Lázaro lo recibe y responde dentro del mismo hilo.
+
+AWS documenta [cómo conectar a una instancia EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-to-linux-instance.html)
+y [cómo programar tareas de ECS con EventBridge Scheduler](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/tasks-scheduled-eventbridge-scheduler.html).
 
 Si Gmail responde que el cursor ya venció, el endpoint de sincronización devuelve
 `gmail_history_expired` sin saltar el problema. Un administrador puede ejecutar

@@ -319,3 +319,9 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - Guía: `docs/gmail.md`. Requiere OAuth de Google Cloud y programar `scripts/sincronizar_gmail.py` cada 60 s; no se conectó una cuenta real durante esta sesión.
 - Revisión de código aprobada en `progress/review_canal_gmail.md`; trazabilidad en `progress/impl_canal_gmail.md`.
 - `./init.sh`: **4931 passed, 1 skipped**, exit code 0. `git diff --check` limpio.
+
+## 2026-11-23 — Documentación de cierre Gmail en AWS
+- La rama local se actualizó por fast-forward a `f269939`, que ya contenía los commits remotos recientes, Gmail y las fases multicanal.
+- A solicitud del usuario, `docs/gmail.md` deja claro que producción usa AWS, pero falta confirmar EC2/ECS/u otro servicio para elegir y programar el scheduler cada 60 s. Incluye checklist de sincronización inicial y correo de prueba.
+- Se subirán los archivos locales restantes solicitados por el usuario. No se leyó ni se agregó `.env`; credenciales OAuth no se copiaron al repositorio.
+- Sincronización real pendiente; el usuario indicó haber guardado las credenciales del canal.
