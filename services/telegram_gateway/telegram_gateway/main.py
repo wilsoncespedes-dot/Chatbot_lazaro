@@ -50,6 +50,8 @@ from .adapters.mailbox import FakeMailboxRepository, PostgresMailboxRepository
 from .adapters.message_buffer import RedisMessageBuffer
 from .adapters.orchestrator import HttpOrchestratorClient
 from .adapters.telegram import HttpTelegramClient
+from .adapters.tiktok_api import HttpTikTokApi
+from .adapters.tiktok_quota import RedisTikTokMessageQuotaStore
 from .adapters.whatsapp_cloud import WhatsAppCloudAdapter, WhatsAppCloudConfig
 from .adapters.whatsapp_window import RedisWhatsAppWindowStore
 from .config import Settings
@@ -78,6 +80,8 @@ WHATSAPP_WEBHOOK_PATH = "/whatsapp/webhook"
 # Fase 2: las URLs históricas entran por el webhook común con estos canales.
 TELEGRAM_CHANNEL_ID = "telegram"
 WHATSAPP_CHANNEL_ID = "whatsapp"
+TIKTOK_CHANNEL_ID = "tiktok"
+TIKTOK_WEBHOOK_PATH = "/webhooks/tiktok"
 # Los webhooks no usan X-Service-Token: se protegen con su propio secreto/firma.
 PUBLIC_PATHS: frozenset[str] = frozenset(
     {"/health", WEBHOOK_PATH, WHATSAPP_WEBHOOK_PATH}
@@ -114,7 +118,18 @@ def build_default_adapters(settings: Settings) -> Adapters:
             whatsapp_window,
             _utcnow,
         )
+    tiktok: HttpTikTokApi | None = None
+    tiktok_quota: RedisTikTokMessageQuotaStore | None = None
+    if settings.tiktok_enabled:
+        tiktok = HttpTikTokApi(
+            settings.tiktok_token_url,
+            settings.tiktok_send_url,
+            httpx.Client(timeout=settings.http_timeout_seconds),
+        )
+        tiktok_quota = RedisTikTokMessageQuotaStore(settings.redis_url)
     return Adapters(
+        tiktok=tiktok,
+        tiktok_quota=tiktok_quota,
         telegram=HttpTelegramClient(
             settings.telegram_bot_token,
             settings.http_timeout_seconds,
@@ -307,6 +322,13 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     async def whatsapp_webhook(request: Request) -> dict:
         """URL histórica de WhatsApp; entra por el webhook común (fase 2)."""
         await _receive(WHATSAPP_CHANNEL_ID, request, own_route=True)
+        return {"ok": True}
+
+    # Fase 6: TikTok firma con su propio esquema; la ruta fija va antes que la
+    # genérica para que `/webhooks/tiktok` no se trate como canal con firma Lázaro.
+    @app.post(TIKTOK_WEBHOOK_PATH)
+    async def tiktok_webhook(request: Request) -> dict:
+        await _receive(TIKTOK_CHANNEL_ID, request, own_route=True)
         return {"ok": True}
 
     @app.post("/webhooks/{canal_id}", response_model=MessageResponse)

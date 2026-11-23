@@ -61,6 +61,27 @@ class Settings(BaseSettings):
     whatsapp_interactive_body_text: str = "Elige una opción:"
     whatsapp_window_hours: int = 24
 
+    # TikTok Business Messaging (fase 6). Acceso sujeto a autorización de TikTok.
+    tiktok_enabled: bool = False
+    tiktok_client_key: str = ""
+    tiktok_client_secret: SecretStr = SecretStr("")
+    # Secreto con el que se verifica `TikTok-Signature`. Vacío = se rechaza todo
+    # webhook de TikTok con 401 (fallo cerrado), aunque el canal esté habilitado.
+    tiktok_webhook_secret: SecretStr = SecretStr("")
+    # `open_id` devuelto por el OAuth de la cuenta de TikTok.
+    tiktok_business_id: str = ""
+    # Solo para el primer arranque: después el refresh token rotado vive cifrado
+    # en `canales.config_secreta` y es el que se usa.
+    tiktok_refresh_token: SecretStr = SecretStr("")
+    tiktok_token_url: str = (
+        "https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2/refresh_token/"
+    )
+    tiktok_send_url: str = (
+        "https://business-api.tiktok.com/open_api/v1.3/business/message/send/"
+    )
+    tiktok_token_refresh_margin_seconds: int = Field(300, ge=30, le=3600)
+    tiktok_signature_tolerance_seconds: int = Field(300, ge=30, le=3600)
+
     # Webhook genérico firmado (#62)
     webhook_signature_window_seconds: int = Field(
         DEFAULT_SIGNATURE_WINDOW_SECONDS, ge=1, le=3600
@@ -138,6 +159,32 @@ class Settings(BaseSettings):
         if missing:
             raise ValueError(
                 "configuración de WhatsApp incompleta: faltan " + ", ".join(missing)
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_tiktok(self) -> "Settings":
+        """R1: el canal solo arranca habilitado con credenciales y cifrado disponibles."""
+        if not self.tiktok_enabled:
+            return self
+        missing: list[str] = []
+        if not self.tiktok_client_key:
+            missing.append("TIKTOK_CLIENT_KEY")
+        if not self.tiktok_client_secret.get_secret_value():
+            missing.append("TIKTOK_CLIENT_SECRET")
+        if not self.tiktok_business_id:
+            missing.append("TIKTOK_BUSINESS_ID")
+        if not self.channel_secrets_key.get_secret_value():
+            missing.append("CHANNEL_SECRETS_KEY")
+        for name, url in (
+            ("TIKTOK_TOKEN_URL", self.tiktok_token_url),
+            ("TIKTOK_SEND_URL", self.tiktok_send_url),
+        ):
+            if not url.startswith("https://"):
+                missing.append(name)
+        if missing:
+            raise ValueError(
+                "configuración de TikTok incompleta: faltan " + ", ".join(missing)
             )
         return self
 

@@ -146,12 +146,14 @@ def test_registry_unknown_type_raises_explicit_error():
 
 
 def test_default_registry_contains_environment_and_generic_adapters():
-    """R9, R31: el registry global incluye Telegram, WhatsApp, genérico y simulado."""
+    """R9, R31: el registry global incluye Telegram, WhatsApp, genérico, simulado
+    y el canal TikTok gestionado por el entorno."""
     assert CHANNEL_REGISTRY.adapter_types() == (
         "telegram",
         "webhook_generico",
         "whatsapp_cloud",
         "simulado",
+        "tiktok",
     )
     assert CHANNEL_REGISTRY.get("telegram") is TelegramChannel
     assert CHANNEL_REGISTRY.get("whatsapp_cloud") is WhatsAppCloudChannel

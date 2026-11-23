@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from .adapters.channel_repository import ChannelRepository
     from .adapters.mailbox import MailboxRepository
     from .adapters.inbound_retry import InboundRetryStore
+    from .adapters.tiktok_api import TikTokApi
+    from .adapters.tiktok_quota import TikTokMessageQuotaStore
     from .registry import ChannelRegistry
     from .ports.canal import Canal
 
@@ -233,6 +235,11 @@ BUILTIN_CHANNEL_SEEDS: tuple[ChannelSeed, ...] = (
         "whatsapp", "WhatsApp", "whatsapp_cloud", "whatsapp", "#0E7A5F",
         {"consent_mode": "boton"},
     ),
+    # Fase 6: activo solo si TIKTOK_ENABLED=true (sigue al entorno).
+    ChannelSeed(
+        "tiktok", "TikTok", "tiktok", "tiktok", "#111827",
+        {"consent_mode": "texto"},
+    ),
 )
 
 
@@ -254,6 +261,9 @@ class Adapters:
     callback: "CallbackClient | None" = None
     mailbox: "MailboxRepository | None" = None
     inbound_retry: "InboundRetryStore | None" = None
+    # Fase 6: cliente HTTP de TikTok (refresco OAuth y envío).
+    tiktok: "TikTokApi | None" = None
+    tiktok_quota: "TikTokMessageQuotaStore | None" = None
 
 
 @dataclass(frozen=True)

@@ -327,3 +327,78 @@ pendientes, variables nuevas y pasos de despliegue.
     `test_answer_quality`;
   - la lista de rutas expuestas en `test_config`;
   - el SQL auditado en `test_db_query`.
+
+## Fase 6 — Canal TikTok Business Messaging
+
+Origen: OpenCode escribió la primera versión mientras esta sesión estaba en pausa
+por el límite de uso. Aquí se revisó contra el encargo y se completó lo que faltaba:
+el secreto propio del webhook, los PENDIENTE, los tests de aceptación y el simulador.
+
+- **Ruta y firma**
+  - La ruta es `POST /webhooks/tiktok`. Es pública, sin `X-Service-Token`, y se
+    registra antes de la genérica `/webhooks/{canal_id}`.
+  - La firma va en `TikTok-Signature: t=<unix>,s=<hex>`: es el HMAC-SHA256 de
+    `<t>.<cuerpo crudo>`, con una ventana anti-repetición de
+    `TIKTOK_SIGNATURE_TOLERANCE_SECONDS`.
+  - **Decisión:** se verifica con `TIKTOK_WEBHOOK_SECRET`, que es la variable propia
+    que pide el encargo, y no con `TIKTOK_CLIENT_SECRET`. Si está vacío, todo
+    webhook recibe 401 aunque `TIKTOK_ENABLED=true`. **Motivo:** falla cerrado y
+    permite rotar el secreto del webhook sin tocar el OAuth.
+  - PENDIENTE: confirmar con la doc oficial la cabecera, el formato y qué secreto
+    firma. Según la documentación que consultó OpenCode es el `client_secret` de la
+    app; en ese caso basta con poner el mismo valor en ambas variables.
+- **Normalización**
+  - Solo se procesa `im_receive_msg` de la cuenta `TIKTOK_BUSINESS_ID` y del
+    `client_key` propio.
+  - Los ecos y los mensajes de la propia cuenta se ignoran.
+  - La multimedia y el texto demasiado largo llegan como `unsupported`, sin truncar.
+- **OAuth**
+  - Los tokens se guardan cifrados con Fernet (`CHANNEL_SECRETS_KEY`) en
+    `canales.config_secreta`.
+  - Se refrescan antes de enviar si vencen dentro de
+    `TIKTOK_TOKEN_REFRESH_MARGIN_SECONDS`.
+  - Si TikTok rechaza un token que todavía estaba vigente (códigos de
+    autenticación), se refresca una sola vez y se reintenta. Un segundo rechazo
+    deja el envío en `failed`, sin bucles.
+  - Un candado por proceso evita dos refrescos simultáneos, porque TikTok rota el
+    refresh token.
+  - `TIKTOK_REFRESH_TOKEN` solo se usa en el primer arranque.
+- **Salida**
+  - `supports_images=False`: los gráficos de la fase 5 llegan como enlace firmado,
+    con la forma «Título: URL».
+  - El texto se divide en trozos de 6000 caracteres.
+  - Hay un tope de 10 mensajes por conversación cada 48 h, llevado en Redis. Al
+    superarlo, el gateway responde 422 de ventana y la fila del outbox queda en
+    `fuera_de_ventana` (fase 7).
+- **Panel**: el canal se siembra como `tiktok` (adaptador `tiktok`, gestionado por
+  el entorno) y solo se activa con `TIKTOK_ENABLED=true`.
+- **Simulador**: se lanza con
+  `python scripts/simular_canal.py --canal tiktok --usuario u --texto "Hola"`.
+  Necesita `TIKTOK_WEBHOOK_SECRET`, `TIKTOK_BUSINESS_ID` y `TIKTOK_CLIENT_KEY` en el
+  entorno.
+- **Tests**
+  - `services/telegram_gateway/tests/test_tiktok.py`:
+    - una firma válida llega al orquestador;
+    - una firma inválida, o la ausencia de secreto, da 401;
+    - un token vencido se refresca antes de enviar;
+    - un token rechazado se refresca y se reintenta una sola vez;
+    - un gráfico se entrega como enlace.
+  - `services/orchestrator/tests/test_canales_externos.py`: un mensaje de `tiktok`
+    deja la respuesta en el outbox de ese canal.
+  - `scripts/tests/test_simular_canal.py`: el modo TikTok.
+- PENDIENTE: confirmar con la doc oficial lo siguiente. No se hizo ninguna llamada
+  real a TikTok.
+  - Las URLs `TIKTOK_TOKEN_URL` y `TIKTOK_SEND_URL`.
+  - Los códigos de token vencido (`AUTH_ERROR_CODES`).
+  - El límite de 10 mensajes cada 48 h.
+  - Que la API de Business Messaging (beta regional, con aprobación previa) esté
+    disponible para la cuenta de Lázaro.
+- Fuentes que citó OpenCode:
+  - [webhooks](https://business-api.tiktok.com/portal/docs/subscribe-to-business-messaging-webhook-events-via-webhooks-api/v1.3)
+  - [OAuth](https://business-api.tiktok.com/portal/docs/business-messaging-api-authentication/v1.3)
+  - [envío](https://business-api.tiktok.com/portal/docs/send-a-message-to-a-conversation/v1.3)
+  - [firma](https://developers.tiktok.com/docs/en/webhooks-verification)
+- **Verificación**: se pasaron los tests del gateway, de scripts y de contracts
+  sobre el árbol exacto de este commit. El pytest completo de esta fase se ejecutó
+  junto con el del cierre, porque OpenCode dejó las fases 6 y 7 entrelazadas en el
+  árbol de trabajo.

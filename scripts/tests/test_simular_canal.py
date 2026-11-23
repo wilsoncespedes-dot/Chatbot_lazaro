@@ -251,3 +251,47 @@ def test_help_and_docstring_contain_simulado(capsys):
         simular.main(["--help"], env={})
     assert error.value.code == 0
     assert "SIMULADO" in capsys.readouterr().out
+
+
+# ── Fase 6: TikTok con su propio formato y firma ────────────────────────────
+
+TIKTOK_SECRET = "tiktok-webhook-secret-de-prueba"
+TIKTOK_BUSINESS = "business-open-id"
+TIKTOK_APP_KEY = "tiktok-app-key"
+
+
+def test_tiktok_mode_builds_a_signed_event_the_gateway_accepts(capsys):
+    """Fase 6: --canal tiktok firma con TIKTOK_WEBHOOK_SECRET y el gateway lo normaliza."""
+    from telegram_gateway.tiktok import parse_tiktok_webhook, verify_tiktok_signature
+
+    post = _Post()
+    argv = ["--canal", "tiktok", "--usuario", USER, "--texto", TEXT, "--id-mensaje", "tt-1"]
+    env = {
+        "TIKTOK_WEBHOOK_SECRET": TIKTOK_SECRET,
+        "TIKTOK_BUSINESS_ID": TIKTOK_BUSINESS,
+        "TIKTOK_CLIENT_KEY": TIKTOK_APP_KEY,
+    }
+    assert _run(post=post, env=env, argv=argv) == 0
+
+    url, body, headers = post.calls[0]
+    assert url == f"{BASE_URL}/webhooks/tiktok"
+    assert verify_tiktok_signature(TIKTOK_SECRET, body, headers["TikTok-Signature"], NOW)
+    payload = __import__("json").loads(body)
+    assert payload["client_key"] == TIKTOK_APP_KEY
+    [message] = parse_tiktok_webhook(payload, TIKTOK_BUSINESS, NOW)
+    assert message.channel == "tiktok"
+    assert message.external_user_id == USER
+    assert message.external_message_id == "tt-1"
+    assert message.text == TEXT
+    assert TIKTOK_SECRET not in capsys.readouterr().out
+
+
+def test_tiktok_mode_requires_its_own_secret_and_account(capsys):
+    """Fase 6: sin TIKTOK_WEBHOOK_SECRET o sin cuenta sale con 2 y no envía nada."""
+    post = _Post()
+    argv = ["--canal", "tiktok", "--usuario", USER, "--texto", TEXT]
+    assert _run(post=post, env={"LAZARO_CANAL_SECRETO": SECRET}, argv=argv) == 2
+    assert "TIKTOK_WEBHOOK_SECRET" in capsys.readouterr().err
+    assert _run(post=post, env={"TIKTOK_WEBHOOK_SECRET": TIKTOK_SECRET}, argv=argv) == 2
+    assert "TIKTOK_BUSINESS_ID" in capsys.readouterr().err
+    assert post.calls == []

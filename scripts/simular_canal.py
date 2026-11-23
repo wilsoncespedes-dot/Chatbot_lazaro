@@ -6,12 +6,21 @@ Uso:
 
 El secreto del canal se lee de `LAZARO_CANAL_SECRETO` (o de la variable indicada
 con `--secreto-env`); nunca se acepta como argumento ni se imprime.
+
+Plataformas con webhook propio (fase 6): con `--canal tiktok` el script arma el
+evento `im_receive_msg` de TikTok, lo firma con la cabecera `TikTok-Signature`
+usando `TIKTOK_WEBHOOK_SECRET` y lo envía a `/webhooks/tiktok`. La cuenta de
+negocio sale de `--cuenta` o de `TIKTOK_BUSINESS_ID`, y el client key de
+`TIKTOK_CLIENT_KEY`:
+
+    python scripts/simular_canal.py --canal tiktok --usuario cliente-demo --texto "Hola"
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import hmac
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -32,6 +41,11 @@ from lazaro_contracts import (  # noqa: E402
 
 DEFAULT_URL = "http://localhost:8001"
 DEFAULT_SECRET_ENV = "LAZARO_CANAL_SECRETO"
+
+TIKTOK_CHANNEL = "tiktok"
+TIKTOK_SECRET_ENV = "TIKTOK_WEBHOOK_SECRET"
+TIKTOK_ACCOUNT_ENV = "TIKTOK_BUSINESS_ID"
+TIKTOK_CLIENT_KEY_ENV = "TIKTOK_CLIENT_KEY"
 
 
 def _utcnow() -> datetime:
@@ -62,6 +76,46 @@ def sign(secret: str, timestamp: int, body: bytes) -> str:
     """HMAC-SHA256 hexadecimal de `<timestamp>.<cuerpo>`."""
     message = f"{timestamp}.".encode("utf-8") + body
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def build_tiktok_body(
+    business_id: str,
+    client_key: str,
+    user: str,
+    text: str,
+    message_id: str,
+    now: datetime,
+) -> bytes:
+    """Evento `im_receive_msg` con el `content` JSON que procesa el gateway."""
+    content = {
+        "from": "customer",
+        "to": "business",
+        "unique_identifier": user,
+        "from_user": {"id": user, "role": "personal_account"},
+        "to_user": {"id": business_id, "role": "business_account"},
+        "conversation_id": f"conv-{user}",
+        "message_id": message_id,
+        "timestamp": int(now.timestamp() * 1000),
+        "type": "text",
+        "text": {"body": text},
+    }
+    payload = {
+        "client_key": client_key,
+        "event": "im_receive_msg",
+        "create_time": int(now.timestamp()),
+        "user_openid": business_id,
+        "content": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def tiktok_headers(secret: str, body: bytes, now: datetime) -> dict[str, str]:
+    """`TikTok-Signature: t=<unix>,s=<hex>` sobre `<t>.<cuerpo>` (mismo HMAC que Lázaro)."""
+    timestamp = int(now.timestamp())
+    return {
+        "Content-Type": "application/json",
+        "TikTok-Signature": f"t={timestamp},s={sign(secret, timestamp, body)}",
+    }
 
 
 def urllib_post(url: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, str]:
@@ -124,27 +178,59 @@ def main(
     parser.add_argument("--id-mensaje", default=None, help="id externo del mensaje")
     parser.add_argument(
         "--secreto-env",
-        default=DEFAULT_SECRET_ENV,
-        help=f"variable de entorno con el secreto (por defecto {DEFAULT_SECRET_ENV})",
+        default=None,
+        help=(
+            f"variable de entorno con el secreto (por defecto {DEFAULT_SECRET_ENV}; "
+            f"{TIKTOK_SECRET_ENV} con --canal {TIKTOK_CHANNEL})"
+        ),
+    )
+    parser.add_argument(
+        "--cuenta",
+        default=None,
+        help=f"id de la cuenta de negocio (TikTok: por defecto {TIKTOK_ACCOUNT_ENV})",
     )
     args = parser.parse_args(arguments)
     values = os.environ if env is None else env
 
-    secret = values.get(args.secreto_env, "").strip()
+    platform = args.canal if args.canal == TIKTOK_CHANNEL else None
+    secret_env = args.secreto_env or (
+        TIKTOK_SECRET_ENV if platform == TIKTOK_CHANNEL else DEFAULT_SECRET_ENV
+    )
+    secret = values.get(secret_env, "").strip()
     if not secret:
         print(
-            f"Falta la variable de entorno {args.secreto_env} con el secreto del canal.",
+            f"Falta la variable de entorno {secret_env} con el secreto del canal.",
             file=sys.stderr,
         )
         return 2
 
     message_id = args.id_mensaje or f"sim-{os.urandom(8).hex()}"
     current = now()
-    body = build_body(args.canal, args.usuario, args.texto, message_id, current)
-    try:
-        status, response_body = send(
-            args.url, args.canal, secret, body, current, post=post
+    if platform == TIKTOK_CHANNEL:
+        account = (args.cuenta or values.get(TIKTOK_ACCOUNT_ENV, "")).strip()
+        if not account:
+            print(
+                f"Falta --cuenta o la variable {TIKTOK_ACCOUNT_ENV}.", file=sys.stderr
+            )
+            return 2
+        body = build_tiktok_body(
+            account,
+            values.get(TIKTOK_CLIENT_KEY_ENV, "").strip(),
+            args.usuario,
+            args.texto,
+            message_id,
+            current,
         )
+        target = f"{args.url.rstrip('/')}/webhooks/{TIKTOK_CHANNEL}"
+        headers = tiktok_headers(secret, body, current)
+    try:
+        if platform is None:
+            body = build_body(args.canal, args.usuario, args.texto, message_id, current)
+            status, response_body = send(
+                args.url, args.canal, secret, body, current, post=post
+            )
+        else:
+            status, response_body = post(target, body, headers)
     except Exception as exc:  # noqa: BLE001 - R38 salida 2 sin traza
         print(f"Error de red al enviar el mensaje: {type(exc).__name__}", file=sys.stderr)
         return 2
