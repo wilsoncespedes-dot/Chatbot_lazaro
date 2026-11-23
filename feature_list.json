@@ -909,7 +909,7 @@
         "No se agrega tabla ni servicio; se reutiliza el repositorio actual."
       ],
       "sdd": true,
-      "status": "in_progress"
+      "status": "done"
     }
   ]
 }

@@ -21,4 +21,4 @@ validar límites, aislamiento y puertas de privacidad/identidad.
 
 ## Verificación
 
-`./init.sh` pasó los checks del arnés y arrancó pytest, pero la suite completa permaneció silenciosa por más de dos minutos y se interrumpió por instrucción del líder. La ejecución enfocada `test_conversational_memory.py -q` terminó con **9 passed**. Revisión estática final aprobada.
+`test_conversational_memory.py -q` terminó con **9 passed**. Tras reparar las cinco fallas existentes, el CI remoto ejecutó la suite completa con **4914 passed, 1 skipped** y construyó las imágenes del orquestador, Telegram Gateway, RAG y handover. Revisión estática final aprobada. `./init.sh` local no pudo completarse porque WSL dejó de iniciar comandos; la suite remota quedó verde.
