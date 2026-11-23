@@ -248,6 +248,17 @@ class Settings(BaseSettings):
     client_data_unavailable_reply: str = (
         "No se pudo consultar tus datos. Inténtalo de nuevo más tarde."
     )
+    # gráficos del bot (fase 5): PNG en el servidor y enlace temporal firmado
+    charts_enabled: bool = False
+    chart_link_signing_key: str = ""
+    chart_link_ttl_seconds: int = Field(default=3600, ge=60, le=7 * 24 * 3600)
+    chart_trigger_phrases: str = "grafica,grafico,graficar,graficame,diagrama"
+    chart_link_label: str = "Ver gráfico"
+    chart_disabled_reply: str = "Los gráficos no están disponibles por ahora."
+    chart_no_data_reply: str = (
+        "No encontré datos para graficar con esa pregunta. Prueba con otro "
+        "periodo o pregúntalo de otra forma."
+    )
     # memoria por cliente (#40) y por contacto sin login (fase 3)
     memory_enabled: bool = True
     memory_max_items: int = Field(default=20, ge=1, le=100)
@@ -666,6 +677,29 @@ class Settings(BaseSettings):
             self.client_data_allowlist, self.client_data_views_schema
         )
         return self
+
+    @model_validator(mode="after")
+    def _validate_charts(self) -> "Settings":
+        """Fase 5: los gráficos leen los datos del cliente y se sirven por https."""
+        if not self.charts_enabled:
+            return self
+        if not self.client_data_enabled:
+            raise ValueError("CHARTS_ENABLED exige CLIENT_DATA_ENABLED=true")
+        if not self.identity_public_base_url.strip().startswith("https://"):
+            raise ValueError(
+                "CHARTS_ENABLED exige IDENTITY_PUBLIC_BASE_URL https para servir el PNG"
+            )
+        if len(self.chart_link_signing_key.strip()) < 32:
+            raise ValueError("CHART_LINK_SIGNING_KEY debe tener al menos 32 caracteres")
+        if self.chart_link_signing_key.strip() == self.identity_link_signing_key.strip():
+            raise ValueError(
+                "CHART_LINK_SIGNING_KEY debe ser distinta de IDENTITY_LINK_SIGNING_KEY"
+            )
+        return self
+
+    @property
+    def chart_trigger_phrase_list(self) -> list[str]:
+        return [p.strip() for p in self.chart_trigger_phrases.split(",") if p.strip()]
 
     @model_validator(mode="after")
     def _validate_production(self) -> "Settings":

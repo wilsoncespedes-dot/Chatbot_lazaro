@@ -728,6 +728,18 @@ class Repository(Protocol):
 
     def delete_quick_reply_image(self, image_id: str) -> None: ...
 
+    # gráficos temporales del bot (fase 5)
+    def add_chart_image(
+        self,
+        chart_id: str,
+        contact_id: str,
+        png: bytes,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None: ...
+
+    def get_chart_image(self, chart_id: str, now: datetime) -> bytes | None: ...
+
     # administración y avisos (#42)
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]: ...
 
@@ -1152,6 +1164,8 @@ class FakeRepository:
         self.saved_replies: dict[str, SavedReply] = {}
         self.quick_replies: dict[str, QuickReply] = {}
         self.quick_reply_images: dict[str, QuickReplyImage] = {}
+        # Fase 5: id → (contact_id, png, created_at, expires_at)
+        self.chart_images: dict[str, tuple[str, bytes, datetime, datetime]] = {}
         self.text_versions: list[TextVersion] = []
         self.whatsapp_templates: dict[str, WhatsAppTemplate] = {}
         self.expiry_notices: dict[tuple[str, datetime], dict[str, Any]] = {}
@@ -2669,6 +2683,11 @@ class FakeRepository:
         self.events = [
             event for event in self.events if event.contact_id != contact_id
         ]
+        self.chart_images = {
+            key: value
+            for key, value in self.chart_images.items()
+            if value[0] != contact_id
+        }
         self.case_notes = [
             (note, note_contact_id)
             for note, note_contact_id in self.case_notes
@@ -3805,6 +3824,27 @@ class FakeRepository:
 
     def delete_quick_reply_image(self, image_id: str) -> None:
         self.quick_reply_images.pop(image_id, None)
+
+    def add_chart_image(
+        self,
+        chart_id: str,
+        contact_id: str,
+        png: bytes,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        self.chart_images = {
+            key: value
+            for key, value in self.chart_images.items()
+            if value[3] >= created_at
+        }
+        self.chart_images[chart_id] = (contact_id, bytes(png), created_at, expires_at)
+
+    def get_chart_image(self, chart_id: str, now: datetime) -> bytes | None:
+        stored = self.chart_images.get(chart_id)
+        if stored is None or stored[3] < now:
+            return None
+        return stored[1]
 
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         merged = dict(self.identity_overrides)
@@ -6120,6 +6160,9 @@ class PostgresRepository:
                 cur.execute("DELETE FROM messages WHERE contact_id = %s", (contact_id,))
                 cur.execute("DELETE FROM events WHERE contact_id = %s", (contact_id,))
                 cur.execute(
+                    "DELETE FROM chart_images WHERE contact_id = %s", (contact_id,)
+                )
+                cur.execute(
                     "DELETE FROM case_notes WHERE contact_id = %s", (contact_id,)
                 )
                 cur.execute(
@@ -7584,6 +7627,34 @@ class PostgresRepository:
             "DELETE FROM quick_reply_images WHERE id = %s",
             (image_id,),
         )
+
+    def add_chart_image(
+        self,
+        chart_id: str,
+        contact_id: str,
+        png: bytes,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        # Fase 5: cada gráfico nuevo limpia los vencidos; no hace falta un cron.
+        self._run(
+            "DELETE FROM chart_images WHERE expires_at < %s", (created_at,)
+        )
+        self._run(
+            "INSERT INTO chart_images (id, contact_id, png, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (chart_id, contact_id, bytes(png), created_at, expires_at),
+        )
+
+    def get_chart_image(self, chart_id: str, now: datetime) -> bytes | None:
+        rows = self._run(
+            "SELECT png FROM chart_images WHERE id = %s AND expires_at >= %s",
+            (chart_id, now),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        return bytes(rows[0][0])
 
     def get_app_settings(self, prefixes: Sequence[str]) -> dict[str, str]:
         patterns = [f"{prefix}%" for prefix in prefixes]

@@ -80,6 +80,7 @@ from .domain import (
 from .identity_routes import create_identity_router
 from .panel_live_routes import create_panel_live_router
 from .quick_replies_routes import create_quick_replies_router
+from .charts_routes import create_charts_router
 from .simulator_routes import create_simulator_router
 
 logger = logging.getLogger(__name__)
@@ -391,6 +392,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     app.router.routes.extend(create_envios_router(settings, adapters).routes)
     app.router.routes.extend(create_admin_channels_router(settings, adapters).routes)
     app.router.routes.extend(create_quick_replies_router(settings, adapters).routes)
+    app.router.routes.extend(create_charts_router(settings, adapters).routes)
 
     def _text_pending(message: NormalizedMessage) -> bool:
         # #65 R18: sin directorio de canales se falla cerrado con upstream_error

@@ -15,6 +15,7 @@ ToolName = Literal[
     "buscar_base_conocimiento",
     "consultar_mis_datos",
     "consultar_herramientas_mcp",
+    "graficar",
     "escalar_a_asesor",
     "crear_solicitud_supresion",
     "enviar_link_inicio_sesion",
@@ -26,6 +27,7 @@ TOOL_NAMES: frozenset[str] = frozenset(
         "buscar_base_conocimiento",
         "consultar_mis_datos",
         "consultar_herramientas_mcp",
+        "graficar",
         "escalar_a_asesor",
         "crear_solicitud_supresion",
         "enviar_link_inicio_sesion",
@@ -49,6 +51,7 @@ TOOL_MATRIX: Mapping[ConversationState, frozenset[ToolName]] = MappingProxyType(
                 "buscar_base_conocimiento",
                 "consultar_mis_datos",
                 "consultar_herramientas_mcp",
+                "graficar",
                 "escalar_a_asesor",
                 "crear_solicitud_supresion",
                 "cerrar_sesion",
@@ -77,6 +80,10 @@ _TOOL_DESCRIPTIONS: Mapping[str, str] = MappingProxyType(
         "consultar_herramientas_mcp": (
             "Consulta las herramientas MCP de solo lectura (manuales y ofertas de "
             "demostración) y responde con sus resultados."
+        ),
+        "graficar": (
+            "Dibuja un gráfico de barras, líneas o torta con los datos propios del "
+            "cliente autenticado; args tipo barras, lineas o torta (opcional)."
         ),
         "escalar_a_asesor": (
             "Pasa la conversación a un asesor humano; args motivo user_request o "
@@ -139,12 +146,17 @@ def _neutralize_tag(text: str) -> str:
 
 
 def build_router_prompt(
-    state: ConversationState, text: str, mcp_enabled: bool = True
+    state: ConversationState,
+    text: str,
+    mcp_enabled: bool = True,
+    charts_enabled: bool = True,
 ) -> tuple[str, str]:
     """R15, R17: prompt con solo las herramientas del estado y el mensaje como dato."""
     allowed = sorted(TOOL_MATRIX[state])
     if not mcp_enabled:
         allowed = [name for name in allowed if name != "consultar_herramientas_mcp"]
+    if not charts_enabled:
+        allowed = [name for name in allowed if name != "graficar"]
     lines = [HARNESS_ROUTER_PROMPT, "", "Herramientas permitidas:"]
     for name in allowed:
         lines.append(f"- {name}: {_TOOL_DESCRIPTIONS[name]}")
@@ -177,6 +189,12 @@ def parse_router_answer(raw: str) -> RouterDecision:
         if args == {"motivo": "purchase_intent"}:
             return RouterDecision(tool=tool, args={}, purchase_intent=True)
         if args:
+            raise RouterInvalid("invalid_args")
+    elif tool == "graficar":
+        # Fase 5: solo el tipo de gráfico; nunca datos ni identidad.
+        if args and (
+            set(args) != {"tipo"} or args["tipo"] not in ("barras", "lineas", "torta")
+        ):
             raise RouterInvalid("invalid_args")
     elif args:
         raise RouterInvalid("invalid_args")

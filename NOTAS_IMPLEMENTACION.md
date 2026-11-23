@@ -248,3 +248,82 @@ pendientes, variables nuevas y pasos de despliegue.
   filtradas. Hay que hacer el backup con el usuario principal o el superusuario.
 - No se revoca `CONNECT` a `PUBLIC`: puede romper otros clientes del servidor y
   está fuera del alcance.
+
+## Fase 5 — Herramienta `graficar`
+
+- **`graficar` entra en `TOOL_MATRIX` solo en el estado `active`.** Grafica los
+  datos propios del cliente con sesión: reutiliza `query_client_data` de la fase 4,
+  con sus vistas `mis_datos`, la RLS y el LIMIT. No hay un camino nuevo a la base.
+  - El LLM genera el SQL con una instrucción fija extra (`CHART_SQL_HINT`: dos
+    columnas, etiqueta/fecha + valor agregado). Va en el *system prompt*, nunca
+    mezclada con el texto del usuario.
+  - Motivo de limitarlo a los datos del cliente: es la única fuente que ya tiene
+    aislamiento por cliente en el chat. Graficar las vistas `consultas` del
+    personal queda para un comando de asesor si se pide.
+- **Se elige por palabra clave** (`CHART_TRIGGER_PHRASES`: grafica, grafico,
+  graficar, graficame, diagrama) **y también por router.** El router
+  (`HARNESS_ROUTER_ENABLED`) viene apagado por defecto, y sin palabra clave la
+  herramienta sería inalcanzable. La autorización por estado sigue en
+  `execute_tool` y la llamada queda auditada en `tool_calls` con origen `keyword`
+  o `router`. El router solo acepta `args` vacío o `{"tipo": barras|lineas|torta}`.
+- **Tipo de gráfico:**
+  - Fechas en la etiqueta → líneas, ordenadas por fecha.
+  - Lo demás → barras horizontales. Con más de 12 categorías, las de menor valor
+    se agrupan en «Otros».
+  - Torta solo si se pide ("torta", "pastel", "circular" o `tipo=torta`), hay 6
+    categorías o menos y todos los valores son positivos. Si no, barras.
+  - "Líneas"/"evolución" fuerzan líneas cuando hay al menos 2 puntos.
+- **Nunca se envía un gráfico vacío:**
+  - Sin filas o con todo en cero → `CHART_NO_DATA_REPLY` en texto.
+  - Con datos pero sin forma de gráfico (una sola cifra, sin columna numérica) →
+    las filas en texto, como `consultar_mis_datos`.
+- **PNG en Python puro** (`orchestrator/charts.py`): lienzo RGB, fuente de mapa de
+  bits 5x7 a escala 2 y PNG con `zlib`/`struct`. Copia el diseño de
+  `render_bar_chart` del dashboard (etiqueta a la izquierda, barra, valor a la
+  derecha, mismos colores de contraste).
+  - La fuente dibuja mayúsculas sin tildes: ñ→N, á→A. Es legible y evita
+    dependencias.
+  - Ancho fijo de 720 px; un PNG pesa unos pocos KB.
+- **Frase con la cifra clave**, determinista y sin LLM:
+  - Barras/torta: "Casos por estado: «abierto» es el mayor con 5 de 8 en total
+    (62 %)."
+  - Líneas: último valor frente al primero y máximo.
+- **Entrega por el outbox** (`_send_blocks`): el historial guarda la frase.
+  - Canal con `supports_images` → `ImageBlock` (URL firmada) + `TextBlock` con la
+    frase.
+  - Canal sin imágenes → `TextBlock` + `LinkBlock` "Ver gráfico" con la misma URL
+    firmada.
+  - Sin tocar el gateway: los adaptadores ya declaran `supports_images` en
+    `ChannelCapabilities` y la política del canal lo lee del directorio.
+- **Enlace temporal firmado:**
+  - URL: `IDENTITY_PUBLIC_BASE_URL/media/graficos/<id>.png?exp=<unix>&sig=<hmac>`.
+  - Firma HMAC-SHA256 de `grafico:<id>:<exp>` con `CHART_LINK_SIGNING_KEY`.
+  - Vence a los `CHART_LINK_TTL_SECONDS` (3600 por defecto).
+  - Firma mala, vencida, id inexistente o gráficos apagados → 404 sin distinguir
+    el caso.
+  - Se sirve con `nosniff`, `no-referrer` y caché privada de 5 minutos.
+  - La clave es nueva y debe ser distinta de `IDENTITY_LINK_SIGNING_KEY`: si una
+    se filtra, no compromete la otra.
+- **Almacenamiento**: tabla `chart_images` en la migración
+  `0005_graficos.sql`, con FK a `contacts` ON DELETE CASCADE.
+  - Cada gráfico nuevo borra los vencidos: no hace falta un cron.
+  - El borrado de contenido de un contacto (rechazo de aviso o supresión) también
+    borra sus gráficos.
+- **Configuración**: `CHARTS_ENABLED=false` por defecto. Con `true`, la
+  configuración exige:
+  - `CLIENT_DATA_ENABLED=true`;
+  - `IDENTITY_PUBLIC_BASE_URL` https;
+  - una clave de 32 caracteres o más.
+
+  Si falta algo, el servicio no arranca, para no descubrirlo con un cliente.
+- **Despliegue**: el túnel ya publica `/media/respuestas/*` del orquestador
+  (respuestas rápidas con imagen). `/media/graficos/*` necesita la misma regla.
+  PENDIENTE: confirmar en la configuración del túnel de Cloudflare del servidor
+  (fuera del repo) que la regla cubre `/media/*` y no solo `/media/respuestas/*`.
+- Tests: `test_graficos.py` (31: dibujo, resumen, firma, matriz, router,
+  configuración, flujo con imagen/enlace, sin datos, ruta, palabra clave y
+  Postgres real). Se actualizaron:
+  - el conteo de herramientas (7→8) en `test_harness_matrix` y
+    `test_answer_quality`;
+  - la lista de rutas expuestas en `test_config`;
+  - el SQL auditado en `test_db_query`.

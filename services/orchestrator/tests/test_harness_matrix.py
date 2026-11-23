@@ -23,6 +23,7 @@ ALL_TOOLS = (
     "buscar_base_conocimiento",
     "consultar_mis_datos",
     "consultar_herramientas_mcp",
+    "graficar",
     "escalar_a_asesor",
     "crear_solicitud_supresion",
     "enviar_link_inicio_sesion",
@@ -38,6 +39,7 @@ EXPECTED = {
         "buscar_base_conocimiento",
         "consultar_mis_datos",
         "consultar_herramientas_mcp",
+        "graficar",
         "escalar_a_asesor",
         "crear_solicitud_supresion",
         "cerrar_sesion",
@@ -58,11 +60,11 @@ def test_r1_r3_matrix_decision(state, tool):
     assert authorize_tool(state, tool) is (tool in EXPECTED[state])
 
 
-def test_r1_r2_matrix_is_complete_immutable_and_has_seven_tools():
-    """R1, R2: siete claves, siete herramientas y matriz no mutable."""
+def test_r1_r2_matrix_is_complete_immutable_and_has_eight_tools():
+    """R1, R2: siete claves, ocho herramientas (fase 5: `graficar`) y matriz no mutable."""
     assert set(TOOL_MATRIX) == set(ConversationState)
     assert TOOL_NAMES == frozenset(ALL_TOOLS)
-    assert len(TOOL_NAMES) == 7
+    assert len(TOOL_NAMES) == 8
     with pytest.raises(TypeError):
         TOOL_MATRIX[ConversationState.ACTIVE] = frozenset()  # type: ignore[index]
     with pytest.raises(AttributeError):

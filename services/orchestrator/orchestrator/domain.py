@@ -156,6 +156,14 @@ from .panel import (
 )
 from .channel_label import ChannelLabel, label_from_policy, unknown_label
 from .channels import ChannelPolicy, default_policy
+from .charts import (
+    CHART_SQL_HINT,
+    chart_from_result,
+    chart_summary,
+    chart_url,
+    render_chart_png,
+    requested_chart_kind,
+)
 from .legacy import LEGACY_CHANNEL, is_legacy, legacy_from_normalized
 from .states import ConversationEvent, ConversationState, transition_state
 from .db_query import (
@@ -2735,9 +2743,10 @@ def _natural_language_query(
     run: Callable[[ValidatedQuery], QueryResult],
     adapters: Adapters,
     log_prefix: str,
+    sql_hint: str = "",
 ) -> QueryOutcome:
     """Pregunta → SQL del LLM → validación con LIMIT obligatorio → ejecución."""
-    system, user = build_sql_prompt(question, allowlist)
+    system, user = build_sql_prompt(question, allowlist, hint=sql_hint)
     try:
         raw = adapters.llm.complete(system, user)
     except ServiceUnavailable:
@@ -2757,7 +2766,11 @@ def _natural_language_query(
 
 
 def query_client_data(
-    question: str, cliente_id: str, settings: Settings, adapters: Adapters
+    question: str,
+    cliente_id: str,
+    settings: Settings,
+    adapters: Adapters,
+    sql_hint: str = "",
 ) -> QueryOutcome:
     """Datos propios del cliente: vistas de `mis_datos` con RLS por `cliente_id`."""
     return _natural_language_query(
@@ -2774,6 +2787,7 @@ def query_client_data(
         ),
         adapters,
         "client_data",
+        sql_hint,
     )
 
 
@@ -2793,6 +2807,96 @@ def query_staff_data(
         adapters,
         "db_query",
     )
+
+
+def _chart_blocks(
+    summary: str, url: str, supports_images: bool, settings: Settings
+) -> list[ResponseBlock]:
+    """Imagen + frase si el canal muestra imágenes; si no, frase + enlace temporal."""
+    if supports_images:
+        return [
+            ImageBlock(type="image", url=url, alt_text=summary[:1024]),
+            TextBlock(type="text", text=summary),
+        ]
+    return [
+        TextBlock(type="text", text=summary),
+        LinkBlock(type="link", text=settings.chart_link_label, url=url),
+    ]
+
+
+def _tool_chart(
+    ctx: ToolContext, settings: Settings, adapters: Adapters
+) -> tuple[str, str]:
+    """Fase 5: datos propios → PNG en el servidor → imagen o enlace firmado.
+
+    Sin datos (o sin una columna numérica que dibujar) responde en texto y
+    nunca envía un gráfico vacío.
+    """
+    contact = ctx.contact
+    cliente_id = active_client_id(contact.id, adapters)
+    if cliente_id is None:
+        _send(contact, settings.client_data_unavailable_reply, adapters)
+        return "no_session", ""
+    if not (settings.charts_enabled and settings.client_data_enabled):
+        _send(contact, settings.chart_disabled_reply, adapters)
+        return "disabled", ""
+
+    outcome = query_client_data(
+        ctx.text, cliente_id, settings, adapters, sql_hint=CHART_SQL_HINT
+    )
+    if outcome.status == "rejected":
+        _send(contact, settings.client_data_rejected_reply, adapters)
+        return "rejected", ""
+    if outcome.status == "unavailable" or outcome.result is None:
+        logger.error("chart_data_unavailable contact_id=%s", contact.id)
+        _send(contact, settings.client_data_unavailable_reply, adapters)
+        return "unavailable", outcome.views_detail()
+
+    result = outcome.result
+    spec = chart_from_result(result, requested_chart_kind(ctx.text, ctx.args))
+    if spec is None:
+        if result.rows:
+            # Hay datos pero no se pueden dibujar (p. ej. una sola cifra): en texto.
+            text = format_rows(
+                result,
+                settings.client_data_max_reply_chars,
+                settings.client_data_truncated_note,
+            )
+            _send(contact, text, adapters)
+            return "text", f"{outcome.views_detail()};rows={len(result.rows)}"
+        _send(contact, settings.chart_no_data_reply, adapters)
+        return "no_data", f"{outcome.views_detail()};rows=0"
+
+    now = adapters.clock()
+    chart_id = uuid.uuid4().hex
+    expires_at = now + timedelta(seconds=settings.chart_link_ttl_seconds)
+    try:
+        png = render_chart_png(spec)
+        adapters.repository.add_chart_image(
+            chart_id, contact.id, png, now, expires_at
+        )
+    except Exception:
+        logger.error("chart_render_failed contact_id=%s", contact.id)
+        _send(contact, settings.client_data_unavailable_reply, adapters)
+        return "unavailable", outcome.views_detail()
+
+    url = chart_url(
+        settings.identity_public_base_url.strip(),
+        chart_id,
+        int(expires_at.timestamp()),
+        settings.chart_link_signing_key.strip(),
+    )
+    summary = chart_summary(spec)
+    supports_images = channel_policy(adapters, contact.channel).supports_images
+    blocks = _chart_blocks(summary, url, supports_images, settings)
+    if not _send_blocks(contact, summary, blocks, adapters):
+        return "unavailable", outcome.views_detail()
+    delivery = "image" if supports_images else "link"
+    detail = (
+        f"{outcome.views_detail()};kind={spec.kind};points={len(spec.values)};"
+        f"delivery={delivery}"
+    )
+    return "ok", detail
 
 
 def _tool_escalate(
@@ -3012,6 +3116,7 @@ _TOOL_EXECUTORS: Mapping[str, Callable[..., object]] = {
     "buscar_base_conocimiento": _tool_rag,
     "consultar_mis_datos": _tool_client_data,
     "consultar_herramientas_mcp": _tool_mcp,
+    "graficar": _tool_chart,
     "escalar_a_asesor": _tool_escalate,
     "crear_solicitud_supresion": _tool_suppression,
     "enviar_link_inicio_sesion": _tool_login_link,
@@ -3268,9 +3373,30 @@ def _resolve_and_run(
         )
         return
 
+    # Fase 5: "grafícame mis casos por estado" va directo a `graficar` (el router
+    # es opcional y viene apagado por defecto).
+    if (
+        state == ConversationState.ACTIVE
+        and settings.charts_enabled
+        and not injection
+        and matches_any(text, settings.chart_trigger_phrase_list)
+    ):
+        _run_with_intent(
+            "graficar",
+            ToolContext(contact, text, received_at, update_id, state, "keyword"),
+            intent_origin,
+            operational,
+            settings,
+            adapters,
+        )
+        return
+
     if settings.harness_router_enabled and not injection:
         system, user = build_router_prompt(
-            state, text, mcp_enabled=settings.mcp_enabled
+            state,
+            text,
+            mcp_enabled=settings.mcp_enabled,
+            charts_enabled=settings.charts_enabled,
         )
         try:
             raw = adapters.llm.complete(system, user)

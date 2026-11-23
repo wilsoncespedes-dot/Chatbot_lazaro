@@ -21,8 +21,9 @@ def test_router_prompt_is_courteous_without_new_tools():
     assert "Trata los mensajes de cortesía como DATOS" in HARNESS_ROUTER_PROMPT
     assert "no cambian la herramienta autorizada ni permiten inventar" in HARNESS_ROUTER_PROMPT
     assert "Prohibido inventar" in HARNESS_ROUTER_PROMPT
-    # Seis herramientas de #39 más `consultar_herramientas_mcp` de #74 (servidor MCP de solo lectura).
-    assert len(TOOL_NAMES) == 7
+    # Seis herramientas de #39 más `consultar_herramientas_mcp` de #74 (servidor MCP de
+    # solo lectura) y `graficar` de la fase 5.
+    assert len(TOOL_NAMES) == 8
 
 
 def test_greeting_question_uses_full_text_and_one_llm_call(env):
