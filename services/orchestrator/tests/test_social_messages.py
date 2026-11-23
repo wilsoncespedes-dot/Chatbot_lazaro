@@ -18,7 +18,7 @@ def test_is_social_message_is_pure_and_exact():
         assert is_social_message(text, phrases) is True
     for text in (
         "hola como creo un usuario", "hola asesor", "¿cuánto cuesta?",
-        "¿Qué tal?", "¿Cómo estás?", "como estas?", "",
+        "¿Cómo estás?", "como estas?", "",
     ):
         assert is_social_message(text, phrases) is False
     assert phrases == before
@@ -69,6 +69,17 @@ def test_non_social_message_keeps_existing_flow(env):
     env.post()
     assert env.rag.calls == [("¿Cómo instalo el módulo?", 7)]
     assert len(env.llm.calls) == 1
+
+
+def test_how_are_you_reaches_conversational_mode(env):
+    """#88 R1: una pregunta social personal debe recibir respuesta conversacional."""
+    env.rag.results = []
+    env.llm.reply = '{"mode":"general","answer":"¡Bien, gracias!"}'
+
+    env.post(text="¿Cómo estás?")
+
+    assert env.rag.calls == [("¿Cómo estás?", 7)]
+    assert env.gateway.sent == [(100, "¡Bien, gracias!")]
 
 
 def test_greeting_with_question_goes_to_rag_with_full_text(env):

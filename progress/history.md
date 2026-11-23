@@ -306,3 +306,9 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - Revisión estática aprobada y `python -m compileall` correcto. **Las pruebas no se ejecutaron**, por decisión del usuario; queda registrado que `./init.sh` no pudo completarse por configuración de Python/pytest y finales CRLF en el hook.
 - Corrección posterior: las preguntas con signos de interrogación ya no se contestan con el saludo social fijo y continúan al fallback conversacional.
 - Incidente 2026-11-22: el CI detectó que el default tenía 51 términos frente al límite de 50 del parser compartido, lo que impedía crear `Settings` al iniciar el orquestador. Se retiró `configuro`; las pruebas no se ejecutaron localmente.
+
+## 2026-11-23 — Feature #89 `historial_conversacional_sin_login` (done)
+- Se añadió historial reciente del mismo contacto al fallback conversacional cuando `MEMORY_ENABLED=true` e `IDENTITY_LOGIN_REQUIRED=false`; conserva sesión activa, consentimiento, límites, aislamiento y login obligatorio. No agrega tablas ni servicios.
+- CI del commit `45f5f3c`: **4914 passed, 1 skipped**, builds Docker de orchestrator, Telegram Gateway, RAG y handover correctos. Revisión estática aprobada. `./init.sh` local se interrumpió porque WSL dejó de iniciar comandos.
+- En la misma corrección se arreglaron los cinco fallos CI previos: neutralización del prompt, prueba de entrega por outbox, excepción de «¿Cómo estás?» sin alterar «¿Qué tal?», límite de frase en chunking y bloques Telegram dentro del contrato.
+- El código está en la rama principal `codex/preparar-subida-github`. La documentación de despliegue aún apunta a `feat/lazaro-backlog-complete`; el servidor debe seguir la principal para recibir esta versión.

@@ -1324,7 +1324,9 @@ def _neutralize(text: str) -> str:
 
 def _neutralize_context(text: str) -> str:
     for tag in ("memoria", "historial", "mensaje", "item"):
-        text = re.sub(rf"</\s*{tag}", f"[/{tag}", text, flags=re.IGNORECASE)
+        text = re.sub(
+            rf"</\s*{tag}\s*>", f"[/{tag}]", text, flags=re.IGNORECASE
+        )
     return _neutralize(text)
 
 
@@ -2095,6 +2097,45 @@ def _memory_context(
     return PromptContext(memory=memory, history=history)
 
 
+def _conversational_context(
+    contact: Contact,
+    text: str,
+    received_at: datetime,
+    settings: Settings,
+    adapters: Adapters,
+) -> PromptContext | None:
+    """#89: reutiliza historial casual con consentimiento y login opcional."""
+    if not settings.memory_enabled:
+        return None
+
+    context = _memory_context(contact, adapters.clock(), settings, adapters)
+    if context is not None or settings.identity_login_required:
+        return context
+
+    limit = settings.memory_context_messages
+    if limit <= 0:
+        return None
+
+    rows = adapters.repository.last_messages(contact.id, limit + 1)
+    current_index = next(
+        (
+            index
+            for index in range(len(rows) - 1, -1, -1)
+            if rows[index].role == "user"
+            and rows[index].text == text
+            and rows[index].at == received_at
+        ),
+        None,
+    )
+    if current_index is not None:
+        rows.pop(current_index)
+
+    history = tuple((row.role, row.text) for row in rows[-limit:])
+    if not history:
+        return None
+    return PromptContext(memory=(), history=history)
+
+
 def _summarize_session(
     session: "ClientSession",
     trigger: Literal["session_end", "escalation"],
@@ -2514,7 +2555,9 @@ def _tool_rag(
             _reject_no_results(contact, ctx.update_id, settings, adapters)
             return "no_relevant_chunks"
 
-        context = _memory_context(contact, adapters.clock(), settings, adapters)
+        context = _conversational_context(
+            contact, ctx.text, ctx.received_at, settings, adapters
+        )
         system, user = build_conversational_prompt(ctx.text, context)
         try:
             raw = adapters.llm.complete(system, user)
