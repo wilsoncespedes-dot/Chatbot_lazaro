@@ -891,6 +891,25 @@
       "title": "Modo conversacional general con contexto de sesión y límites para datos del negocio",
       "sdd": true,
       "status": "done"
+    },
+    {
+      "id": 89,
+      "name": "historial_conversacional_sin_login",
+      "title": "Recordar mensajes recientes en conversaciones casuales con consentimiento",
+      "description": "En despliegues con IDENTITY_LOGIN_REQUIRED=false, el modo conversacional usa el historial reciente del mismo contacto aunque no haya sesión autenticada de cliente. Reutiliza mensajes ya almacenados, respeta consentimiento y límites de contexto; no agrega almacenamiento nuevo ni altera la política de identidad.",
+      "dependencies": [
+        88
+      ],
+      "acceptance": [
+        "En estado ACTIVE, con MEMORY_ENABLED=true, IDENTITY_LOGIN_REQUIRED=false y sin sesión autenticada de cliente, el fallback conversacional incluye mensajes previos recientes del mismo contacto.",
+        "El mensaje entrante actual, ya persistido antes de invocar el LLM, se identifica por su rol, texto y received_at y no se duplica en el historial enviado al modelo.",
+        "El contexto se limita a MEMORY_CONTEXT_MESSAGES, permanece aislado por contacto/canal y no incluye mensajes previos al consentimiento.",
+        "Con IDENTITY_LOGIN_REQUIRED=true se conserva el flujo de login actual y no se permite rodearlo por el modo conversacional.",
+        "MEMORY_ENABLED=false sigue desactivando memoria e historial; no se cambia el default global false de Settings ni el valor de despliegue documentado en .env.example.",
+        "No se agrega tabla ni servicio; se reutiliza el repositorio actual."
+      ],
+      "sdd": true,
+      "status": "in_progress"
     }
   ]
 }
