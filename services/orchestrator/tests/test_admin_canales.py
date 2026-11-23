@@ -194,6 +194,41 @@ def test_create_sends_request_and_shows_secret_once(admin_env):
     assert secret not in env.client.get("/admin/canales").text
 
 
+def test_gmail_channel_form_carries_mailbox_address_and_oauth_credentials(admin_env):
+    """R12: el panel puede configurar la dirección y credenciales Gmail."""
+    env, fake = admin_env(adapter_types=["gmail_api"])
+    form = _create_form(
+        adapter_type="gmail_api",
+        email_address="soporte@example.com",
+        credentials=(
+            "client_id=client-id\nclient_secret=client-secret\n"
+            "refresh_token=refresh-token"
+        ),
+    )
+    response = env.client.post("/admin/canales", data=form)
+    assert response.status_code == 200
+    request = _mutations(fake)[0][1]
+    assert request.config["email_address"] == "soporte@example.com"
+    assert request.credentials == {
+        "client_id": "client-id",
+        "client_secret": "client-secret",
+        "refresh_token": "refresh-token",
+    }
+    listing = env.client.get("/admin/canales").text
+    assert 'name="email_address"' in listing
+
+
+def test_gmail_channel_form_rejects_invalid_mailbox_address(admin_env):
+    """R2: el panel valida la dirección Gmail antes de llamar al gateway."""
+    env, fake = admin_env(adapter_types=["gmail_api"])
+    response = env.client.post(
+        "/admin/canales",
+        data=_create_form(adapter_type="gmail_api", email_address="no-es-correo"),
+    )
+    assert response.status_code == 422
+    assert _mutations(fake) == []
+
+
 def test_edit_sends_patch_and_keeps_credentials_when_empty(admin_env):
     """R13, R29, R32"""
     env, fake = admin_env()

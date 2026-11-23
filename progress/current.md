@@ -1,3 +1,1 @@
 # Sesión actual
-
-# Sesión actual

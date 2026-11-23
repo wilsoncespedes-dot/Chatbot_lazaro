@@ -72,6 +72,7 @@ from .channels import (
     TemplateBlock,
     TextBlock,
 )
+from .gmail import GmailCursorResetResponse, GmailSyncResponse
 from .chunks import (
     ChunkActiveRequest,
     ChunkItem,
@@ -261,4 +262,6 @@ __all__ = [
     "MessageText",
     "HandoverReason",
     "CaseAuthorizeAction",
+    "GmailSyncResponse",
+    "GmailCursorResetResponse",
 ]

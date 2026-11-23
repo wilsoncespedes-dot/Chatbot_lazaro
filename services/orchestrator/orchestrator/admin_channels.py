@@ -138,6 +138,16 @@ def channel_form(
             config.pop("contact_url", None)
     elif not creating:
         config.pop("contact_url", None)
+    email_address = form.get("email_address", "").strip()
+    if email_address:
+        if (
+            len(email_address) > 128
+            or re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email_address) is None
+        ):
+            raise ChannelFormError("El correo del canal debe ser válido.")
+        config["email_address"] = email_address
+    elif not creating:
+        config.pop("email_address", None)
     callback_url = form.get("callback_url", "").strip()
     if not managed:
         if callback_url:

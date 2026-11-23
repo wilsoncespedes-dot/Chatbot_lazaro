@@ -910,6 +910,28 @@
       ],
       "sdd": true,
       "status": "done"
+    },
+    {
+      "id": 90,
+      "name": "canal_gmail",
+      "title": "Canal Gmail para recibir correos y responder en el mismo hilo",
+      "description": "Adaptador real del gateway multicanal. Buzón configurado con OAuth Gmail; sincroniza correo nuevo con Gmail API y envía la respuesta dentro del hilo original. El acceso a la cuenta se configura fuera del agente y queda cifrado en canales.",
+      "dependencies": [
+        61,
+        62,
+        64,
+        65
+      ],
+      "acceptance": [
+        "El administrador puede crear y editar gmail_api desde el panel de canales, introducir una dirección validada y guardar credenciales OAuth cifradas.",
+        "El gateway sincroniza por Gmail History cada correo nuevo de INBOX y lo normaliza/deduplica sin backfill.",
+        "El bot y los asesores responden dentro del hilo original como texto plano.",
+        "La sincronización protegida con X-Service-Token conserva cursores ante fallas y reporta historyId vencidos; reset explícito omite el backlog anterior.",
+        "Un script programado sincroniza todos los canales Gmail activos; documentación explica OAuth/scopes, configuración, privacidad y límites.",
+        "Pruebas sin red real cubren credenciales, recepción, envío en hilo, reintentos, protección de rutas y sincronizador; ./init.sh verde y revisión aprobada."
+      ],
+      "sdd": true,
+      "status": "done"
     }
   ]
 }

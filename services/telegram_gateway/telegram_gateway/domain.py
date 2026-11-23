@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from .adapters.whatsapp_window import WhatsAppWindowStore
     from .adapters.channel_repository import ChannelRepository
     from .adapters.mailbox import MailboxRepository
+    from .adapters.gmail_api import GmailTransport
+    from .adapters.gmail_history import GmailHistoryRepository
     from .registry import ChannelRegistry
     from .ports.canal import Canal
 
@@ -234,6 +236,8 @@ class Adapters:
     channel_registry: "ChannelRegistry | None" = None
     callback: "CallbackClient | None" = None
     mailbox: "MailboxRepository | None" = None
+    gmail_transport: "GmailTransport | None" = None
+    gmail_history: "GmailHistoryRepository | None" = None
 
 
 @dataclass(frozen=True)

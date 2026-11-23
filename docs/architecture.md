@@ -69,6 +69,11 @@ feature queda `done`. Detalle de producto en `docs/especificacion.md`,
 - **Etiqueta de origen (#67):** un único componente de panel (ícono + nombre +
   color de `canales`) que reutilizan bandeja, encabezado del chat, cada
   mensaje, ficha del cliente y dashboard.
+- **Gmail (#90):** `gmail_api` vive en el `telegram_gateway` como adaptador
+  `Canal`, con Gmail API REST/OAuth, credenciales en el almacén cifrado de
+  `canales` y cursor incremental PostgreSQL. Un scheduler llama las rutas
+  internas protegidas para recibir mensajes de `INBOX`; la salida conserva el
+  hilo y usa MIME de texto plano. No se descargan ni envían adjuntos.
 
 ### Servidor MCP de solo lectura (#74)
 

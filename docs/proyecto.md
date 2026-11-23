@@ -300,3 +300,9 @@ cambio de alcance y prevalecen sobre las descripciones históricas anteriores:
    de Lázaro **no se implementa ni se simula**: solo se presenta como
    posibilidad. Detalle en `docs/especificacion.md`, «Ampliación multicanal
    genérica y multiagente».
+7. Integración Gmail (#90, aprobada por el dueño 2026-11-23): una bandeja
+   dedicada se conecta mediante Gmail API y OAuth cifrado en el registro de
+   canales; un scheduler consulta Gmail History, el bot y asesores contestan en
+   el hilo original. Primera sincronización sin histórico, solo cuerpo
+   `text/plain`, no descarga adjuntos. La cuenta, scopes y scheduler se
+   configuran externamente siguiendo `docs/gmail.md`.
