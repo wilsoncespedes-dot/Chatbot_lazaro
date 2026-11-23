@@ -517,3 +517,171 @@ Detalle de lo implementado:
   `later` de `esqueleto_instagram`) y `progress/*`. Es contabilidad del arnés, que
   el encargo pidió no usar, así que esos cambios se dejan sin commitear para que
   el humano decida.
+
+## Cierre — 2026-11-23
+
+### Fases y commits (rama `feat/produccion-multicanal`, sin push)
+
+- Fase 1 — migraciones versionadas y arranque seguro: `4b2c21b`. Arreglo
+  posterior del checksum por fin de línea: `56b7800`.
+- Fase 2 — entrada unificada de canales sin pérdidas ni duplicados: `28f8418`.
+- Fase 3 — memoria por contacto sin login: `81646d6`.
+- Fase 4 — consultas de solo lectura listas para producción: `dc8e2db`.
+- Fase 5 — herramienta `graficar` con PNG en el servidor: `6c024b1`.
+- Fase 6 — canal TikTok Business Messaging: `1943633`.
+- Fase 7 — Facebook Messenger e Instagram Messaging + outbox
+  `fuera_de_ventana`: `f855a7c`.
+
+### Verificación final
+
+- pytest completo, servicio por servicio, con Postgres desechable
+  (`TEST_DATABASE_URL`): 5063 passed, 1 skipped, 0 failed. Detalle: migrations 19, scripts 113, eval 96,
+  contracts 961, handover 450, mcp_lectura 23, rag 136, telegram_gateway 596 (+1
+  skip previo), orchestrator 2669. Este resultado sustituye al «Cierre» que escribió
+  OpenCode (5025 passed): es posterior a la alineación de las fases 6 y 7.
+- `docker compose build`: se construyeron las 11 imágenes. Se usó
+  `--env-file` con un `POSTGRES_PASSWORD` de relleno solo para la interpolación;
+  no se leyó el `.env` real ni se arrancó nada.
+- No se tocó la BD de producción, no hubo push ni despliegue y no se leyó ningún
+  `.env` real.
+
+### Todos los PENDIENTE
+
+1. Fase 5: confirmar que la regla del túnel de Cloudflare del servidor (fuera del
+   repo) publica `/media/*` del orquestador en el host de
+   `IDENTITY_PUBLIC_BASE_URL`.
+2. Fase 6, firma de TikTok: confirmar con la doc oficial la cabecera
+   `TikTok-Signature`, el formato `t=…,s=…`, el mensaje firmado y qué secreto
+   firma. Se asume el `client_secret` y va en `TIKTOK_WEBHOOK_SECRET`. Está en el
+   código, en `telegram_gateway/tiktok.py`.
+3. Fase 6, API de TikTok: confirmar `TIKTOK_TOKEN_URL`, `TIKTOK_SEND_URL`, los
+   códigos de token vencido (`AUTH_ERROR_CODES`), el límite de 10 mensajes cada
+   48 h y que la cuenta tiene acceso a Business Messaging.
+4. Fase 7, Meta: confirmar `META_GRAPH_API_VERSION=v26.0`, el límite por mensaje
+   (950 bytes, conservador), que Instagram responde por `/{PAGE_ID}/messages` con
+   el Page token y que `is_reusable:false` acepta URLs con query. Está en el
+   código, en `telegram_gateway/adapters/meta_messaging.py`.
+
+### Variables de entorno nuevas en el servidor (respecto a `5d1a398`)
+
+- **Fase 1**
+  - `MIGRATIONS_DATABASE_URL`: opcional; por defecto `DATABASE_URL`.
+  - `EMBEDDINGS_DIM`: por defecto 1536. Debe coincidir con la dimensión actual
+    de `chunks.embedding`.
+  - `POSTGRES_PASSWORD`: ahora obligatoria en compose.
+- **Fase 2**: `INBOUND_RETRY_BASE_SECONDS`, `INBOUND_RETRY_MAX_DELAY_SECONDS`,
+  `INBOUND_RETRY_MAX_AGE_SECONDS`, `INBOUND_RETRY_POLL_SECONDS`,
+  `INBOUND_RETRY_LEASE_SECONDS`, `INBOUND_RETRY_BATCH_SIZE`. Todas tienen valor
+  por defecto. `NON_TEXT_REPLY` desaparece.
+- **Fase 3**
+  - Nuevas: `MEMORY_FACTS_EVERY_MESSAGES`, `MEMORY_FACTS_INPUT_MESSAGES`,
+    `MEMORY_FACT_MAX_CHARS`, `MEMORY_FACT_TRIGGER_PHRASES`,
+    `MEMORY_RECALL_PHRASES`.
+  - Cambia de valor: `MEMORY_CONTEXT_MESSAGES` pasa de 6 a 20.
+- **Fase 4**
+  - `BOT_LECTURA_PASSWORD` y `BOT_CONSULTAS_PASSWORD`: activan el LOGIN de esos
+    roles, y el runner las aplica.
+  - Los allowlists nuevos de `DB_QUERY_ALLOWLIST` y `CLIENT_DATA_ALLOWLIST`.
+  - Los DSN `DB_QUERY_DATABASE_URL` y `CLIENT_DATA_DATABASE_URL` deben usar
+    `bot_consultas` y `bot_lectura`.
+- **Fase 5**: `CHARTS_ENABLED`, `CHART_LINK_SIGNING_KEY` (32 caracteres o más,
+  distinta de la clave de identidad), `CHART_LINK_TTL_SECONDS`,
+  `CHART_TRIGGER_PHRASES`, `CHART_LINK_LABEL`, `CHART_DISABLED_REPLY` y
+  `CHART_NO_DATA_REPLY`.
+- **Fase 6**: `TIKTOK_ENABLED`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`,
+  `TIKTOK_WEBHOOK_SECRET`, `TIKTOK_BUSINESS_ID`, `TIKTOK_REFRESH_TOKEN` (solo el
+  primer arranque), `TIKTOK_TOKEN_URL`, `TIKTOK_SEND_URL`,
+  `TIKTOK_TOKEN_REFRESH_MARGIN_SECONDS` y `TIKTOK_SIGNATURE_TOLERANCE_SECONDS`.
+  Además exige `CHANNEL_SECRETS_KEY`.
+- **Fase 7**: `META_MESSENGER_ENABLED`, `META_INSTAGRAM_ENABLED`,
+  `META_PAGE_ID`, `META_INSTAGRAM_ACCOUNT_ID`, `META_PAGE_ACCESS_TOKEN` (siembra o
+  rota; puede quitarse tras el primer arranque), `META_APP_SECRET`,
+  `META_WEBHOOK_VERIFY_TOKEN`, `META_GRAPH_BASE_URL`, `META_GRAPH_API_VERSION` y
+  `META_MESSAGING_WINDOW_HOURS`. Además exige `CHANNEL_SECRETS_KEY`.
+
+### Pasos de despliegue (en este orden)
+
+El servidor se actualiza solo con cada push a la rama que sigue (timer
+`lazaro-actualizar`), así que la copia de seguridad va **antes** de mezclar o
+hacer push.
+
+1. **Parar el autodespliegue**: en el servidor,
+   `sudo systemctl stop lazaro-actualizar.timer`.
+2. **Copia de seguridad de la BD**, con el usuario principal de Postgres: con
+   `FORCE RLS` de la fase 4, otro rol vería filas filtradas.
+   - `cd /opt/lazaro && mkdir -p ~/backups`
+   - `docker compose -p chatbot-lazaro exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > ~/backups/lazaro-$(date +%Y%m%d-%H%M).dump`
+   - Comprobarla con `pg_restore --list ~/backups/lazaro-*.dump | head`, que debe
+     listar las tablas, y anotar su tamaño.
+3. **Completar el `.env` del servidor** con las variables de arriba. Lo mínimo
+   para arrancar es `POSTGRES_PASSWORD`; para TikTok y Meta, también
+   `CHANNEL_SECRETS_KEY`. Los canales nuevos y los gráficos siguen apagados
+   (`*_ENABLED=false`) hasta probarlos.
+4. **Comprobar los ids de canal** antes de activar TikTok o Meta: la siembra no
+   pisa filas existentes.
+   - `SELECT id, tipo_adaptador, activo FROM canales WHERE id IN ('tiktok','facebook','instagram');`
+   - Si alguno existe con otro adaptador, renombrarlo antes.
+5. **Mezclar y desplegar**: llevar `feat/produccion-multicanal` a la rama que
+   sigue el servidor. Comprobarla con `git -C /opt/lazaro branch --show-current`;
+   la última conocida era `feat/lazaro-backlog-complete`. Después, en el
+   servidor, `git pull`, `docker compose -p chatbot-lazaro build` y
+   `docker compose -p chatbot-lazaro up -d`.
+   - El servicio `migrate` corre primero y los demás esperan a que termine bien.
+   - Orden de las migraciones (el runner las aplica así, cada archivo en su
+     transacción y bajo `pg_advisory_lock`):
+     1. `0001_esquema_inicial`: todo `IF NOT EXISTS`; en la BD existente solo
+        registra la base.
+     2. `0002_entrada_sin_perdida`
+     3. `0003_memoria_contacto`
+     4. `0004_consultas_lectura`: roles, RLS y vistas.
+     5. `0005_graficos`
+   - Para verificar: `docker compose -p chatbot-lazaro logs migrate` y
+     `SELECT version, nombre, aplicada_en FROM schema_migrations ORDER BY version;`
+     deben mostrar 5 filas.
+   - Si `migrate` falla, los servicios no arrancan. En ese caso, restaurar con
+     `pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB" < dump`
+     y volver al commit anterior.
+6. **Túnel de Cloudflare**
+   - Comprobar el PENDIENTE de `/media/*`.
+   - Los webhooks nuevos van al gateway (host del bot, puerto 8001):
+     - `https://<host-bot>/webhooks/tiktok`
+     - `https://<host-bot>/webhooks/messenger`
+7. **Reactivar el autodespliegue**, solo tras las pruebas:
+   `sudo systemctl start lazaro-actualizar.timer`.
+
+### Prueba manual por canal
+
+- **Telegram**
+  - «hola» recibe respuesta; repetir el mensaje no la duplica.
+  - Con «me llamo Ana» y, más tarde, «¿cómo me llamo?» debe recordar el nombre.
+  - Un cliente con sesión que escriba «grafícame mis casos por estado» recibe
+    imagen o enlace, según capacidades, y el enlace caduca.
+- **WhatsApp**
+  - Un mensaje del número de prueba recibe respuesta.
+  - Fuera de la ventana de 24 h, la fila queda en `fuera_de_ventana`:
+    `SELECT id, channel, status, last_error FROM outbox ORDER BY id DESC LIMIT 5;`
+  - En `docker compose logs enviar_salientes` aparece `outbox_fuera_de_ventana`.
+- **TikTok** (con `TIKTOK_ENABLED=true`)
+  - Registrar `/webhooks/tiktok` en la app y enviar un DM desde una cuenta
+    personal: debe responder.
+  - Con `python scripts/simular_canal.py --url https://<host-bot> --canal tiktok --usuario prueba --texto "Hola"`:
+    - el secreto correcto da HTTP 200;
+    - otro secreto, o el servidor sin `TIKTOK_WEBHOOK_SECRET`, da 401.
+  - Un gráfico llega como enlace.
+- **Facebook Messenger** (con `META_MESSENGER_ENABLED=true`)
+  - En Meta, «Verificar y guardar» `https://<host-bot>/webhooks/messenger` con
+    `META_WEBHOOK_VERIFY_TOKEN` debe dar OK.
+  - Un mensaje a la Page desde una cuenta de prueba de la app recibe respuesta,
+    y un gráfico llega como imagen.
+  - Un mensaje propio de la Page (eco) no recibe respuesta.
+  - Tras el primer envío, `canales.config_secreta` de `facebook` guarda el token
+    cifrado.
+- **Instagram** (con `META_INSTAGRAM_ENABLED=true`): un DM a la cuenta
+  profesional desde una cuenta de prueba recibe respuesta, por el mismo webhook.
+- **Simulado, webhook genérico y panel**
+  - `python scripts/simular_canal.py --canal <canal-simulado> …` da HTTP 200 y
+    una respuesta en el buzón.
+  - El panel de canales muestra `tiktok`, `facebook` e `instagram` activos según
+    el entorno.
+  - Consultas de solo lectura (fase 4): un asesor pregunta por casos abiertos; un
+    cliente con sesión pide «mis casos».
