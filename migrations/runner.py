@@ -85,7 +85,8 @@ def load_migrations(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
         if version in seen:
             raise MigrationError(f"versión repetida: {version}")
         seen.add(version)
-        raw = path.read_bytes()
+        # El checksum no depende del fin de línea del checkout (CRLF en Windows).
+        raw = path.read_bytes().replace(b"\r\n", b"\n")
         migrations.append(
             Migration(
                 version=version,

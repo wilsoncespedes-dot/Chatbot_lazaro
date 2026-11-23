@@ -77,6 +77,13 @@ def test_files_load_in_version_order_with_checksum(tmp_path):
     assert all(len(m.sha256) == 64 for m in migrations)
 
 
+def test_checksum_ignores_line_endings(tmp_path):
+    (tmp_path / "0001_a.sql").write_bytes(b"SELECT 1;\nSELECT 2;\n")
+    lf = load_migrations(tmp_path)[0].sha256
+    (tmp_path / "0001_a.sql").write_bytes(b"SELECT 1;\r\nSELECT 2;\r\n")
+    assert load_migrations(tmp_path)[0].sha256 == lf
+
+
 @pytest.mark.parametrize("name", ["1_a.sql", "0001-a.sql", "0001_A.sql"])
 def test_bad_file_names_are_rejected(tmp_path, name):
     _write(tmp_path, name, "SELECT 1;")
