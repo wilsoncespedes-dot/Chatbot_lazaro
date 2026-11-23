@@ -464,10 +464,10 @@ def test_dedup_failure_forwards_as_new():
 
 
 def test_orchestrator_failure_returns_200_and_logs_without_text(caplog):
-    """R26, R6: el webhook responde 200 y el log no contiene el texto."""
+    """R26, R6 + fase 2: 200, el mensaje queda en cola y el log no contiene el texto."""
     env = Env()
     env.orchestrator.fail = True
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         response = post(
             env.client,
             webhook(

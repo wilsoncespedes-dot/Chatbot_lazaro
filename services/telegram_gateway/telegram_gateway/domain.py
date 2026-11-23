@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .adapters.whatsapp_window import WhatsAppWindowStore
     from .adapters.channel_repository import ChannelRepository
     from .adapters.mailbox import MailboxRepository
+    from .adapters.inbound_retry import InboundRetryStore
     from .registry import ChannelRegistry
     from .ports.canal import Canal
 
@@ -146,7 +147,25 @@ class InvalidChannelConfig(DomainError):
 
 
 class OrchestratorError(Exception):
-    """Fallo al llamar al orquestador; el webhook la captura y no llega al cliente."""
+    """Fallo al llamar al orquestador; el webhook la captura y no llega al cliente.
+
+    `retryable=False` indica que el orquestador rechazó el contenido (400/413/422):
+    reenviarlo no cambiaría el resultado, así que no va a la cola de reintento.
+    """
+
+    def __init__(self, message: str = "", *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+class InboundUnavailable(DomainError):
+    """Fase 2: ni el orquestador ni la cola de reintento aceptaron el mensaje.
+
+    El webhook responde 503 para que el canal lo reenvíe más tarde.
+    """
+
+    code = "service_unavailable"
+    status_code = 503
 
 
 class CallbackNetworkError(Exception):
@@ -234,6 +253,7 @@ class Adapters:
     channel_registry: "ChannelRegistry | None" = None
     callback: "CallbackClient | None" = None
     mailbox: "MailboxRepository | None" = None
+    inbound_retry: "InboundRetryStore | None" = None
 
 
 @dataclass(frozen=True)
@@ -391,16 +411,6 @@ def normalize_callback(
         button_id=callback.button_id,
         button_proof=callback.button_proof,
         received_at=received_at,
-    )
-
-
-def build_message_request(incoming: IncomingUpdate, now: datetime) -> MessageRequest:
-    return MessageRequest(
-        update_id=incoming.update_id,
-        telegram_user_id=incoming.user_id,
-        chat_id=incoming.chat_id,
-        text=incoming.text or "",
-        received_at=now,
     )
 
 

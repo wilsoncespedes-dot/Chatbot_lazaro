@@ -215,7 +215,7 @@ def test_postgres_purge_uses_the_documented_order_and_parameters():
         "inbox": 0,
         "outbox": 0,
     }
-    assert conn.commits == 2 and conn.rollbacks == 0
+    assert conn.commits == 1 and conn.rollbacks == 0  # sin commit de esquema
     statements = [(sql, params) for sql, params in conn.log if not sql.startswith("CREATE")]
     starts = ["SELECT id FROM contacts", "DELETE FROM case_links", "DELETE FROM contacts",
               "DELETE FROM auto_handover_outcomes", "DELETE FROM auto_handover_streaks",
@@ -377,7 +377,7 @@ def test_purge_rolls_back_atomically_when_a_statement_fails():
         repo.purge_personal_data(CUTOFF, NOW)
 
     assert conn.rollbacks == 1
-    assert conn.commits == 1  # solo el commit del esquema
+    assert conn.commits == 0  # el esquema ya no se crea al conectar
     assert not any(
         sql.startswith("INSERT INTO privacy_purge_runs") for sql, _ in conn.log
     )

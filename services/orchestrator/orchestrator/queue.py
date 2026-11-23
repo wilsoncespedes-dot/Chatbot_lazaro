@@ -4,11 +4,15 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from lazaro_contracts import MessageRequest, NormalizedMessage, ResponseBlock
+from lazaro_contracts import (
+    MessageRequest,
+    NormalizedMessage,
+    ResponseBlock,
+    normalize_legacy_message,
+)
 from pydantic import TypeAdapter
 
 from .config import Settings
-from .legacy import legacy_from_normalized
 from .domain import (
     Adapters,
     ChannelRejected,
@@ -16,7 +20,6 @@ from .domain import (
     ServiceUnavailable,
     compute_backoff,
     process_channel_message,
-    process_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,19 +30,16 @@ _BLOCK_ADAPTER = TypeAdapter(ResponseBlock)
 def process_inbound(
     row: InboundQueueRow, settings: Settings, adapters: Adapters
 ) -> None:
-    """R11: despacha la carga guardada al flujo actual."""
+    """R11: despacha la carga guardada al flujo único (fase 2).
+
+    Las filas `legacy` encoladas antes del despliegue se convierten al mensaje
+    canónico con la misma identidad de Telegram.
+    """
     if row.payload_kind == "legacy":
-        process_message(MessageRequest.model_validate(row.payload), settings, adapters)
-        return
-    message = NormalizedMessage.model_validate(row.payload)
-    try:
-        legacy = legacy_from_normalized(message)
-    except (TypeError, ValueError):
-        legacy = None
-    if legacy is not None:
-        process_message(legacy, settings, adapters)
+        message = normalize_legacy_message(MessageRequest.model_validate(row.payload))
     else:
-        process_channel_message(message, settings, adapters)
+        message = NormalizedMessage.model_validate(row.payload)
+    process_channel_message(message, settings, adapters)
 
 
 def run_inbox_once(settings: Settings, adapters: Adapters) -> bool:

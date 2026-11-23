@@ -15,6 +15,10 @@ class DedupStore(Protocol):
         """True si el par (canal, mensaje externo) es nuevo (y queda marcado)."""
         ...
 
+    def forget_message(self, channel: str, external_message_id: str) -> None:
+        """Quita la marca de un mensaje que no se pudo entregar ni guardar."""
+        ...
+
     def ping(self, timeout_seconds: float) -> bool:
         """Comprueba Redis con PING y un timeout acotado (healthcheck, solo lectura)."""
         ...
@@ -60,6 +64,13 @@ class RedisDedupStore:
         if created and legacy_key is not None:
             self._client.set(legacy_key, 1, nx=True, ex=ttl_seconds)
         return created
+
+    def forget_message(self, channel: str, external_message_id: str) -> None:
+        """Quita la marca para que el reenvío del canal se procese (fase 2)."""
+        keys = [f"gw:message:{channel}:{external_message_id}"]
+        if channel == "telegram":
+            keys.append(f"gw:update:{external_message_id}")
+        self._client.delete(*keys)
 
 
 class FakeDedupStore:
@@ -108,3 +119,13 @@ class FakeDedupStore:
         if legacy_id is not None:
             self.keys[legacy_id] = ttl_seconds
         return True
+
+    def forget_message(self, channel: str, external_message_id: str) -> None:
+        if self.fail:
+            raise ConnectionError("redis caído")
+        self.message_keys.discard((channel, external_message_id))
+        if channel == "telegram":
+            try:
+                self.keys.pop(int(external_message_id), None)
+            except ValueError:
+                pass

@@ -164,11 +164,42 @@ class ChannelService:
         channel_secrets = self._secrets_for(record)
         return factory.build(record, self._context, channel_secrets)
 
-    def resolve_for_webhook(self, channel_id: str) -> tuple["Canal", str]:
-        """R7-R9: resuelve un canal activo con secreto o lanza 404 uniforme."""
-        self.ensure_seeded()
+    def _seed_record(self, channel_id: str) -> ChannelRecord | None:
+        """Registro sintético de un canal integrado cuando la tabla no responde."""
+        for seed in self._seeds:
+            if seed.id == channel_id:
+                return ChannelRecord(
+                    id=seed.id,
+                    name=seed.name,
+                    adapter_type=seed.adapter_type,
+                    icon=seed.icon,
+                    color=seed.color,
+                    config=dict(seed.config),
+                    active=True,
+                    created_at=self._context.adapters.clock(),
+                    has_secrets=False,
+                    active_follows_environment=True,
+                )
+        return None
+
+    def resolve_for_webhook(
+        self, channel_id: str, *, own_route: bool = False
+    ) -> tuple["Canal", str | None]:
+        """R7-R9: resuelve un canal activo con secreto o lanza 404 uniforme.
+
+        Fase 2: un adaptador con `webhook_propio` (Telegram, WhatsApp) verifica
+        su propio webhook y solo entra por su URL histórica (`own_route`); se
+        devuelve sin secreto genérico (`None`). Si la tabla de canales no
+        responde, esas URLs siguen funcionando con la semilla integrada (R15).
+        """
         not_found = "El canal no existe."
-        record = self._repository_call(self._repository.get, channel_id)
+        try:
+            self.ensure_seeded()
+            record = self._repository_call(self._repository.get, channel_id)
+        except ChannelStoreUnavailable:
+            record = self._seed_record(channel_id) if own_route else None
+            if record is None:
+                raise
         if record is None:
             raise ChannelNotFound(not_found)
         factory = self._factory(record)
@@ -176,6 +207,15 @@ class ChannelService:
             raise ChannelNotFound(not_found)
         if not record.active:
             raise ChannelNotFound(not_found)
+        own_webhook = getattr(factory, "webhook_propio", False) is True
+        if own_webhook != own_route:
+            raise ChannelNotFound(not_found)
+        if own_webhook:
+            try:
+                canal = factory.build(record, self._context, None)
+            except ChannelNotConfigured:
+                raise ChannelNotFound(not_found) from None
+            return canal, None
         channel_secrets = self._secrets_for(record)
         if channel_secrets is None or channel_secrets.secret is None:
             raise ChannelNotFound(not_found)

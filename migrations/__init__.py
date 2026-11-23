@@ -20,14 +20,20 @@ def section(title: str, filename: str = "0001_esquema_inicial.sql") -> tuple[str
     índices, migraciones aditivas) igual que cuando vivían en el código.
     """
     lines = (MIGRATIONS_DIR / filename).read_text(encoding="utf-8").splitlines()
-    header = f"-- ── {title} "
+    header = f"-- ── {title}"
     try:
-        start = next(i for i, line in enumerate(lines) if line.startswith(header))
+        start = next(
+            i
+            for i, line in enumerate(lines)
+            if line.rstrip() == header or line.startswith(header + " ")
+        )
     except StopIteration:
         raise KeyError(title) from None
     result: list[str] = []
     for line in lines[start + 1 :]:
         if not line.strip() or line.startswith("-- ──"):
             break
+        if line.startswith("--"):
+            continue  # comentario explicativo dentro de la sección
         result.append(line.rstrip().removesuffix(";"))
     return tuple(result)

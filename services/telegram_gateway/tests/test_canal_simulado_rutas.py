@@ -37,8 +37,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class _CountingOrchestrator(FakeOrchestratorClient):
-    def __init__(self, fail: bool = False) -> None:
-        super().__init__(fail=fail)
+    def __init__(self, fail: bool = False, reject: bool = False) -> None:
+        super().__init__(fail=fail, reject=reject)
         self.calls = 0
 
     def post_message(self, request: NormalizedMessage) -> None:
@@ -53,21 +53,28 @@ class _App:
         repository: FakeChannelRepository,
         mailbox: FakeMailboxRepository,
         orchestrator: _CountingOrchestrator,
+        settings: Settings | None = None,
+        adapters: Adapters | None = None,
     ) -> None:
         self.client = client
         self.repository = repository
         self.mailbox = mailbox
         self.orchestrator = orchestrator
+        self.settings = settings
+        self.adapters = adapters
 
 
 def _app(
     *,
     orchestrator_fail: bool = False,
+    orchestrator_reject: bool = False,
     mailbox: FakeMailboxRepository | None = None,
 ) -> _App:
     repository = FakeChannelRepository(clock=lambda: NOW)
     mailbox = mailbox or FakeMailboxRepository()
-    orchestrator = _CountingOrchestrator(fail=orchestrator_fail)
+    orchestrator = _CountingOrchestrator(
+        fail=orchestrator_fail, reject=orchestrator_reject
+    )
     adapters = Adapters(
         telegram=FakeTelegramClient(),
         dedup=FakeDedupStore(),
@@ -84,7 +91,7 @@ def _app(
         channel_secrets_key=SecretStr(Fernet.generate_key().decode("ascii")),
     )
     client = TestClient(create_app(settings, adapters), raise_server_exceptions=False)
-    return _App(client, repository, mailbox, orchestrator)
+    return _App(client, repository, mailbox, orchestrator, settings, adapters)
 
 
 def _headers() -> dict[str, str]:
@@ -161,9 +168,13 @@ def _mailbox(app: _App, channel: str = CHANNEL, destination: str = "cliente-demo
     )
 
 
-def test_signed_webhook_records_client_and_rejection_when_orchestrator_fails(caplog):
-    """R21–R23: cliente y rechazo en el buzón; el webhook sigue en 200 accepted."""
-    app = _app(orchestrator_fail=True)
+def test_signed_webhook_records_client_and_rejection_when_orchestrator_rejects(caplog):
+    """R21–R23: cliente y rechazo en el buzón; el webhook sigue en 200 accepted.
+
+    Fase 2: solo un rechazo del orquestador (422) es definitivo; una caída va
+    a la cola de reintento (ver el test siguiente).
+    """
+    app = _app(orchestrator_reject=True)
     with app.client:
         secret = _create(app)
         with caplog.at_level(logging.ERROR):
@@ -176,12 +187,34 @@ def test_signed_webhook_records_client_and_rejection_when_orchestrator_fails(cap
     assert entries[0]["text"] == "Hola"
     assert "orquestador" in entries[1]["text"]
     assert app.orchestrator.calls == 1
-    assert "webhook_forward_failed channel_id=tiktok-simulado" in caplog.text
+    assert "inbound_rejected channel=tiktok-simulado" in caplog.text
 
 
-def test_simulate_returns_forwarded_false_with_reason_when_orchestrator_fails():
-    """R20, R23: /simulate traduce el rechazo a forwarded=false con motivo."""
+def test_signed_webhook_is_queued_and_delivered_when_orchestrator_returns(caplog):
+    """Fase 2: orquestador caído → 200, sin rechazo, y se entrega al volver."""
+    from telegram_gateway.inbound import process_due_retries
+
     app = _app(orchestrator_fail=True)
+    with app.client:
+        secret = _create(app)
+        with caplog.at_level(logging.WARNING):
+            response = _signed(app, CHANNEL, secret, _body(CHANNEL))
+        read = _mailbox(app)
+    assert response.status_code == 200
+    assert response.json() == {"status": "accepted"}
+    assert [entry["kind"] for entry in read.json()["entries"]] == ["client"]
+    assert "inbound_queued channel=tiktok-simulado" in caplog.text
+
+    app.orchestrator.fail = False
+    app.adapters.clock = lambda: NOW.replace(hour=16)
+    assert process_due_retries(app.settings, app.adapters) == 1
+    assert [m.text for m in app.orchestrator.received] == ["Hola"]
+    assert app.adapters.inbound_retry.rows == {}
+
+
+def test_simulate_returns_forwarded_false_with_reason_when_orchestrator_rejects():
+    """R20, R23: /simulate traduce el rechazo a forwarded=false con motivo."""
+    app = _app(orchestrator_reject=True)
     with app.client:
         _create(app)
         response = _simulate(app)

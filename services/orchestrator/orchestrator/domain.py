@@ -148,7 +148,7 @@ from .panel import (
 )
 from .channel_label import ChannelLabel, label_from_policy, unknown_label
 from .channels import ChannelPolicy, default_policy
-from .legacy import LEGACY_CHANNEL, is_legacy
+from .legacy import LEGACY_CHANNEL, is_legacy, legacy_from_normalized
 from .states import ConversationEvent, ConversationState, transition_state
 from .db_query import (
     DbQueryCommand,
@@ -1067,6 +1067,9 @@ class InboundEntry:
     external_user_id: str
     payload_kind: str
     payload: dict
+    # Fase 2: índice único (channel, external_message_id) del inbox; una copia
+    # repetida del mismo mensaje del canal no entra dos veces aunque Redis falle.
+    external_message_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3824,76 +3827,75 @@ def _has_current_consent(
     return has_current_consent(channel, external_user_id, settings, adapters)
 
 
-def _legacy_consent_gate(
-    request: MessageRequest, settings: Settings, adapters: Adapters
+def _staff_command_request(message: NormalizedMessage) -> MessageRequest | None:
+    """Solo el canal legacy (Telegram) con texto admite los comandos de personal."""
+    try:
+        return legacy_from_normalized(message)
+    except (TypeError, ValueError):
+        return None
+
+
+def _handle_staff_command(
+    message: NormalizedMessage, settings: Settings, adapters: Adapters
 ) -> bool:
-    """R2, R3, R6, R22: resuelve la compuerta solo en memoria para Telegram."""
-    if not consent_configured(settings, adapters):
-        logger.info("privacy_not_configured")
+    """Fase 2: `/start <token>` y `/consultar` del personal en el flujo único.
+
+    El personal vinculado (o quien canjea un token de personal) está exento de
+    la puerta de consentimiento (#35). Si no lo está y no ha consentido,
+    devuelve False y el flujo canónico aplica la puerta como a cualquier texto.
+    """
+    request = _staff_command_request(message)
+    if request is None:
         return False
-    if _has_current_consent(
-        LEGACY_CHANNEL, str(request.telegram_user_id), settings, adapters
-    ):
-        return True
-    _handle_pre_consent_text(
-        LEGACY_CHANNEL,
-        str(request.telegram_user_id),
-        str(request.chat_id),
-        request.text,
-        str(request.update_id),
-        request.received_at,
-        settings,
-        adapters,
-    )
-    return False
-
-
-def process_message(request: MessageRequest, settings: Settings, adapters: Adapters) -> None:
-    repo = adapters.repository
-
     start_token = parse_start_token(request.text)
     db_query = None
     if start_token is None:
         db_query = parse_db_query_command(
             request.text, settings.db_query_max_question_length
         )
-
-    if start_token is not None or db_query is not None:
-        exempt = _is_linked_staff(request, adapters)
-        if not exempt and start_token is not None:
-            role = repo.get_link_token_role(hash_token(start_token), adapters.clock())
-            exempt = role in STAFF_ROLES
-        if not exempt and not _legacy_consent_gate(request, settings, adapters):
-            return
-        contact = repo.get_or_create_contact(
-            request.telegram_user_id, request.chat_id, adapters.clock()
+    if start_token is None and db_query is None:
+        return False
+    repo = adapters.repository
+    exempt = _is_linked_staff(request, adapters)
+    if not exempt and start_token is not None:
+        role = repo.get_link_token_role(hash_token(start_token), adapters.clock())
+        exempt = role in STAFF_ROLES
+    if not exempt and not (
+        consent_configured(settings, adapters)
+        and _has_current_consent(
+            message.channel, message.external_user_id, settings, adapters
         )
-        if start_token is not None:
-            _handle_start_token(request, contact, start_token, settings, adapters)
-        else:
-            handle_db_query(request, db_query, settings, adapters)
-        return
-
-    if not _legacy_consent_gate(request, settings, adapters):
-        return
-
+    ):
+        return False
     contact = repo.get_or_create_contact(
         request.telegram_user_id, request.chat_id, adapters.clock()
     )
-    _route_consented_text(
-        contact,
-        request.text,
-        request.received_at,
-        request.update_id,
-        settings,
-        adapters,
-    )
+    if start_token is not None:
+        _handle_start_token(request, contact, start_token, settings, adapters)
+    else:
+        handle_db_query(request, db_query, settings, adapters)
+    return True
+
+
+def _routing_update_id(message: NormalizedMessage) -> int:
+    """El canal legacy conserva su `update_id` numérico; el resto, un entero estable."""
+    if is_legacy(message.channel) and message.external_message_id.isdigit():
+        value = int(message.external_message_id)
+        if value < 2**63:
+            return value
+    return stable_external_int(message.channel, message.external_message_id)
 
 
 def process_channel_message(
     message: NormalizedMessage, settings: Settings, adapters: Adapters
 ) -> None:
-    """Flujo de un mensaje canónico; la identidad es `(canal, id externo)` (R13-R21)."""
+    """Flujo único de un mensaje; la identidad es `(canal, id externo)` (R13-R21).
+
+    Fase 2: también atiende el contrato histórico de Telegram (antes
+    `process_message`), convertido a `NormalizedMessage` por quien llama.
+    """
+    if _handle_staff_command(message, settings, adapters):
+        return
     # R25, R33: sin textos legales configurados por el panel se falla cerrado.
     if not consent_configured(settings, adapters):
         logger.info("privacy_not_configured")
@@ -3933,7 +3935,7 @@ def process_channel_message(
         contact,
         text,
         message.received_at,
-        stable_external_int(message.channel, message.external_message_id),
+        _routing_update_id(message),
         settings,
         adapters,
     )

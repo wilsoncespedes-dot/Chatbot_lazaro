@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import hmac
-import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from functools import partial
 from uuid import uuid4
 
 import httpx
@@ -14,8 +14,6 @@ from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from lazaro_contracts import (
-    LAZARO_SIGNATURE_HEADER,
-    LAZARO_TIMESTAMP_HEADER,
     SERVICE_TOKEN_HEADER,
     ChannelActiveRequest,
     ChannelCreateRequest,
@@ -36,11 +34,9 @@ from lazaro_contracts import (
     SimulatedInboundResponse,
     TextBlock,
 )
-from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import grouping
 from .adapters import channels as registered_channels
 from .adapters.callback import FakeCallbackClient, HttpCallbackClient
 from .adapters.channel_repository import (
@@ -49,6 +45,7 @@ from .adapters.channel_repository import (
     PostgresChannelRepository,
 )
 from .adapters.dedup import RedisDedupStore
+from .adapters.inbound_retry import FakeInboundRetryStore, PostgresInboundRetryStore
 from .adapters.mailbox import FakeMailboxRepository, PostgresMailboxRepository
 from .adapters.message_buffer import RedisMessageBuffer
 from .adapters.orchestrator import HttpOrchestratorClient
@@ -62,28 +59,15 @@ from .domain import (
     ChannelStoreUnavailable,
     ChannelSendFailed,
     DomainError,
-    OrchestratorError,
-    TelegramError,
     WebhookForbidden,
-    build_message_request,
-    extract_callback,
-    extract_callback_query_id,
-    extract_incoming,
-    normalize_callback,
-    normalize_incoming,
     send_through_channel,
 )
 from .grouping import GroupingWorker
+from .inbound import InboundRetryWorker
 from .registry import CHANNEL_REGISTRY, ChannelContext, ChannelRegistry
 from .secret_cipher import SecretCipher
 from .webhook_service import WebhookService
-from .whatsapp_cloud import (
-    SIGNATURE_HEADER,
-    parse_webhook,
-    to_delivery_status,
-    verify_signature,
-    verify_subscription,
-)
+from .whatsapp_cloud import verify_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +75,9 @@ SERVICE_NAME = "telegram_gateway"
 LEGACY_SEND_CHANNEL = "telegram"
 WEBHOOK_PATH = "/telegram/webhook"
 WHATSAPP_WEBHOOK_PATH = "/whatsapp/webhook"
-WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+# Fase 2: las URLs históricas entran por el webhook común con estos canales.
+TELEGRAM_CHANNEL_ID = "telegram"
+WHATSAPP_CHANNEL_ID = "whatsapp"
 # Los webhooks no usan X-Service-Token: se protegen con su propio secreto/firma.
 PUBLIC_PATHS: frozenset[str] = frozenset(
     {"/health", WEBHOOK_PATH, WHATSAPP_WEBHOOK_PATH}
@@ -100,12 +86,6 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-class TelegramUpdate(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    update_id: StrictInt
 
 
 def build_default_adapters(settings: Settings) -> Adapters:
@@ -157,6 +137,7 @@ def build_default_adapters(settings: Settings) -> Adapters:
             settings.simulated_mailbox_retention_seconds,
             settings.simulated_mailbox_max_entries,
         ),
+        inbound_retry=PostgresInboundRetryStore(settings.database_url),
     )
 
 
@@ -179,6 +160,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             settings.simulated_mailbox_retention_seconds,
             settings.simulated_mailbox_max_entries,
         )
+    if adapters.inbound_retry is None:
+        adapters.inbound_retry = FakeInboundRetryStore()
     channel_context = ChannelContext(settings=settings, adapters=adapters)
     cipher = SecretCipher(settings.channel_secrets_key.get_secret_value())
     channel_service = ChannelService(
@@ -188,14 +171,17 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
     if not cipher.available:
         logger.warning("channel_secrets_key_unavailable reason=%s", cipher.status)
     grouping_worker: GroupingWorker | None = None
+    retry_worker: InboundRetryWorker | None = None
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        nonlocal grouping_worker
+        nonlocal grouping_worker, retry_worker
         require_service_token(settings.service_token)
         if settings.message_grouping_enabled and adapters.buffer is not None:
             grouping_worker = GroupingWorker(settings, adapters)
             grouping_worker.start()
+        retry_worker = InboundRetryWorker(settings, adapters)
+        retry_worker.start()
         try:
             channel_service.ensure_seeded()
         except ChannelStoreUnavailable as exc:
@@ -206,21 +192,14 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             if grouping_worker is not None:
                 grouping_worker.stop()
                 grouping_worker = None
+            retry_worker.stop()
+            retry_worker = None
 
     app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 
     @app.middleware("http")
     async def verify_service_token(request: Request, call_next):
-        if request.url.path == WEBHOOK_PATH:
-            secret = request.headers.get(WEBHOOK_SECRET_HEADER)
-            expected_secret = settings.telegram_webhook_secret
-            if (
-                expected_secret == ""
-                or secret is None
-                or not hmac.compare_digest(secret.encode(), expected_secret.encode())
-            ):
-                return _error(401, "unauthorized", "Secreto del webhook ausente o no válido.")
-            return await call_next(request)
+        # Los webhooks los autentica su adaptador dentro de WebhookService.
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
         if request.url.path.startswith("/webhooks/"):
@@ -293,104 +272,19 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             )
         return HealthResponse(status="ok", service=SERVICE_NAME)
 
+    async def _receive(channel_id: str, request: Request, own_route: bool = False):
+        body = await request.body()
+        return await run_in_threadpool(
+            partial(webhook_service.receive, own_route=own_route),
+            channel_id,
+            request.headers,
+            body,
+        )
+
     @app.post(WEBHOOK_PATH)
-    def webhook(update: TelegramUpdate) -> dict:
-        raw = update.model_dump()
-        callback_query_id = extract_callback_query_id(raw)
-        if callback_query_id is not None:
-            try:
-                adapters.telegram.answer_callback_query(callback_query_id)
-            except Exception as exc:  # noqa: BLE001 - R4: nunca rompe el webhook
-                logger.warning(
-                    "Fallo al confirmar callback update_id=%s (%s)",
-                    update.update_id,
-                    type(exc).__name__,
-                )
-        callback = extract_callback(raw)
-        if callback is not None:
-            try:
-                normalized_button = normalize_callback(
-                    callback, adapters.clock()
-                )
-            except ValidationError:
-                logger.error(
-                    "callback_invalido update_id=%s", callback.update_id
-                )
-                return {"ok": True}
-            try:
-                is_new = adapters.dedup.mark_message_if_new(
-                    "telegram",
-                    callback.callback_id,
-                    settings.dedup_ttl_seconds,
-                )
-            except Exception as exc:
-                logger.error(
-                    "Fallo de Redis al deduplicar callback id=%s (%s); se trata como nuevo",
-                    callback.callback_id,
-                    type(exc).__name__,
-                )
-                is_new = True
-            if not is_new:
-                return {"ok": True}
-            try:
-                adapters.orchestrator.post_message(normalized_button)
-            except (OrchestratorError, ValidationError) as exc:
-                logger.error(
-                    "Fallo al reenviar botón callback id=%s (%s): %s",
-                    callback.callback_id,
-                    type(exc).__name__,
-                    exc if isinstance(exc, OrchestratorError) else "botón no válido",
-                )
-            return {"ok": True}
-        incoming = extract_incoming(raw)
-        if incoming is None:
-            return {"ok": True}
-        try:
-            normalized = normalize_incoming(incoming, adapters.clock())
-        except ValidationError:
-            # Un update fuera de contrato (p. ej. texto de más de 4096) conserva
-            # la rama legacy: se deduplica y el flujo lo descarta sin reenviarlo.
-            channel = "telegram"
-            external_message_id = str(incoming.update_id)
-        else:
-            channel = normalized.channel
-            external_message_id = normalized.external_message_id
-        try:
-            is_new = adapters.dedup.mark_message_if_new(
-                channel,
-                external_message_id,
-                settings.dedup_ttl_seconds,
-            )
-        except Exception as exc:
-            logger.error(
-                "Fallo de Redis al deduplicar update_id=%s (%s); se trata como nuevo",
-                incoming.update_id,
-                type(exc).__name__,
-            )
-            is_new = True
-        if not is_new:
-            return {"ok": True}
-        if incoming.text is None:
-            try:
-                adapters.telegram.send_message(incoming.chat_id, settings.non_text_reply)
-            except TelegramError as exc:
-                logger.error(
-                    "No se pudo enviar NON_TEXT_REPLY (update_id=%s): %s", incoming.update_id, exc
-                )
-            return {"ok": True}
-        if settings.message_grouping_enabled and adapters.buffer is not None:
-            grouping.enqueue_text(incoming, settings, adapters)
-            return {"ok": True}
-        try:
-            message = build_message_request(incoming, adapters.clock())
-            adapters.orchestrator.post_message(message)
-        except (OrchestratorError, ValidationError) as exc:
-            logger.error(
-                "Fallo al reenviar al orquestador update_id=%s (%s): %s",
-                incoming.update_id,
-                type(exc).__name__,
-                exc if isinstance(exc, OrchestratorError) else "mensaje no válido",
-            )
+    async def telegram_webhook(request: Request) -> dict:
+        """URL histórica de Telegram; entra por el webhook común (fase 2)."""
+        await _receive(TELEGRAM_CHANNEL_ID, request, own_route=True)
         return {"ok": True}
 
     @app.get(WHATSAPP_WEBHOOK_PATH)
@@ -410,90 +304,14 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         )
 
     @app.post(WHATSAPP_WEBHOOK_PATH)
-    async def whatsapp_webhook(request: Request):
-        if not settings.whatsapp_enabled:
-            raise StarletteHTTPException(status_code=404, detail="not_found")
-        body = await request.body()
-        if not verify_signature(
-            settings.whatsapp_app_secret.get_secret_value(),
-            body,
-            request.headers.get(SIGNATURE_HEADER),
-        ):
-            return _error(
-                401, "unauthorized", "Firma del webhook ausente o no válida."
-            )
-        try:
-            payload = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            payload = None
-        if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
-            return {"ok": True}
-
-        def process() -> None:
-            received_at = adapters.clock()
-            parsed = parse_webhook(
-                payload, settings.whatsapp_phone_number_id, received_at
-            )
-            if adapters.whatsapp_window is not None:
-                for wa_id in parsed.inbound_wa_ids:
-                    try:
-                        adapters.whatsapp_window.record_inbound(wa_id, received_at)
-                    except Exception as exc:  # noqa: BLE001 - R27 no debe romper el lote
-                        logger.warning(
-                            "No se pudo registrar la ventana de WhatsApp (%s)",
-                            type(exc).__name__,
-                        )
-            for message in parsed.messages:
-                try:
-                    is_new = adapters.dedup.mark_message_if_new(
-                        "whatsapp",
-                        message.external_message_id,
-                        settings.dedup_ttl_seconds,
-                    )
-                except Exception as exc:  # noqa: BLE001 - R25 se trata como nuevo
-                    logger.error(
-                        "Fallo de Redis al deduplicar WhatsApp wamid=%s (%s); se trata como nuevo",
-                        message.external_message_id,
-                        type(exc).__name__,
-                    )
-                    is_new = True
-                if not is_new:
-                    continue
-                try:
-                    adapters.orchestrator.post_message(message)
-                except (OrchestratorError, ValidationError) as exc:
-                    logger.error(
-                        "Fallo al reenviar WhatsApp wamid=%s (%s): %s",
-                        message.external_message_id,
-                        type(exc).__name__,
-                        exc
-                        if isinstance(exc, OrchestratorError)
-                        else "mensaje no válido",
-                    )
-            for status in parsed.statuses:
-                logger.info(
-                    "whatsapp_status wamid=%s status=%s codes=%s",
-                    status.wamid,
-                    to_delivery_status(status.status),
-                    list(status.error_codes),
-                )
-
-        try:
-            await run_in_threadpool(process)
-        except Exception:  # noqa: BLE001 - Meta no debe reintentar en bucle
-            logger.exception("Fallo procesando el webhook de WhatsApp")
+    async def whatsapp_webhook(request: Request) -> dict:
+        """URL histórica de WhatsApp; entra por el webhook común (fase 2)."""
+        await _receive(WHATSAPP_CHANNEL_ID, request, own_route=True)
         return {"ok": True}
 
     @app.post("/webhooks/{canal_id}", response_model=MessageResponse)
     async def generic_webhook(canal_id: str, request: Request) -> MessageResponse:
-        body = await request.body()
-        result = await run_in_threadpool(
-            webhook_service.receive,
-            canal_id,
-            request.headers.get(LAZARO_TIMESTAMP_HEADER),
-            request.headers.get(LAZARO_SIGNATURE_HEADER),
-            body,
-        )
+        result = await _receive(canal_id, request)
         return MessageResponse(status=result.status)
 
     @app.get("/channels", response_model=ChannelListResponse)

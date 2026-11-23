@@ -38,7 +38,6 @@ class Settings(BaseSettings):
     healthcheck_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
     http_timeout_seconds: float = 10
     telegram_answer_callback_timeout_seconds: float = 3.0
-    non_text_reply: str = "Por ahora solo puedo leer mensajes de texto."
     message_grouping_enabled: bool = True
     message_grouping_window_seconds: float = 2.0
     message_grouping_max_wait_seconds: float = 8.0
@@ -72,6 +71,14 @@ class Settings(BaseSettings):
     # Buzón del canal simulado (#63): solo pruebas, retención y tope por canal.
     simulated_mailbox_retention_seconds: int = Field(3600, ge=60, le=86400)
     simulated_mailbox_max_entries: int = Field(500, ge=10, le=5000)
+
+    # Fase 2: cola de reintento hacia el orquestador (espera creciente).
+    inbound_retry_base_seconds: float = Field(2.0, gt=0, le=60)
+    inbound_retry_max_delay_seconds: float = Field(300.0, gt=0, le=3600)
+    inbound_retry_max_age_seconds: int = Field(172_800, ge=60, le=1_209_600)
+    inbound_retry_poll_seconds: float = Field(1.0, gt=0, le=60)
+    inbound_retry_lease_seconds: float = Field(60.0, gt=0, le=3600)
+    inbound_retry_batch_size: int = Field(50, ge=1, le=500)
 
     @field_validator("telegram_answer_callback_timeout_seconds")
     @classmethod

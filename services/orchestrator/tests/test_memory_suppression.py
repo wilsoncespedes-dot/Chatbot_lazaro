@@ -409,7 +409,7 @@ def test_r44_postgres_suppression_is_parameterized_and_atomic():
         "consentimientos_cliente": 0,
         "identidades_cliente": 0,
     }
-    assert conn.rollbacks == 0 and conn.commits >= 2
+    assert conn.rollbacks == 0 and conn.commits >= 1  # sin commit de esquema
     statements = [(sql, params) for sql, params in conn.log]
     for sql, params in statements:
         assert "req-1" not in sql and "admin-1" not in sql

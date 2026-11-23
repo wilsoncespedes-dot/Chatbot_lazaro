@@ -82,6 +82,23 @@ class Repository(Protocol):
         self, entry: InboundEntry, dedup: DedupKey | None
     ) -> bool: ...
 
+    def begin_direct_inbound(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        now: datetime,
+        lease_seconds: float,
+    ) -> int | None:
+        """Fase 2: reserva la fila de un mensaje que se procesa en la petición.
+
+        Devuelve el id (ya en `processing`) o None si el mensaje es duplicado.
+        """
+        ...
+
+    def abandon_inbound(self, row_id: int, dedup: DedupKey | None) -> None:
+        """Fase 2: borra la reserva (y la marca) si el proceso directo falló."""
+        ...
+
     def claim_inbound(
         self, now: datetime, lease_seconds: float
     ) -> InboundQueueRow | None: ...
@@ -1209,6 +1226,7 @@ class FakeRepository:
             "conversation_key": entry.conversation_key,
             "channel": entry.channel,
             "external_user_id": entry.external_user_id,
+            "external_message_id": entry.external_message_id,
             "payload_kind": entry.payload_kind,
             "payload": dict(entry.payload),
             "status": "pending",
@@ -1221,25 +1239,66 @@ class FakeRepository:
         }
         return row_id
 
+    def _inbox_has_message_locked(self, entry: InboundEntry) -> bool:
+        """Mismo efecto que el índice único (channel, external_message_id)."""
+        if entry.external_message_id is None:
+            return False
+        return any(
+            row["channel"] == entry.channel
+            and row.get("external_message_id") == entry.external_message_id
+            for row in self.inbox.values()
+        )
+
+    def _reserve_inbox_locked(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> int | None:
+        """Dedup + INSERT atómicos; None si el mensaje ya entró antes."""
+        added: DedupKey | None = None
+        if dedup is not None:
+            with self._processed_lock:
+                if self._dedup_exists_locked(dedup):
+                    return None
+                self._add_dedup_locked(dedup)
+                added = dedup
+        if self.fail_inbox_insert or self._inbox_has_message_locked(entry):
+            if added is not None:
+                with self._processed_lock:
+                    self._remove_dedup_locked(added)
+            if self.fail_inbox_insert:
+                raise ServiceUnavailable("inbox no disponible")
+            return None
+        return self._insert_inbox_locked(entry)
+
     def enqueue_inbound(
         self, entry: InboundEntry, dedup: DedupKey | None
     ) -> bool:
         """R1, R4, R5, R7: dedup + INSERT atómicos (o solo INSERT sin dedup)."""
         with self._queue_lock:
-            added: DedupKey | None = None
+            return self._reserve_inbox_locked(entry, dedup) is not None
+
+    def begin_direct_inbound(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        now: datetime,
+        lease_seconds: float,
+    ) -> int | None:
+        with self._queue_lock:
+            row_id = self._reserve_inbox_locked(entry, dedup)
+            if row_id is None:
+                return None
+            row = self.inbox[row_id]
+            row["status"] = "processing"
+            row["attempts"] = 1
+            row["locked_until"] = now + timedelta(seconds=lease_seconds)
+            return row_id
+
+    def abandon_inbound(self, row_id: int, dedup: DedupKey | None) -> None:
+        with self._queue_lock:
+            self.inbox.pop(row_id, None)
             if dedup is not None:
                 with self._processed_lock:
-                    if self._dedup_exists_locked(dedup):
-                        return False
-                    self._add_dedup_locked(dedup)
-                    added = dedup
-            if self.fail_inbox_insert:
-                if added is not None:
-                    with self._processed_lock:
-                        self._remove_dedup_locked(added)
-                raise ServiceUnavailable("inbox no disponible")
-            self._insert_inbox_locked(entry)
-            return True
+                    self._remove_dedup_locked(dedup)
 
     def _claim_locked(
         self,
@@ -4212,10 +4271,19 @@ class PostgresRepository:
         )
         return bool(cur.fetchall())
 
-    def enqueue_inbound(
-        self, entry: InboundEntry, dedup: DedupKey | None
-    ) -> bool:
-        """R1, R4, R5, R7: marca de dedup e INSERT de inbox en una transacción."""
+    def _reserve_inbox(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        status: str,
+        attempts: int,
+        locked_until: datetime | None,
+    ) -> int | None:
+        """Marca de dedup + INSERT en una transacción; None si ya existía.
+
+        El índice único (channel, external_message_id) de la migración 0002 es la
+        barrera aunque Redis falle o el mensaje no tenga clave de dedup (R7).
+        """
         now = datetime.now(timezone.utc)
         with self._lock:
             conn = self._connection()
@@ -4223,25 +4291,75 @@ class PostgresRepository:
             try:
                 if dedup is not None and not self._mark_dedup_cursor(cur, dedup):
                     conn.rollback()
-                    return False
+                    return None
                 cur.execute(
                     "INSERT INTO inbox (conversation_key, channel, "
-                    "external_user_id, payload_kind, payload, status, attempts, "
-                    "next_attempt_at, created_at) "
-                    "VALUES (%s, %s, %s, %s, CAST(%s AS JSONB), 'pending', 0, "
-                    "%s, %s)",
+                    "external_user_id, external_message_id, payload_kind, payload, "
+                    "status, attempts, next_attempt_at, locked_until, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, CAST(%s AS JSONB), %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (channel, external_message_id) DO NOTHING "
+                    "RETURNING id",
                     (
                         entry.conversation_key,
                         entry.channel,
                         entry.external_user_id,
+                        entry.external_message_id,
                         entry.payload_kind,
                         json.dumps(entry.payload),
+                        status,
+                        attempts,
                         now,
+                        locked_until,
                         now,
                     ),
                 )
+                rows = cur.fetchall()
+                if not rows:
+                    conn.rollback()  # revierte también la marca de dedup
+                    return None
                 conn.commit()
-                return True
+                return int(rows[0][0])
+            except Exception as exc:
+                conn.rollback()
+                if is_connection_error(exc):
+                    self._discard_connection()
+                raise
+
+    def enqueue_inbound(
+        self, entry: InboundEntry, dedup: DedupKey | None
+    ) -> bool:
+        """R1, R4, R5, R7: marca de dedup e INSERT de inbox en una transacción."""
+        return self._reserve_inbox(entry, dedup, "pending", 0, None) is not None
+
+    def begin_direct_inbound(
+        self,
+        entry: InboundEntry,
+        dedup: DedupKey | None,
+        now: datetime,
+        lease_seconds: float,
+    ) -> int | None:
+        return self._reserve_inbox(
+            entry, dedup, "processing", 1, now + timedelta(seconds=lease_seconds)
+        )
+
+    def abandon_inbound(self, row_id: int, dedup: DedupKey | None) -> None:
+        with self._lock:
+            conn = self._connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM inbox WHERE id = %s", (row_id,))
+                if dedup is not None and dedup.kind == "message":
+                    cur.execute(
+                        "DELETE FROM processed_messages "
+                        "WHERE channel = %s AND external_message_id = %s",
+                        (dedup.channel, dedup.external_message_id),
+                    )
+                elif dedup is not None:
+                    cur.execute(
+                        "DELETE FROM processed_updates WHERE update_id = %s",
+                        (dedup.update_id,),
+                    )
+                conn.commit()
             except Exception as exc:
                 conn.rollback()
                 if is_connection_error(exc):

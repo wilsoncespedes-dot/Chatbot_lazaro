@@ -5,13 +5,19 @@ import json
 from pathlib import Path
 
 import pytest
-from lazaro_contracts import HandoverRequest, HandoverResponse, MessageRequest, SearchResult
+from lazaro_contracts import (
+    HandoverRequest,
+    HandoverResponse,
+    MessageRequest,
+    SearchResult,
+    normalize_legacy_message,
+)
 from pydantic import ValidationError
 
 from orchestrator.adapters.handover import FakeHandoverClient
 from orchestrator.adapters.repository import FakeRepository, PostgresRepository
 from orchestrator.config import Settings
-from orchestrator.domain import ServiceUnavailable, process_message
+from orchestrator.domain import ServiceUnavailable, process_channel_message
 
 ACK = "Avisé a un asesor; te responderá por aquí en cuanto pueda."
 ROOT = Path(__file__).resolve().parents[3]
@@ -376,14 +382,11 @@ def test_postgres_rag_outcomes_use_parameterized_sql():
     repo.finish_auto_handover(contact_id, False)
     repo.reset_rag_streak(contact_id)
 
-    assert any(
-        "CREATE TABLE IF NOT EXISTS auto_handover_outcomes" in sql
-        for sql, _ in conn.log
-    )
-    assert any(
-        "CREATE TABLE IF NOT EXISTS auto_handover_streaks" in sql
-        for sql, _ in conn.log
-    )
+    # Fase 1: el esquema lo crean las migraciones, no la conexión.
+    from migrations import schema_sql
+
+    assert "CREATE TABLE IF NOT EXISTS auto_handover_outcomes" in schema_sql()
+    assert "CREATE TABLE IF NOT EXISTS auto_handover_streaks" in schema_sql()
     for sql, params in conn.log:
         if sql.startswith("CREATE"):
             continue
@@ -497,7 +500,9 @@ def test_unexpected_handover_exception_leaves_the_streak_in_retry(env):
     )
 
     with pytest.raises(RuntimeError):
-        process_message(request, env.settings, env.adapters)
+        process_channel_message(
+            normalize_legacy_message(request), env.settings, env.adapters
+        )
 
     contact = _contact(env)
     assert env.repo.rag_streaks[contact.id].state == "retry"

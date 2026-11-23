@@ -398,7 +398,7 @@ def test_postgres_purge_deletes_consents_in_same_transaction():
         if statement.startswith("INSERT INTO privacy_purge_runs")
     )
     assert consent_index < insert_index
-    assert conn.commits == 2 and conn.rollbacks == 0
+    assert conn.commits == 1 and conn.rollbacks == 0  # sin commit de esquema
 
 
 # --- Paridad ---------------------------------------------------------------------
