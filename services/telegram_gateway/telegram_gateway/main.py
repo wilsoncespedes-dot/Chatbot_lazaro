@@ -26,6 +26,8 @@ from lazaro_contracts import (
     ChannelUpdateRequest,
     ErrorResponse,
     HealthResponse,
+    GmailCursorResetResponse,
+    GmailSyncResponse,
     MailboxResponse,
     MessageResponse,
     NormalizedMessage,
@@ -48,6 +50,11 @@ from .adapters.channel_repository import (
     PostgresChannelRepository,
 )
 from .adapters.dedup import RedisDedupStore
+from .adapters.gmail_api import HttpGmailTransport
+from .adapters.gmail_history import (
+    FakeGmailHistoryRepository,
+    PostgresGmailHistoryRepository,
+)
 from .adapters.mailbox import FakeMailboxRepository, PostgresMailboxRepository
 from .adapters.message_buffer import RedisMessageBuffer
 from .adapters.orchestrator import HttpOrchestratorClient
@@ -73,6 +80,7 @@ from .domain import (
     send_through_channel,
 )
 from .grouping import GroupingWorker
+from .gmail_sync import GmailSyncService
 from .registry import CHANNEL_REGISTRY, ChannelContext, ChannelRegistry
 from .secret_cipher import SecretCipher
 from .webhook_service import WebhookService
@@ -156,6 +164,8 @@ def build_default_adapters(settings: Settings) -> Adapters:
             settings.simulated_mailbox_retention_seconds,
             settings.simulated_mailbox_max_entries,
         ),
+        gmail_transport=HttpGmailTransport(settings.http_timeout_seconds),
+        gmail_history=PostgresGmailHistoryRepository(settings.database_url),
     )
 
 
@@ -178,12 +188,17 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             settings.simulated_mailbox_retention_seconds,
             settings.simulated_mailbox_max_entries,
         )
+    if adapters.gmail_history is None:
+        adapters.gmail_history = FakeGmailHistoryRepository()
     channel_context = ChannelContext(settings=settings, adapters=adapters)
     cipher = SecretCipher(settings.channel_secrets_key.get_secret_value())
     channel_service = ChannelService(
         channel_repository, channel_registry, cipher, channel_context
     )
     webhook_service = WebhookService(channel_service, settings, adapters)
+    gmail_sync_service = GmailSyncService(
+        channel_service, adapters.gmail_history, adapters.orchestrator
+    )
     if not cipher.available:
         logger.warning("channel_secrets_key_unavailable reason=%s", cipher.status)
     grouping_worker: GroupingWorker | None = None
@@ -511,6 +526,22 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         channel_id: str, body: ChannelActiveRequest
     ) -> ChannelInfo:
         return channel_service.set_active(channel_id, body)
+
+    @app.post("/channels/{channel_id}/gmail/sync", response_model=GmailSyncResponse)
+    def sync_gmail(channel_id: str) -> GmailSyncResponse:
+        result = gmail_sync_service.sync(channel_id)
+        return GmailSyncResponse(
+            status="initialized" if result.initialized else "synced",
+            processed=result.processed,
+        )
+
+    @app.post(
+        "/channels/{channel_id}/gmail/reset-cursor",
+        response_model=GmailCursorResetResponse,
+    )
+    def reset_gmail_cursor(channel_id: str) -> GmailCursorResetResponse:
+        gmail_sync_service.initialize(channel_id)
+        return GmailCursorResetResponse(status="reset")
 
     @app.post("/channels/{channel_id}/secret", response_model=ChannelSecretResponse)
     def regenerate_channel_secret(channel_id: str) -> ChannelSecretResponse:

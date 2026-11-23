@@ -312,3 +312,10 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - CI del commit `45f5f3c`: **4914 passed, 1 skipped**, builds Docker de orchestrator, Telegram Gateway, RAG y handover correctos. Revisión estática aprobada. `./init.sh` local se interrumpió porque WSL dejó de iniciar comandos.
 - En la misma corrección se arreglaron los cinco fallos CI previos: neutralización del prompt, prueba de entrega por outbox, excepción de «¿Cómo estás?» sin alterar «¿Qué tal?», límite de frase en chunking y bloques Telegram dentro del contrato.
 - El código está en la rama principal `codex/preparar-subida-github`. La documentación de despliegue aún apunta a `feat/lazaro-backlog-complete`; el servidor debe seguir la principal para recibir esta versión.
+
+## 2026-11-23 — Feature #90 `canal_gmail` (done)
+- Se añadió el adaptador Gmail API al gateway multicanal. El panel permite configurar una bandeja y credenciales OAuth cifradas; el scheduler sincroniza mensajes nuevos de INBOX por Gmail History y el bot/asesores responden como texto plano en el hilo original.
+- La primera sincronización no hace backfill. Los adjuntos no se descargan ni se envían. El cursor se conserva ante fallos; los 404 de History vencido se distinguen de un mensaje borrado.
+- Guía: `docs/gmail.md`. Requiere OAuth de Google Cloud y programar `scripts/sincronizar_gmail.py` cada 60 s; no se conectó una cuenta real durante esta sesión.
+- Revisión de código aprobada en `progress/review_canal_gmail.md`; trazabilidad en `progress/impl_canal_gmail.md`.
+- `./init.sh`: **4931 passed, 1 skipped**, exit code 0. `git diff --check` limpio.

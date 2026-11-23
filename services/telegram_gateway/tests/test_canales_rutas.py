@@ -173,7 +173,9 @@ def test_channel_create_and_list_never_return_stored_credentials_or_ciphertext()
         listed = client.get("/channels", headers=_headers())
     assert listed.status_code == 200
     body = listed.json()
-    assert body["adapter_types"] == ["webhook_generico", "simulado", "tipo_prueba"]
+    assert body["adapter_types"] == [
+        "webhook_generico", "simulado", "gmail_api", "tipo_prueba"
+    ]
     channel = next(item for item in body["channels"] if item["id"] == "canal-demo")
     assert channel["has_secrets"] is True
     assert channel["managed_by_environment"] is False

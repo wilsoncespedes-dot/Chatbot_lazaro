@@ -1,6 +1,7 @@
 # Chatbot Lázaro Software
 
-Chatbot de atención y soporte por **Telegram y WhatsApp**: responde con los
+Chatbot de atención y soporte multicanal (**Telegram, WhatsApp, Gmail** y
+canales conectados mediante adaptadores/webhook): responde con los
 manuales (RAG sobre pgvector), no inventa, identifica al cliente con login web
 y pasa la conversación a un **asesor humano** en un panel propio cuando no
 puede resolver. Microservicios en **Python + FastAPI**, con Docker, en un
@@ -11,6 +12,7 @@ monorepo.
 - Reglas técnicas: [`docs/architecture.md`](docs/architecture.md) y [`docs/conventions.md`](docs/conventions.md)
 - Rutas entre servicios: [`contracts/CONTRATOS.md`](contracts/CONTRATOS.md)
 - Despliegue en Render: [`docs/despliegue.md`](docs/despliegue.md)
+- Configurar una bandeja Gmail: [`docs/gmail.md`](docs/gmail.md)
 
 ## Abrir el proyecto en tu computador
 
@@ -271,7 +273,7 @@ Descripción de diseño en [`docs/architecture.md`](docs/architecture.md).
 | Estado | Qué |
 |---|---|
 | **Funciona de verdad** (probado con adaptadores falsos y tests; en producción solo con tus claves) | Núcleo sin nombres de canal, registro de canales y secretos cifrados, webhook genérico firmado con callback, cola de entrada y outbox con reintentos, RAG con manuales, traspaso a asesor y panel, bandeja unificada, asignación de asesores, importación de clientes, servidor MCP de solo lectura, panel de administración de canales |
-| **Real pero depende de credenciales externas** | Telegram y WhatsApp Cloud API: requieren tokens y URL pública `https`; no se han verificado aquí contra las plataformas reales |
+| **Real pero depende de credenciales externas** | Telegram, WhatsApp Cloud API y Gmail API: requieren tokens/OAuth configurados; no se han verificado aquí contra las plataformas reales |
 | **Simulado / DEMOSTRACIÓN** | Canal `simulado` (buzón y `scripts/simular_canal.py`) y ofertas `demo_ofertas` del MCP: datos ficticios etiquetados |
 | **Solo propuesta** | `LazaroClientSource`, consulta de datos de negocios de Lázaro por API, login por empresa |
 

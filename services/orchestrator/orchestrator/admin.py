@@ -2035,6 +2035,7 @@ def render_channels(
         secret_html = ""
         credentials_html = ""
         callback_html = ""
+        email_html = ""
         if not info.managed_by_environment:
             url, configured = webhook_for(info.id)
             webhook_html = _copy_field(f"webhook-{info.id}", url, "URL del webhook")
@@ -2053,11 +2054,17 @@ def render_channels(
                 '<button type="submit" class="btn-secondary">Regenerar secreto</button></form>'
             )
             callback = str(info.config.get("callback_url", ""))
+            email_address = str(info.config.get("email_address", ""))
             callback_html = (
                 '<label>URL de callback (si el adaptador la usa) '
                 f'<input name="callback_url" value="{_esc(callback)}" placeholder="https://"></label>'
                 '<label><input type="checkbox" name="clear_callback_url" value="si"> '
                 "Quitar la URL de callback</label>"
+            )
+            email_html = (
+                '<label>Correo de la bandeja Gmail (solo para gmail_api) '
+                f'<input type="email" name="email_address" value="{_esc(email_address)}" '
+                'maxlength="128" autocomplete="email"></label>'
             )
             credentials_html = (
                 "<label>Credenciales (nombre=valor por línea; vacío = no cambiar) "
@@ -2083,7 +2090,7 @@ def render_channels(
             "Mostrar en la bienvenida como canal público</label>"
             '<label>Enlace de contacto (opcional, https://) '
             f'<input name="contact_url" value="{_esc(contact_url)}" maxlength="200"></label>'
-            f"{callback_html}{credentials_html}"
+            f"{callback_html}{email_html}{credentials_html}"
             '<button type="submit" class="btn-secondary">Guardar</button>'
             "</form>"
             f'<form method="post" action="/admin/canales/{path}/activo">'
@@ -2117,6 +2124,8 @@ def render_channels(
             '<input name="contact_url" maxlength="200"></label>'
             '<label>URL de callback (si el adaptador la usa) '
             '<input name="callback_url" placeholder="https://"></label>'
+            '<label>Correo de la bandeja Gmail (solo para gmail_api) '
+            '<input type="email" name="email_address" maxlength="128" autocomplete="email"></label>'
             "<label>Credenciales (nombre=valor por línea) "
             '<textarea name="credentials" autocomplete="off"></textarea></label>'
             '<button type="submit">Crear canal</button>'

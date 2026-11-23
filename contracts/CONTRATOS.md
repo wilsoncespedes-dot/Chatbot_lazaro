@@ -907,6 +907,46 @@ No lleva cuerpo. Requiere `X-Service-Token`.
 | 503 | channel_secrets_unavailable | no se puede cifrar o descifrar el secreto |
 | 503 | channel_store_unavailable | PostgreSQL no está disponible |
 
+### Gmail API (#90)
+
+El gateway expone dos operaciones internas para que un scheduler sincronice un
+canal Gmail; ambas requieren `X-Service-Token` y un canal `gmail_api` con
+credenciales OAuth configuradas. No se publica un webhook Gmail: el script
+programado consulta estas rutas.
+
+#### `POST /channels/{channel_id}/gmail/sync`
+
+Sin body. El primer llamado fija el `historyId` actual y no lee mensajes
+históricos. Las siguientes llamadas consultan Gmail History con etiqueta
+`INBOX`, entregan cada mensaje nuevo a `POST /messages` del orquestador y solo
+avanzan el cursor cuando todas las páginas fueron aceptadas. El orquestador
+deduplica por canal e id externo, así un fallo parcial se puede reintentar.
+
+Respuesta `200` (`GmailSyncResponse`):
+
+```json
+{"status": "initialized", "processed": 0}
+```
+
+o `{"status": "synced", "processed": 2}`.
+
+Errores: `401 unauthorized`, `404 not_found`, `409 gmail_history_expired`
+(cursor vencido; requiere reinicio), `422 validation_error` y
+`502 gmail_sync_failed`.
+
+#### `POST /channels/{channel_id}/gmail/reset-cursor`
+
+Sin body. Consulta el `historyId` actual del buzón y lo guarda, ignorando
+explícitamente todo correo anterior al momento del reinicio. Solo para una
+acción administrativa explícita. Respuesta: `{"status":"reset"}`.
+
+Errores: `401 unauthorized`, `404 not_found`, `422 validation_error` y
+`502 gmail_sync_failed`.
+
+El destino de los mensajes es el `threadId` Gmail. Las respuestas se envían
+como MIME `text/plain`, con `threadId`, `In-Reply-To` y `References`; no se
+envían HTML ni adjuntos. La guía de alta OAuth está en `docs/gmail.md`.
+
 ### GET /channels/{channel_id}/secret
 
 - **Expone:** `telegram_gateway`

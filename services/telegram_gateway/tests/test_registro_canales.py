@@ -152,11 +152,14 @@ def test_default_registry_contains_environment_and_generic_adapters():
         "webhook_generico",
         "whatsapp_cloud",
         "simulado",
+        "gmail_api",
     )
     assert CHANNEL_REGISTRY.get("telegram") is TelegramChannel
     assert CHANNEL_REGISTRY.get("whatsapp_cloud") is WhatsAppCloudChannel
     assert CHANNEL_REGISTRY.get("simulado") is SimuladoChannel
-    assert CHANNEL_REGISTRY.creatable_types() == ("webhook_generico", "simulado")
+    assert CHANNEL_REGISTRY.creatable_types() == (
+        "webhook_generico", "simulado", "gmail_api"
+    )
 
 
 def test_registry_copy_is_isolated_from_default():
