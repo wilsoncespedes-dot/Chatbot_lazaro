@@ -365,3 +365,24 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Verificación:** tests de canales, rutas, navegación y dashboard en verde; un
   test nuevo fija el diseño en fichas. Revisado en el navegador en escritorio y
   móvil, tema claro y oscuro.
+
+## 2026-11-23 — Gmail: el «Acepto» no continuaba la conversación
+
+- **Síntoma:** en el hilo real de `soporte-gmail` el cliente respondió «acepto»
+  y el bot volvió a enviar el aviso. El hilo y las cabeceras de respuesta eran
+  correctos; el fallo estaba en la entrada.
+- **Causa 1 (gateway):** el cuerpo `text/plain` traía el aviso citado (20 líneas
+  con `>` y «El … escribió:»), así que no era igual a la frase de aceptación.
+  Nuevo `adapters/email_reply.py` (`latest_reply_text`): el canal Gmail entrega
+  solo el texto nuevo, sin cita ni firma; si todo es cita, conserva el cuerpo.
+- **Causa 2 (orquestador):** el primer mensaje lo atendía el worker
+  `procesar_entrantes`, que guarda el desafío del aviso en su propia memoria; el
+  «Acepto» se procesa en la petición y no lo encontraba, así que había que
+  aceptar dos veces (afectaba a todos los canales en modo `texto` o `boton`).
+  `POST /messages` atiende ahora en la petición todo mensaje previo al
+  consentimiento (solo respuestas fijas, sin LLM); tras aceptar, todo sigue por
+  la cola. Un reinicio del orquestador entre aviso y «Acepto» aún pide el aviso
+  una vez más (el desafío es de memoria, como antes).
+- **Tests:** `test_email_reply.py` (Gmail ES/EN, Outlook, `>`, firmas, cuerpo
+  solo cita) y `test_consentimiento_entre_procesos.py` (API y worker con memoria
+  separada; falla con el código anterior y pasa con el nuevo).

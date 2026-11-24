@@ -17,6 +17,7 @@ from ...adapters.gmail_api import (
     _headers,
     plain_text_body,
 )
+from ...adapters.email_reply import latest_reply_text
 from ...adapters.telegram import render_blocks
 from ...domain import ChannelNotConfigured, ChannelRecord, ChannelSecrets, InvalidChannelConfig
 from ...registry import CHANNEL_REGISTRY, ChannelContext
@@ -118,7 +119,10 @@ class GmailChannel:
             sender = parseaddr(headers.get("from", ""))[1]
             if not sender or sender.casefold() == self._email_address.casefold():
                 return None
-            text = plain_text_body(body)
+            body_text = plain_text_body(body)
+            # Solo lo que escribió el cliente: sin la cita del correo anterior
+            # ni la firma (una respuesta «Acepto» llega con el aviso citado).
+            text = latest_reply_text(body_text) if body_text else None
             metadata: dict[str, Any] = {}
             subject = headers.get("subject", "")
             if subject:

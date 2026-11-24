@@ -412,12 +412,20 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
         # processed_messages; tras consentir, la clave compuesta es la barrera
         # persistente. En ambos casos el índice único del inbox impide que una
         # copia repetida (Redis caído en el gateway) genere otra respuesta.
-        consent_ready = consent_configured(settings, adapters) and _has_current_consent(
+        configured = consent_configured(settings, adapters)
+        consent_ready = configured and _has_current_consent(
             message.channel, message.external_user_id, settings, adapters
         )
         # R46 R16, #65 R24: la frase de un canal en modo `texto` se procesa igual.
-        pending = consent_button_pending(message) or (
-            not consent_ready and _text_pending(message)
+        # Antes del consentimiento todo mensaje se atiende aquí, no en el worker:
+        # el aviso guarda su desafío en la memoria de este proceso y la decisión
+        # («Acepto» o el botón) se valida en este mismo proceso. Si el aviso lo
+        # enviara el worker, el desafío no estaría aquí y el cliente tendría que
+        # aceptar dos veces. Solo hay respuestas fijas, sin LLM.
+        pending = (
+            consent_button_pending(message)
+            or (not consent_ready and _text_pending(message))
+            or (configured and not consent_ready)
         )
         dedup = (
             DedupKey(

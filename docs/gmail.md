@@ -107,6 +107,11 @@ reinicio ignora el backlog anterior al momento en que se ejecuta.
 - En esta versión se procesan cuerpos `text/plain`. Correos HTML-only y
   mensajes que solo contienen adjuntos se tratan como no soportados; no se
   descarga ni envía ningún adjunto.
+- De cada respuesta solo se toma lo que escribió el cliente: se descartan el
+  correo anterior citado (`>`, «El … escribió:», «On … wrote:», «-----Mensaje
+  original-----», cabeceras de Outlook) y la firma («-- », «Enviado desde mi …»).
+  Así un «Acepto» respondido sobre el aviso se reconoce como aceptación. Si el
+  correo es solo cita, se conserva completo.
 - La primera sincronización no importa históricos. Para vincular o recuperar
   mensajes anteriores se debe responder el correo de nuevo; no hay backfill.
 - El consentimiento, login, retención, memoria y supresión se mantienen según
