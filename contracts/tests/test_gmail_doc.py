@@ -11,7 +11,7 @@ def test_gmail_docs_cover_routes_scopes_and_privacy():
     assert "gmail.readonly" in docs
     assert "gmail.send" in docs
     assert "refresh_token" in docs
-    assert "cada 60 segundos" in docs
+    assert "cada 5 segundos" in docs
     assert "/channels/{channel_id}/gmail/sync" in contract
     assert "gmail_history_expired" in contract
     assert "text/plain" in docs

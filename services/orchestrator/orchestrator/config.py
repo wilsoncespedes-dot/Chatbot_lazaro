@@ -436,7 +436,8 @@ class Settings(BaseSettings):
     outbox_backoff_base_seconds: float = 2
     outbox_backoff_max_seconds: float = 300
     outbox_backoff_jitter: float = 0.2
-    worker_poll_seconds: float = 1
+    # Espera del worker sin filas: un mensaje nuevo aguarda como mucho esto.
+    worker_poll_seconds: float = 0.25
     worker_lease_seconds: float = 120
 
     @field_validator("business_hours_start", "business_hours_end")

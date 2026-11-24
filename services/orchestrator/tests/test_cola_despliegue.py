@@ -62,7 +62,7 @@ def test_settings_defaults():
     assert settings.outbox_backoff_base_seconds == 2
     assert settings.outbox_backoff_max_seconds == 300
     assert settings.outbox_backoff_jitter == 0.2
-    assert settings.worker_poll_seconds == 1
+    assert settings.worker_poll_seconds == 0.25
     assert settings.worker_lease_seconds == 120
 
 

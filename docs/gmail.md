@@ -65,7 +65,7 @@ anteriores. Con Docker Compose no hay que programar nada: el servicio
 python sincronizar_gmail.py --intervalo
 ```
 
-cada 60 segundos (configurable con `GMAIL_SYNC_INTERVAL_SECONDS`) y se reinicia
+cada 5 segundos por defecto (configurable con `GMAIL_SYNC_INTERVAL_SECONDS`) y se reinicia
 solo si se cae. Sin `--intervalo` el script hace una única pasada y devuelve 1 si algún
 canal falla, por si se prefiere un scheduler externo
 (`python scripts/sincronizar_gmail.py`).
@@ -77,8 +77,17 @@ registra y se reintenta en la siguiente. Mensajes de `INBOX` se deduplican por e
 ID que asigna Gmail; los correos enviados por la propia bandeja se ignoran.
 
 Para ver su actividad: `docker compose logs -f gmail_sync_worker` (registra
-`gmail_channel_synced channel_id=... status=... processed=N`, nunca texto ni
-credenciales).
+`gmail_channel_synced channel_id=... status=... processed=N` en las pasadas que
+traen correo y en la inicial; las pasadas vacías van a nivel DEBUG. Nunca texto
+ni credenciales). Los logs del gateway y del worker rotan a 3 archivos de 10 MB.
+
+La espera de sincronización es de 5 segundos por defecto (antes: 60); el valor
+de `GMAIL_SYNC_INTERVAL_SECONDS` en el entorno la reemplaza. Las colas de entrada
+y salida del orquestador consultan cada 0,25 s (`WORKER_POLL_SECONDS`). El
+gateway reutiliza en memoria el token OAuth hasta un minuto antes de vencer, y
+al preparar una respuesta pide solo las cabeceras del hilo, no vuelve a
+descargar sus cuerpos. La latencia real también depende de Gmail, del
+procesamiento del bot y del modelo de IA.
 
 ### Despliegue en AWS (EC2)
 
@@ -91,7 +100,7 @@ anterior como servicio o tarea programada.)
 Checklist de la conexión:
 
 - [x] Producción es EC2 con Docker Compose.
-- [x] Sincronización recurrente cada 60 s: servicio `gmail_sync_worker`.
+- [x] Sincronización recurrente cada 5 s por defecto: servicio `gmail_sync_worker`.
 - [x] Sincronización inicial ejecutada (`status=initialized`): fijó el cursor
   sin importar mensajes anteriores.
 - [ ] Enviar un correo nuevo de texto plano desde otra cuenta y comprobar que

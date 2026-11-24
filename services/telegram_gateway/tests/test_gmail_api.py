@@ -11,8 +11,10 @@ from lazaro_contracts import TextBlock
 
 from telegram_gateway.adapters.channels.gmail import GmailChannel
 from telegram_gateway.adapters.gmail_api import (
+    TOKEN_RENEW_MARGIN_SECONDS,
     GmailApiClient,
     GmailApiError,
+    GmailTokenCache,
     added_message_ids,
     plain_text_body,
 )
@@ -83,6 +85,13 @@ def test_send_reply_preserves_thread_and_reply_headers():
         transport,
     )
     client.send_reply("thread-1", "soporte@example.com", "respuesta")
+    _, thread_url, thread_kwargs = transport.calls[1]
+    assert thread_url.endswith("/threads/thread-1")
+    # Solo cabeceras: responder no descarga cuerpos ni adjuntos del hilo.
+    assert thread_kwargs["params"] == {
+        "format": "metadata",
+        "metadataHeaders": ["From", "Message-ID", "References", "Subject"],
+    }
     method, url, kwargs = transport.calls[-1]
     assert method == "POST" and url.endswith("/messages/send")
     assert kwargs["json_body"]["threadId"] == "thread-1"
@@ -94,6 +103,87 @@ def test_send_reply_preserves_thread_and_reply_headers():
     assert message["In-Reply-To"] == "<source@example.com>"
     assert message["References"] == "<older@example.com> <source@example.com>"
     assert message.get_content().strip() == "respuesta"
+
+
+CREDENTIALS = {"client_id": "id", "client_secret": "secret", "refresh_token": "refresh"}
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TokenCountingTransport:
+    """Responde perfiles; cuenta cuántas veces se pidió un token a Google."""
+
+    def __init__(self, unauthorized: set[str] | None = None) -> None:
+        self.token_requests = 0
+        self.unauthorized = unauthorized or set()
+        self.bearers: list[str] = []
+
+    def request(self, method, url, **kwargs):
+        if url.endswith("oauth2.googleapis.com/token"):
+            self.token_requests += 1
+            return {"access_token": f"access-{self.token_requests}", "expires_in": 3599}
+        bearer = kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        self.bearers.append(bearer)
+        if bearer in self.unauthorized:
+            raise GmailApiError(401)
+        return {"emailAddress": "soporte@example.com"}
+
+
+def test_access_token_is_reused_by_later_clients():
+    """Cada sincronización/envío crea un cliente; el token no se pide de nuevo."""
+    cache = GmailTokenCache(Clock())
+    transport = TokenCountingTransport()
+    for _ in range(3):
+        GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    assert transport.token_requests == 1
+    assert transport.bearers == ["access-1"] * 3
+
+
+def test_access_token_is_renewed_before_it_expires():
+    clock = Clock()
+    cache = GmailTokenCache(clock)
+    transport = TokenCountingTransport()
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    clock.now += 3599 - TOKEN_RENEW_MARGIN_SECONDS - 1
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    assert transport.token_requests == 1
+    clock.now += 2
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    assert transport.token_requests == 2
+
+
+def test_revoked_cached_token_is_replaced_once():
+    """Si Google rechaza el token cacheado (401) se pide otro y se reintenta."""
+    cache = GmailTokenCache(Clock())
+    transport = TokenCountingTransport()
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    transport.unauthorized.add("access-1")
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    assert transport.bearers == ["access-1", "access-1", "access-2"]
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    assert transport.bearers[-1] == "access-2"
+    assert transport.token_requests == 2
+
+
+def test_other_credentials_do_not_share_the_token():
+    cache = GmailTokenCache(Clock())
+    transport = TokenCountingTransport()
+    GmailApiClient(CREDENTIALS, transport, token_cache=cache).profile()
+    other = {**CREDENTIALS, "refresh_token": "otro-refresh"}
+    GmailApiClient(other, transport, token_cache=cache).profile()
+    assert transport.token_requests == 2
+
+
+def test_token_cache_never_stores_the_refresh_token():
+    cache = GmailTokenCache(Clock())
+    GmailApiClient(CREDENTIALS, TokenCountingTransport(), token_cache=cache).profile()
+    assert all("refresh" not in key for key in cache._tokens)
 
 
 def test_gmail_send_error_logs_no_reply_content_or_oauth_values(caplog):

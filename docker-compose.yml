@@ -45,6 +45,8 @@ services:
       WHATSAPP_TEMPLATE_LANGUAGE: ${WHATSAPP_TEMPLATE_LANGUAGE:-es}
       WHATSAPP_INTERACTIVE_BODY_TEXT: ${WHATSAPP_INTERACTIVE_BODY_TEXT:-Elige una opción:}
       WHATSAPP_WINDOW_HOURS: ${WHATSAPP_WINDOW_HOURS:-24}
+    # El sincronizador Gmail lo llama cada pocos segundos: logs con tope de tamaño.
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
     ports: ["8001:8000"]
     depends_on:
       postgres:
@@ -151,7 +153,7 @@ services:
     command: ["python", "avisar_vencimientos.py", "--intervalo"]
     depends_on: [orchestrator]
     restart: unless-stopped
-  # Lee los canales Gmail activos cada GMAIL_SYNC_INTERVAL_SECONDS (60 s) vía
+  # Lee los canales Gmail activos cada GMAIL_SYNC_INTERVAL_SECONDS (5 s) vía
   # POST /channels/{id}/gmail/sync del gateway; sin canales Gmail no hace nada.
   gmail_sync_worker:
     build: {context: ., dockerfile: services/telegram_gateway/Dockerfile}
@@ -161,6 +163,7 @@ services:
       telegram_gateway:
         condition: service_healthy
     restart: unless-stopped
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
   procesar_entrantes:
     build: {context: ., dockerfile: services/orchestrator/Dockerfile}
     env_file: [.env]

@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from telegram_gateway.adapters.dedup import FakeDedupStore
+from telegram_gateway.adapters.gmail_api import SHARED_TOKEN_CACHE
 from telegram_gateway.adapters.orchestrator import FakeOrchestratorClient
 from telegram_gateway.adapters.telegram import FakeTelegramClient
 from telegram_gateway.config import Settings
@@ -27,6 +28,14 @@ class Env:
     dedup: FakeDedupStore
     orchestrator: FakeOrchestratorClient
     settings: Settings
+
+
+@pytest.fixture(autouse=True)
+def _gmail_tokens_per_test():
+    """Ningún token de acceso Gmail cacheado pasa de un test a otro."""
+    SHARED_TOKEN_CACHE.clear()
+    yield
+    SHARED_TOKEN_CACHE.clear()
 
 
 @pytest.fixture()
