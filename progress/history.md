@@ -386,3 +386,9 @@ Todas pasaron por spec, implementación, `./init.sh` verde y revisión de códig
 - **Tests:** `test_email_reply.py` (Gmail ES/EN, Outlook, `>`, firmas, cuerpo
   solo cita) y `test_consentimiento_entre_procesos.py` (API y worker con memoria
   separada; falla con el código anterior y pasa con el nuevo).
+
+## 2026-11-23 — Respuestas rápidas del panel admin
+
+- La tabla de respuestas rápidas se reemplazó por tarjetas adaptables con disparadores y estados visibles, acciones claras y edición plegable.
+- El formulario de alta y edición se organizó en una cuadrícula adaptable; se conservaron rutas, CSRF, prioridad, activación, opciones y operaciones de imagen.
+- ./init.sh: 5098 passed, 15 skipped, exit 0. Revisión: progress/review_respuestas_rapidas.md (APPROVED).

@@ -432,6 +432,49 @@ form.channel-actions, .channel-actions form { display: flex; flex-direction: row
 .channel-edit summary::before { content: "▸"; font-size: 0.875rem; }
 .channel-edit[open] summary::before { content: "▾"; }
 .channel-edit form { margin: 1rem 0 0; }
+.quick-replies-intro { color: var(--muted); max-width: 48rem; }
+.quick-reply-create { border-color: var(--border); }
+form.quick-reply-form { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.875rem; align-items: start; margin: 0; }
+.quick-reply-form-head, .quick-reply-form > .qr-span-12,
+.quick-reply-form > button { grid-column: 1 / -1; }
+.quick-reply-form-head h2 { font-size: 1rem; margin: 0 0 var(--space-1); }
+.quick-reply-form-head p { color: var(--muted); margin: 0; font-size: 0.875rem; }
+.quick-reply-form > label { grid-column: span 6; min-width: 0; }
+.quick-reply-form > label.qr-span-3 { grid-column: span 3; }
+.quick-reply-form input, .quick-reply-form select, .quick-reply-form textarea {
+  width: 100%; min-width: 0; }
+.quick-reply-form textarea { resize: vertical; }
+.quick-reply-form > button { justify-self: start; width: auto; }
+.quick-reply-list { display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 25rem), 1fr));
+  gap: var(--space-3); align-items: start; }
+.quick-reply-card { display: grid; gap: 0.875rem; min-width: 0; margin: 0; }
+.quick-reply-card-head { display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 0.75rem; }
+.quick-reply-name { margin: 0; color: var(--text); font-size: 1.0625rem; }
+.quick-reply-trigger-label { color: var(--muted); font-size: 0.75rem;
+  font-weight: 600; margin: 0 0 var(--space-1); text-transform: uppercase;
+  letter-spacing: 0.04em; }
+.quick-reply-triggers { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+.quick-reply-trigger { display: inline-flex; max-width: 100%; padding: 0.125rem 0.5rem;
+  background: var(--soft); border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.quick-reply-meta { display: flex; flex-wrap: wrap; align-items: center;
+  gap: 0.5rem; color: var(--muted); font-size: 0.8125rem; }
+.quick-reply-actions { display: grid; grid-template-columns: auto minmax(0, 1fr);
+  align-items: center; gap: 0.875rem; padding-top: 0.875rem;
+  border-top: 1px solid var(--line); }
+.quick-reply-toggle { margin: 0; }
+.quick-reply-toggle button { min-height: 2.25rem; }
+.quick-reply-edit { min-width: 0; }
+.quick-reply-edit summary { color: var(--primary); cursor: pointer; font-weight: 600;
+  border-radius: 0.375rem; }
+.quick-reply-edit[open] summary { margin-bottom: 0.875rem; }
+.quick-reply-edit .quick-reply-form { padding: 1rem; background: var(--surface-2); }
+.quick-reply-image-info { grid-column: 1 / -1; margin: 0; }
+.quick-reply-image-info a { font-weight: 600; }
+.quick-reply-hint { margin: 0 0 var(--space-3); }
 form.channel-form { display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr));
   gap: 0.875rem 1rem; align-items: start; margin: var(--space-3) 0 0; }
@@ -478,6 +521,10 @@ select:focus-visible, textarea:focus-visible, .chat-log:focus-visible {
   .sidebar-foot button { width: auto; }
   .copy-field { grid-template-columns: minmax(0, 1fr); }
   .channel-actions .toggle-form { margin-left: 0; }
+  .quick-reply-form > label, .quick-reply-form > label.qr-span-3 {
+    grid-column: 1 / -1; }
+  .quick-reply-actions { grid-template-columns: minmax(0, 1fr); }
+  .quick-reply-toggle button { width: 100%; }
 }
 @media (min-width: 48.01rem) {
   form { flex-direction: row; flex-wrap: wrap; align-items: end; }
@@ -1355,31 +1402,47 @@ def _quick_reply_form(
     submit_label: str,
     image_id: str | None = None,
     allow_remove_image: bool = False,
+    heading: str = "",
+    intro: str = "",
+    variant: str = "",
 ) -> str:
     active_yes = ' selected' if values.get("active") == "1" else ""
     active_no = ' selected' if values.get("active") != "1" else ""
     remove = ""
     if allow_remove_image:
         remove = (
-            '<label class="check"><input type="checkbox" name="remove_image" value="1"> '
+            '<label class="check qr-span-12">'
+            '<input type="checkbox" name="remove_image" value="1"> '
             "Quitar la imagen actual</label>"
         )
     current_image = ""
     if image_id:
         current_image = (
-            f'<p>Imagen actual: <a href="/media/respuestas/{_esc(image_id)}">'
-            "ver</a></p>"
+            '<p class="quick-reply-image-info">Imagen actual: '
+            f'<a href="/media/respuestas/{_esc(image_id)}">Ver imagen</a></p>'
         )
+    form_class = "card quick-reply-form"
+    if variant:
+        form_class += f" {variant}"
     return (
-        f'<form method="post" action="{_esc(action)}" class="card" '
+        f'<form method="post" action="{_esc(action)}" '
+        f'class="{form_class}" '
         'enctype="multipart/form-data">'
         f"{csrf_field(csrf)}"
+        '<div class="quick-reply-form-head">'
+        f'<h2>{_esc(heading)}</h2><p>{_esc(intro)}</p></div>'
         f'<label>Nombre <input name="name" value="{_esc(values.get("name", ""))}" '
         'maxlength="200" required></label>'
-        f'<label>Disparadores (uno por línea o separados por coma) '
+        f'<label class="qr-span-3">Prioridad (0-1000) '
+        f'<input name="priority" type="number" min="0" max="1000" '
+        f'value="{_esc(values.get("priority", "0"))}"></label>'
+        '<label class="qr-span-3">Activa <select name="active">'
+        f'<option value="1"{active_yes}>Sí</option>'
+        f'<option value="0"{active_no}>No</option></select></label>'
+        f'<label class="qr-span-12">Disparadores (uno por línea o separados por coma) '
         f'<textarea name="triggers" rows="3" required>'
         f'{_esc(values.get("triggers", ""))}</textarea></label>'
-        f'<label>Texto <textarea name="text" maxlength="4096">'
+        f'<label class="qr-span-12">Texto <textarea name="text" maxlength="4096">'
         f'{_esc(values.get("text", ""))}</textarea></label>'
         f'<label>Opciones (una por línea, máx. 10 de 20 caracteres) '
         f'<textarea name="options" rows="2">'
@@ -1392,15 +1455,10 @@ def _quick_reply_form(
         f'value="{_esc(values.get("image_alt", ""))}" maxlength="1024"></label>'
         f'<label>URL de la imagen (https) <input name="image_url" type="url" '
         f'value="{_esc(values.get("image_url", ""))}" maxlength="2048"></label>'
-        '<label>Archivo de imagen (PNG, JPEG o WebP) '
+        '<label class="qr-span-12">Archivo de imagen (PNG, JPEG o WebP) '
         '<input name="image_file" type="file" '
         'accept="image/png,image/jpeg,image/webp"></label>'
         f"{current_image}{remove}"
-        f'<label>Prioridad (0-1000) <input name="priority" type="number" '
-        f'min="0" max="1000" value="{_esc(values.get("priority", "0"))}"></label>'
-        '<label>Activa <select name="active">'
-        f'<option value="1"{active_yes}>Sí</option>'
-        f'<option value="0"{active_no}>No</option></select></label>'
         f'<button type="submit">{_esc(submit_label)}</button>'
         "</form>"
     )
@@ -1410,31 +1468,41 @@ def render_quick_replies(
     replies, csrf: str, error: str | None = None, max_image_bytes: int = 0
 ) -> str:
     """R1, R2, R3, R4: administración de respuestas rápidas del bot sin JS."""
+    replies = list(replies)
     error_html = ""
     if error:
         error_html = f'<p class="error" role="alert">{_esc(error)}</p>\n'
-    rows = []
+    cards = []
     for reply in replies:
         path = quote(reply.id, safe="")
-        state = "Sí" if reply.active else "No"
         next_active = "0" if reply.active else "1"
         action = "Desactivar" if reply.active else "Activar"
         values = _quick_reply_values(reply)
-        rows.append(
-            "<tr>"
-            f"<td>{_esc(reply.name)}</td>"
-            f"<td>{_esc(', '.join(reply.triggers))}</td>"
-            f"<td>{_esc(reply.priority)}</td>"
-            f"<td>{state}</td>"
-            "<td>"
-            f'<form method="post" action="/admin/respuestas-rapidas/{path}/activa">'
+        status = "Activa" if reply.active else "Inactiva"
+        status_class = "pill-yes" if reply.active else "pill-no"
+        triggers = "".join(
+            f'<span class="quick-reply-trigger">{_esc(trigger)}</span>'
+            for trigger in reply.triggers
+        )
+        cards.append(
+            '<article class="card quick-reply-card">'
+            '<header class="quick-reply-card-head"><div>'
+            f'<h3 class="quick-reply-name">{_esc(reply.name)}</h3>'
+            '<p class="quick-reply-trigger-label">Se activa con</p>'
+            f'<div class="quick-reply-triggers">{triggers}</div></div>'
+            f'<span class="pill {status_class}">{status}</span></header>'
+            '<div class="quick-reply-meta">'
+            f'<span class="badge">Prioridad {_esc(reply.priority)}</span>'
+            f'<span>{len(reply.triggers)} disparador(es)</span></div>'
+            '<div class="quick-reply-actions">'
+            f'<form method="post" action="/admin/respuestas-rapidas/{path}/activa" '
+            'class="quick-reply-toggle">'
             f"{csrf_field(csrf)}"
             f'<input type="hidden" name="active" value="{next_active}">'
-            f'<button type="submit" class="{_toggle_class(reply.active)}">'
-            f"{action}</button>"
-            "</form>"
-            "</td>"
-            "<td>"
+            f'<button type="submit" class="{_toggle_class(reply.active)}" '
+            f'aria-label="{_esc(action)} {_esc(reply.name)}">'
+            f"{action}</button></form>"
+            '<details class="quick-reply-edit"><summary>Editar contenido</summary>'
             + _quick_reply_form(
                 f"/admin/respuestas-rapidas/{path}",
                 csrf,
@@ -1442,29 +1510,40 @@ def render_quick_replies(
                 "Guardar",
                 image_id=reply.image_id,
                 allow_remove_image=reply.image_id is not None,
+                heading="Editar respuesta rápida",
+                intro="Actualiza disparadores y contenido de la respuesta.",
             )
-            + "</td>"
-            "</tr>"
+            + "</details></div></article>"
         )
     create = _quick_reply_form(
         "/admin/respuestas-rapidas",
         csrf,
         {"priority": "0", "active": "1"},
         "Crear respuesta rápida",
+        heading="Crear una respuesta rápida",
+        intro="Define cuándo se activa y qué contenido enviará el bot.",
+        variant="quick-reply-create",
     )
     hint = ""
     if max_image_bytes:
-        hint = f"<p>La imagen puede pesar hasta {max_image_bytes} bytes.</p>"
-    body = (
-        f"{error_html}{hint}{create}\n"
-        + _table_wrap(
-            "<table><thead><tr><th>Nombre</th><th>Disparadores</th>"
-            "<th>Prioridad</th><th>Activa</th><th>Estado</th><th>Editar</th>"
-            f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        hint = (
+            '<p class="hint quick-reply-hint">'
+            f"La imagen puede pesar hasta {_esc(max_image_bytes)} bytes.</p>"
         )
+    listing = (
+        '<p class="empty">No hay respuestas rápidas todavía. '
+        "Crea una arriba para comenzar.</p>"
+        if not cards
+        else f'<div class="quick-reply-list">{"".join(cards)}</div>'
+    )
+    body = (
+        f'{error_html}<p class="quick-replies-intro">'
+        "Organiza las respuestas automáticas, sus disparadores y su prioridad."
+        f"</p>{hint}{create}"
+        '<div class="section-head"><h2>Respuestas configuradas '
+        f'<span class="count">{len(replies)}</span></h2></div>{listing}'
     )
     return render_page("Respuestas rápidas", body, csrf, "/admin/respuestas-rapidas")
-
 
 TEXT_FIELD_LABELS = {
     "notice_text": "Texto legal de tratamiento de datos",
