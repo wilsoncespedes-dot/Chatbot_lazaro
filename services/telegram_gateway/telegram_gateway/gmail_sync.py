@@ -155,7 +155,9 @@ class GmailSyncService:
                 ) from None
 
             self._history.set_cursor(channel_id, final_history_id)
-            logger.info(
+            # El worker sincroniza cada pocos segundos: solo se registran pasadas con correo.
+            logger.log(
+                logging.INFO if processed else logging.DEBUG,
                 "gmail_sync_completed channel_id=%s processed=%s",
                 channel_id,
                 processed,

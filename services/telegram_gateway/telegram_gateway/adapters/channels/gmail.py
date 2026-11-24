@@ -11,6 +11,7 @@ from lazaro_contracts import ChannelCapabilities, DeliveryStatus, NormalizedMess
 from pydantic import ValidationError
 
 from ...adapters.gmail_api import (
+    SHARED_TOKEN_CACHE,
     GmailApiClient,
     GmailApiError,
     GmailTransport,
@@ -92,10 +93,12 @@ class GmailChannel:
         email_address = record.config.get("email_address")
         if not isinstance(email_address, str):
             raise ChannelNotConfigured("Falta config.email_address del canal Gmail.")
-        try:
-            client = GmailApiClient(secrets.credentials, context.adapters.gmail_transport)
-        except ChannelNotConfigured:
-            raise
+        # El token de acceso se reutiliza entre sincronizaciones y envíos.
+        client = GmailApiClient(
+            secrets.credentials,
+            context.adapters.gmail_transport,
+            token_cache=SHARED_TOKEN_CACHE,
+        )
         return cls(record.id, email_address, client, context.adapters.clock)
 
     @property

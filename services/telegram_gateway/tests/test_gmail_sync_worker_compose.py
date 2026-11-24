@@ -1,4 +1,4 @@
-"""Compose e imagen del worker que sincroniza Gmail cada 60 s (docs/gmail.md)."""
+"""Compose e imagen del worker que sincroniza Gmail cada 5 s (docs/gmail.md)."""
 from __future__ import annotations
 
 import re

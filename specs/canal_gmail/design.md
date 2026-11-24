@@ -135,7 +135,7 @@ la frecuencia operativa elegida.
   `client_id`, `client_secret` y un `refresh_token` con los dos scopes
   indicados. La conexión real se habilita solo después de guardar esas
   credenciales cifradas y activar el canal.
-- Polling cada 60 segundos es el valor recomendado en la documentación; la
+- Polling cada 5 segundos es el valor predeterminado para reducir la latencia; la
   frecuencia será responsabilidad del scheduler, sin configuración nueva en
   el gateway.
 - Correo solo texto en esta iteración. Mensajes HTML-only o solo con adjuntos

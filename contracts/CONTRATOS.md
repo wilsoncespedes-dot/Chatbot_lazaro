@@ -2059,7 +2059,7 @@ máximo.
 | `OUTBOX_BACKOFF_BASE_SECONDS` | 2 | > 0 |
 | `OUTBOX_BACKOFF_MAX_SECONDS` | 300 | > 0 (tope de ambos backoffs) |
 | `OUTBOX_BACKOFF_JITTER` | 0.2 | [0, 1] |
-| `WORKER_POLL_SECONDS` | 1 | > 0 |
+| `WORKER_POLL_SECONDS` | 0.25 | > 0 |
 | `WORKER_LEASE_SECONDS` | 120 | > 0 (debe superar el timeout del gateway de 10 s) |
 
 Una variable fuera de rango impide arrancar el servicio y el error nombra la

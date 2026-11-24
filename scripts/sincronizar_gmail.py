@@ -3,7 +3,7 @@
 Uso: python scripts/sincronizar_gmail.py [--intervalo [segundos]]
 Requiere `TELEGRAM_GATEWAY_URL` y `SERVICE_TOKEN`. Sin `--intervalo` hace una
 pasada (para un scheduler externo); con `--intervalo` repite cada
-`GMAIL_SYNC_INTERVAL_SECONDS` (60 por defecto), como el servicio
+`GMAIL_SYNC_INTERVAL_SECONDS` (5 por defecto), como el servicio
 `gmail_sync_worker` de docker-compose.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import httpx
 
-DEFAULT_INTERVAL_SECONDS = 60
+DEFAULT_INTERVAL_SECONDS = 5
 INTERVAL_ENV = "GMAIL_SYNC_INTERVAL_SECONDS"
 
 logger = logging.getLogger("sincronizar_gmail")
@@ -52,11 +52,15 @@ def run(client: Any, base_url: str, service_token: str, timeout: float = 30) -> 
                 )
                 result.raise_for_status()
                 body = result.json()
-                logger.info(
+                status = body.get("status") if isinstance(body, dict) else "unknown"
+                processed = body.get("processed", 0) if isinstance(body, dict) else 0
+                # Con pasadas cada pocos segundos, las vacías no se registran.
+                logger.log(
+                    logging.DEBUG if status == "synced" and not processed else logging.INFO,
                     "gmail_channel_synced channel_id=%s status=%s processed=%s",
                     channel_id,
-                    body.get("status") if isinstance(body, dict) else "unknown",
-                    body.get("processed", 0) if isinstance(body, dict) else 0,
+                    status,
+                    processed,
                 )
             except (httpx.HTTPError, ValueError) as exc:
                 logger.error(
@@ -99,7 +103,7 @@ def main(
         nargs="?",
         const=_FROM_ENV,
         default=None,
-        help=f"segundos entre pasadas; sin valor usa {INTERVAL_ENV} (60)",
+        help=f"segundos entre pasadas; sin valor usa {INTERVAL_ENV} (5)",
     )
     args = parser.parse_args(argv)
     interval = None if args.intervalo is None else _resolve_interval(args.intervalo, parser)

@@ -203,7 +203,7 @@ dedup)` con `dedup = None` si `not consent_ready` (R7), o la marca de mensaje
 | `OUTBOX_BACKOFF_BASE_SECONDS` | 2 | > 0 |
 | `OUTBOX_BACKOFF_MAX_SECONDS` | 300 | > 0 (tope de ambos backoffs) |
 | `OUTBOX_BACKOFF_JITTER` | 0.2 | [0, 1] |
-| `WORKER_POLL_SECONDS` | 1 | > 0 |
+| `WORKER_POLL_SECONDS` | 0.25 (antes 1; bajado para responder antes) | > 0 |
 | `WORKER_LEASE_SECONDS` | 120 | > 0 (debe superar el timeout del gateway de 10 s) |
 
 ## 6. Panel `/admin/envios`

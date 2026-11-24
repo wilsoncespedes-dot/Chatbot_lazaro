@@ -66,13 +66,13 @@ def test_main_without_interval_runs_once_and_reports_failure(gateway_env):
     assert slept == []
 
 
-def test_main_interval_loops_every_60_seconds_by_default(gateway_env):
-    """--intervalo sin valor repite cada 60 s y sigue aunque una pasada falle."""
+def test_main_interval_loops_every_5_seconds_by_default(gateway_env):
+    """--intervalo sin valor repite cada 5 s y sigue aunque una pasada falle."""
     client = FakeClient(fail_id="gmail-on")
     slept = []
     assert main(["--intervalo"], client=client, sleep=slept.append, max_rounds=3) == 0
     assert len(client.posts) == 3
-    assert slept == [60.0, 60.0]
+    assert slept == [5.0, 5.0]
 
 
 def test_main_interval_reads_env_and_explicit_value(gateway_env, monkeypatch):
@@ -103,7 +103,7 @@ def test_main_loop_survives_unexpected_errors(gateway_env):
 
     slept = []
     assert main(["--intervalo"], client=Exploding(), sleep=slept.append, max_rounds=2) == 0
-    assert slept == [60.0]
+    assert slept == [5.0]
 
 
 def test_main_requires_gateway_env(monkeypatch):

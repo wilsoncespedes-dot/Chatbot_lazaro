@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+import hashlib
+import threading
+import time
+from collections.abc import Callable, Mapping
 from email.message import EmailMessage
 from email.utils import parseaddr
 from typing import Any, Protocol
@@ -14,6 +17,64 @@ from ..domain import ChannelNotConfigured
 
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+# Google entrega tokens de 3600 s; se renuevan un minuto antes de vencer.
+DEFAULT_TOKEN_SECONDS = 3600.0
+TOKEN_RENEW_MARGIN_SECONDS = 60.0
+# Al responder solo hacen falta estas cabeceras del hilo, no los cuerpos.
+REPLY_HEADERS = ("From", "Message-ID", "References", "Subject")
+
+
+class GmailTokenCache:
+    """Tokens de acceso vigentes por credencial, solo en memoria del proceso.
+
+    El canal se construye en cada sincronización y en cada envío; sin caché
+    cada uno pedía un token nuevo a Google (una ida y vuelta más). La clave es
+    un hash: el refresh token nunca se guarda en claro aquí.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._tokens: dict[str, tuple[str, float]] = {}
+
+    @staticmethod
+    def key(client_id: str, refresh_token: str) -> str:
+        return hashlib.sha256(f"{client_id}\0{refresh_token}".encode()).hexdigest()
+
+    def get(self, key: str) -> str | None:
+        with self._lock:
+            entry = self._tokens.get(key)
+            if entry is None:
+                return None
+            token, valid_until = entry
+            if self._clock() >= valid_until:
+                del self._tokens[key]
+                return None
+            return token
+
+    def put(self, key: str, token: str, expires_in: float) -> None:
+        lifetime = max(expires_in - TOKEN_RENEW_MARGIN_SECONDS, 0.0)
+        with self._lock:
+            self._tokens[key] = (token, self._clock() + lifetime)
+
+    def discard(self, key: str) -> None:
+        with self._lock:
+            self._tokens.pop(key, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._tokens.clear()
+
+
+# Compartida por los canales Gmail del proceso (sincronización y envíos).
+SHARED_TOKEN_CACHE = GmailTokenCache()
+
+
+def _expires_in(body: Mapping[str, Any]) -> float:
+    value = body.get("expires_in")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return DEFAULT_TOKEN_SECONDS
 
 
 class GmailApiError(Exception):
@@ -32,7 +93,7 @@ class GmailTransport(Protocol):
         url: str,
         *,
         headers: Mapping[str, str] | None = None,
-        params: Mapping[str, str] | None = None,
+        params: Mapping[str, Any] | None = None,
         data: Mapping[str, str] | None = None,
         json_body: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]: ...
@@ -48,7 +109,7 @@ class HttpGmailTransport:
         url: str,
         *,
         headers: Mapping[str, str] | None = None,
-        params: Mapping[str, str] | None = None,
+        params: Mapping[str, Any] | None = None,
         data: Mapping[str, str] | None = None,
         json_body: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -77,6 +138,7 @@ class GmailApiClient:
         self,
         credentials: Mapping[str, str],
         transport: GmailTransport,
+        token_cache: GmailTokenCache | None = None,
     ) -> None:
         self._client_id = credentials.get("client_id", "")
         self._client_secret = credentials.get("client_secret", "")
@@ -85,6 +147,8 @@ class GmailApiClient:
             raise ChannelNotConfigured("Faltan credenciales OAuth del canal Gmail.")
         self._transport = transport
         self._access_token: str | None = None
+        self._tokens = token_cache if token_cache is not None else GmailTokenCache()
+        self._token_key = GmailTokenCache.key(self._client_id, self._refresh_token)
 
     def _refresh(self) -> str:
         body = self._transport.request(
@@ -101,17 +165,23 @@ class GmailApiClient:
         if not isinstance(token, str) or not token:
             raise GmailApiError(502, "oauth_token_missing")
         self._access_token = token
+        self._tokens.put(self._token_key, token, _expires_in(body))
         return token
+
+    def _token(self) -> str:
+        if self._access_token is None:
+            self._access_token = self._tokens.get(self._token_key)
+        return self._access_token or self._refresh()
 
     def _request(
         self,
         method: str,
         path: str,
         *,
-        params: Mapping[str, str] | None = None,
+        params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        token = self._access_token or self._refresh()
+        token = self._token()
         try:
             return self._transport.request(
                 method,
@@ -121,8 +191,10 @@ class GmailApiClient:
                 json_body=json_body,
             )
         except GmailApiError as exc:
-            if exc.status_code != 401 or token != self._access_token:
+            if exc.status_code != 401:
                 raise
+            # Token revocado o vencido antes de tiempo: se pide otro una vez.
+            self._tokens.discard(self._token_key)
             token = self._refresh()
             return self._transport.request(
                 method,
@@ -150,8 +222,11 @@ class GmailApiClient:
         )
 
     def get_thread(self, thread_id: str) -> dict[str, Any]:
+        """Solo las cabeceras que necesita una respuesta: sin cuerpos ni adjuntos."""
         return self._request(
-            "GET", f"threads/{quote(thread_id, safe='')}", params={"format": "full"}
+            "GET",
+            f"threads/{quote(thread_id, safe='')}",
+            params={"format": "metadata", "metadataHeaders": list(REPLY_HEADERS)},
         )
 
     def send_reply(self, thread_id: str, sender: str, text: str) -> None:
